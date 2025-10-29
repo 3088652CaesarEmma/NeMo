@@ -14,7 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-ARG BASE_IMAGE=nvcr.io/nvidia/pytorch:24.07-py3
+# NOTE: Base image version must match requirements/manifest.json (ngc-pytorch)
+ARG BASE_IMAGE=nvcr.io/nvidia/pytorch:25.09-py3
 
 # build an image that includes only the nemo dependencies, ensures that dependencies
 # are included first for optimal caching, and useful for building a development
@@ -66,25 +67,28 @@ RUN apt-get update && \
 
 WORKDIR /workspace/
 
-ARG TE_TAG=7d576ed25266a17a7b651f2c12e8498f67e0baea
-ARG MCORE_TAG=338af51452a53982d202e8386db6233adad1ce86
-ARG APEX_TAG=810ffae374a2b9cb4b5c5e28eaeca7d7998fca0c
+# Copy manifest.json to read dependency versions
+COPY requirements/manifest.json /tmp/manifest.json
+
 # Install megatron core, this can be removed once 0.3 pip package is released
 # We leave it here in case we need to work off of a specific commit in main
-RUN git clone https://github.com/NVIDIA/Megatron-LM.git && \
+RUN MCORE_TAG=$(python3 -c "import json; manifest = json.load(open('/tmp/manifest.json')); print(manifest['vcs-dependencies']['megatron-lm']['ref'])") && \
+  git clone https://github.com/NVIDIA/Megatron-LM.git && \
   cd Megatron-LM && \
   git checkout ${MCORE_TAG} && \
   pip install .
 
 # Performance optimizations for distributed optimizer: https://github.com/NVIDIA/apex/pull/1771
-RUN git clone https://github.com/NVIDIA/apex.git && \
+RUN APEX_TAG=$(python3 -c "import json; manifest = json.load(open('/tmp/manifest.json')); print(manifest['vcs-dependencies']['apex']['ref'])") && \
+  git clone https://github.com/NVIDIA/apex.git && \
   cd apex && \
   git checkout ${APEX_TAG} && \
   pip install -v --no-build-isolation --disable-pip-version-check --no-cache-dir \
     --config-settings "--build-option=--cpp_ext --cuda_ext --fast_layer_norm --distributed_adam --deprecated_fused_adam" ./
 
-# Transformer Engine 1.2.0
-RUN git clone https://github.com/NVIDIA/TransformerEngine.git && \
+# Transformer Engine
+RUN TE_TAG=$(python3 -c "import json; manifest = json.load(open('/tmp/manifest.json')); print(manifest['vcs-dependencies']['transformer_engine']['ref'])") && \
+  git clone https://github.com/NVIDIA/TransformerEngine.git && \
   cd TransformerEngine && \
   git fetch origin ${TE_TAG} && \
   git checkout FETCH_HEAD && \
