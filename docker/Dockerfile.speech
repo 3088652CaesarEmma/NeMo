@@ -73,6 +73,7 @@ COPY requirements/manifest.json /tmp/manifest.json
 # Install megatron core, this can be removed once 0.3 pip package is released
 # We leave it here in case we need to work off of a specific commit in main
 RUN MCORE_TAG=$(python3 -c "import json; manifest = json.load(open('/tmp/manifest.json')); print(manifest['vcs-dependencies']['megatron-lm']['ref'])") && \
+  echo "Building with Megatron-LM TAG=${MCORE_TAG}" && \
   git clone https://github.com/NVIDIA/Megatron-LM.git && \
   cd Megatron-LM && \
   git checkout ${MCORE_TAG} && \
@@ -80,6 +81,7 @@ RUN MCORE_TAG=$(python3 -c "import json; manifest = json.load(open('/tmp/manifes
 
 # Performance optimizations for distributed optimizer: https://github.com/NVIDIA/apex/pull/1771
 RUN APEX_TAG=$(python3 -c "import json; manifest = json.load(open('/tmp/manifest.json')); print(manifest['vcs-dependencies']['apex']['ref'])") && \
+  echo "Building with APEX TAG=${APEX_TAG}" && \
   git clone https://github.com/NVIDIA/apex.git && \
   cd apex && \
   git checkout ${APEX_TAG} && \
@@ -88,6 +90,7 @@ RUN APEX_TAG=$(python3 -c "import json; manifest = json.load(open('/tmp/manifest
 
 # Transformer Engine
 RUN TE_TAG=$(python3 -c "import json; manifest = json.load(open('/tmp/manifest.json')); print(manifest['vcs-dependencies']['transformer_engine']['ref'])") && \
+  echo "Building with Transformer Engine TAG=${TE_TAG}" && \
   git clone https://github.com/NVIDIA/TransformerEngine.git && \
   cd TransformerEngine && \
   git fetch origin ${TE_TAG} && \
