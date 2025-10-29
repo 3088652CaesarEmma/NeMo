@@ -20,7 +20,7 @@ ARG BASE_IMAGE=nvcr.io/nvidia/pytorch:24.07-py3
 # build an image that includes only the nemo dependencies, ensures that dependencies
 # are included first for optimal caching, and useful for building a development
 # image (by specifying build target as `nemo-deps`)
-FROM ${BASE_IMAGE} as nemo-deps
+FROM ${BASE_IMAGE} AS nemo-deps
 
 # dependency flags; should be declared after FROM
 # torchaudio: not required by default
@@ -67,7 +67,7 @@ RUN apt-get update && \
 
 WORKDIR /workspace/
 
-FROM nemo-deps as te-wheel
+FROM nemo-deps AS te-wheel
 WORKDIR /tmp/NeMo
 ARG TE_REPO
 ARG TE_TAG
@@ -78,7 +78,7 @@ RUN --mount=type=bind,source=docker/common/install_dep.sh,target=/tmp/NeMo/insta
   ls -al /tmp/Megatron-LM || true
 EOF
 
-FROM nemo-deps as mcore-wheel
+FROM nemo-deps AS mcore-wheel
 WORKDIR /tmp/NeMo
 ARG MLM_REPO
 ARG MLM_TAG
@@ -88,7 +88,7 @@ RUN --mount=type=bind,source=docker/common/install_dep.sh,target=/tmp/NeMo/insta
   ls -al /tmp/Megatron-LM || true
 EOF
 
-FROM nemo-deps as nemo-with-deps
+FROM nemo-deps AS nemo-with-deps
 WORKDIR /tmp/NeMo
 ENV INSTALL_DIR="/opt"
 RUN \
@@ -165,11 +165,11 @@ RUN pip install flash-attn
 RUN pip install numba>=0.57.1
 
 # copy nemo source into a scratch image
-FROM scratch as nemo-src
+FROM scratch AS nemo-src
 COPY . .
 
 # start building the final container
-FROM nemo-with-deps as nemo
+FROM nemo-with-deps AS nemo
 ARG NEMO_VERSION=2.0.0
 
 # Check that NEMO_VERSION is set. Build will fail without this. Expose NEMO and base container
