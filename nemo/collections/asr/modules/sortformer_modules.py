@@ -55,6 +55,26 @@ class StreamingSortformerState:
     mean_sil_emb = None
     n_sil_frames = None
 
+    def to(self, device):
+        if self.spkcache is not None:
+            self.spkcache = self.spkcache.to(device)
+        if self.spkcache_lengths is not None:
+            self.spkcache_lengths = self.spkcache_lengths.to(device)
+        if self.spkcache_preds is not None:
+            self.spkcache_preds = self.spkcache_preds.to(device)
+        if self.fifo is not None:
+            self.fifo = self.fifo.to(device)
+        if self.fifo_lengths is not None:
+            self.fifo_lengths = self.fifo_lengths.to(device)
+        if self.fifo_preds is not None:
+            self.fifo_preds = self.fifo_preds.to(device)
+        if self.spk_perm is not None:
+            self.spk_perm = self.spk_perm.to(device)
+        if self.mean_sil_emb is not None:
+            self.mean_sil_emb = self.mean_sil_emb.to(device)
+        if self.n_sil_frames is not None:
+            self.n_sil_frames = self.n_sil_frames.to(device)
+
 
 class SortformerModules(NeuralModule, Exportable):
     """
@@ -78,9 +98,9 @@ class SortformerModules(NeuralModule, Exportable):
         tf_d_model: int = 192,
         subsampling_factor: int = 8,
         spkcache_len: int = 188,
-        fifo_len: int = 188,
-        chunk_len: int = 12,
-        spkcache_update_period: int = 1,
+        fifo_len: int = 0,
+        chunk_len: int = 188,
+        spkcache_update_period: int = 188,
         chunk_left_context: int = 1,
         chunk_right_context: int = 1,
         spkcache_sil_frames_per_spk: int = 3,
@@ -127,7 +147,6 @@ class SortformerModules(NeuralModule, Exportable):
         self.strong_boost_rate = strong_boost_rate
         self.weak_boost_rate = weak_boost_rate
         self.min_pos_scores_rate = min_pos_scores_rate
-        self._check_streaming_parameters()
 
     def _check_streaming_parameters(self):
         """
