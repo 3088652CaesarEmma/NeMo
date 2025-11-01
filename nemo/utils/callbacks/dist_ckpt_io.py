@@ -170,6 +170,7 @@ class AsyncFinalizableCheckpointIO(_WrappingCheckpointIO):
         if self.async_calls_queue.get_num_unfinalized_calls() > 0:
             # Can't do finalization now because some ranks might be lost
             logging.warning('Some async checkpoint saves might be not finalized properly.')
+        self.async_calls_queue.close()
 
 
 class AsyncFinalizerCallback(Callback):
