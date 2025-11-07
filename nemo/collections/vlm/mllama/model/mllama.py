@@ -33,7 +33,6 @@ from nemo.collections.vlm.mllama.model.base import (
     MLlamaModel,
     MLlamaModelConfig,
 )
-from nemo.export.trt_llm.nemo_ckpt_loader.nemo_file import load_distributed_model_weights
 from nemo.lightning import io, teardown
 from nemo.lightning.io.state import _ModelState
 from nemo.lightning.pytorch.utils import dtype_from_hf
@@ -516,40 +515,6 @@ class HFMLlamaExporter(io.ModelConnector[MLlamaModel, "MllamaForConditionalGener
             The tokenizer specification.
         """
         return io.load_context(str(self), subpath="model").tokenizer
-
-    def ckpt_load(self, path: Path) -> Tuple[Dict, Dict]:
-        """
-        This function loads the state dict directly from a distributed checkpoint, and modify the state dict
-        so that it is consistent with the key names you would get from loading the checkpoint into a model.
-        This is a more memory-efficient method to obtain a state dict without initializing the nemo model.
-
-        Args:
-            path (Path): The path from which the model will be loaded.
-
-        Returns
-        -------
-            Tuple[Dict, Dict]: The loaded state dict and the yaml config dict.
-        """
-        config = io.load_context(str(self), subpath="model.config")
-        dist_ckpt_folder = path / "weights"
-        state_dict = {}
-
-        langauge_layers = config.language_model_config.num_layers
-        vision_layers = config.vision_model_config.num_layers
-        distributed_model_weights = load_distributed_model_weights(dist_ckpt_folder, True).items()
-        for k, v in distributed_model_weights:
-            if "_extra_state" in k:
-                continue
-            new_k = k.replace("module.", "")
-            if "layers" in new_k and (v.size(0) == langauge_layers or v.size(0) == vision_layers):
-                # Only split layers
-                for i in range(v.size(0)):
-                    state_dict[new_k.replace("layers", f"layers.{str(i)}")] = v[i]
-            elif "global_transformer.layers" in new_k:
-                for i in range(v.size(0)):
-                    state_dict[new_k.replace("layers", f"layers.{str(i)}")] = v[i]
-            state_dict[new_k] = v
-        return state_dict, config
 
     def _modify_mllama_source_state(self, state_dict, source_config):
         """

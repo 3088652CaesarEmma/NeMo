@@ -35,7 +35,6 @@ from nemo.collections.llm.gpt.model.base import (
     gpt_data_step,
     torch_dtype_from_dict_config,
 )
-from nemo.export.trt_llm.nemo_ckpt_loader.nemo_file import load_distributed_model_weights
 from nemo.lightning import io, teardown
 from nemo.lightning.io.state import TransformFns, _ModelState
 from nemo.lightning.pytorch.optim import OptimizerModule
@@ -494,39 +493,6 @@ class HFDeepSeekExporter(io.ModelConnector[DeepSeekModel, "AutoModelForCausalLM"
             f"please pass in a local HF checkpoint."
         )
         return target_model_name
-
-    def ckpt_load(self, path: Path) -> Tuple[Dict, Dict]:
-        """
-        This function loads the state dict directly from a distributed checkpoint, and modify the state dict
-        so that it is consistent with the key names you would get from loading the checkpoint into a model.
-        This is a more memory-efficient method to obtain a state dict without initializing the nemo model.
-
-        Args:
-            path (Path): The path from which the model will be loaded.
-
-        Returns
-        -------
-            Tuple[Dict, Dict]: The loaded state dict and the yaml config dict.
-        """
-        model_yaml = path / "context" / "model.yaml"
-        if not model_yaml.exists():
-            raise FileNotFoundError("model.yaml is not found in the context folder of the checkpoint.")
-        with open(model_yaml, 'r') as stream:
-            config = yaml.safe_load(stream)
-
-        dist_ckpt_folder = path / "weights"
-        state_dict = {}
-        for k, v in load_distributed_model_weights(dist_ckpt_folder, True).items():
-            if '_extra_state' in k:
-                continue
-            new_k = k.replace("module.", "")
-            if '.experts.experts.' in k:
-                # split experts into multiple tensors
-                for i in range(v.size(0)):
-                    state_dict[new_k.replace(".experts.experts.", ".experts.") + str(i)] = v[i]
-            else:
-                state_dict[new_k] = v
-        return state_dict, config['config']
 
     def apply(self, output_path: Path, target_model_name=None) -> Path:
         logging.info("Loading DeepSeek NeMo checkpoint. This may take a while...")

@@ -27,7 +27,6 @@ from torch import nn
 from nemo.collections.llm.gpt.model.base import GPTConfig, GPTModel, torch_dtype_from_mcore_config
 from nemo.collections.llm.gpt.model.llama4_utils import get_llama4_layer_spec
 from nemo.collections.llm.utils import Config
-from nemo.export.trt_llm.nemo_ckpt_loader.nemo_file import load_distributed_model_weights
 from nemo.lightning import OptimizerModule, io, teardown
 from nemo.lightning.ckpt_utils import ADAPTER_META_FILENAME
 from nemo.lightning.io.pl import ckpt_to_weights_subdir
@@ -1056,46 +1055,6 @@ class HFLlamaExporter(io.ModelConnector[LlamaModel, "LlamaForCausalLM"]):
             # no rope
         )
         return config
-
-    def ckpt_load(self, path: Path) -> Tuple[Dict, Any]:
-        """
-        This function loads the state dict directly from a distributed checkpoint, and modify the state dict
-        so that it is consistent with the key names you would get from loading the checkpoint into a model.
-        This is a more memory-efficient method to obtain a state dict without initializing the nemo model.
-
-        Args:
-            path (Path): The path from which the model will be loaded.
-
-        Returns
-        -------
-            Tuple[Dict, Any]: The loaded state dict and the yaml config object.
-        """
-        model_yaml = path / "context" / "model.yaml"
-        if not model_yaml.exists():
-            raise FileNotFoundError("model.yaml is not found in the context folder of the checkpoint.")
-        with open(model_yaml, 'r') as stream:
-            config = yaml.safe_load(stream)
-
-        dist_ckpt_folder = path / "weights"
-        state_dict = {}
-
-        dict_to_obj = lambda d: (
-            type('Config', (), {kk: dict_to_obj(vv) for kk, vv in d.items()}) if isinstance(d, dict) else d
-        )
-        config_obj = dict_to_obj(config['config'])
-        langauge_layers = config_obj.num_layers
-        distributed_model_weights = load_distributed_model_weights(dist_ckpt_folder, True).items()
-        for k, v in distributed_model_weights:
-            if '_extra_state' in k:
-                continue
-            new_k = k.replace("module.", "")
-            if 'layers' in new_k and v.size(0) == langauge_layers:
-                # Only split layers
-                for i in range(v.size(0)):
-                    state_dict[new_k.replace('layers', f'layers.{str(i)}')] = v[i]
-            state_dict[new_k] = v
-
-        return state_dict, config_obj
 
     def _modify_llama4_source_state(self, state_dict, source_config):
         """

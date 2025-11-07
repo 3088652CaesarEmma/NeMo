@@ -46,7 +46,6 @@ from nemo.collections.vlm.qwen2vl.model.base import (
     Qwen25VLVisionConfig,
 )
 from nemo.collections.vlm.vision import MultimodalProjectorConfig
-from nemo.export.trt_llm.nemo_ckpt_loader.nemo_file import load_distributed_model_weights
 from nemo.lightning import io, teardown
 from nemo.lightning.io.state import _ModelState
 from nemo.lightning.pytorch.utils import dtype_from_hf
@@ -541,39 +540,6 @@ class HFQwen2VLExporter(io.ModelConnector[Qwen2VLModel, "Qwen2VLForConditionalGe
             The tokenizer specification.
         """
         return io.load_context(str(self), subpath="model").tokenizer
-
-    def ckpt_load(self, path: Path) -> Tuple[Dict, Dict]:
-        """
-        This function loads the state dict directly from a distributed checkpoint, and modify the state dict
-        so that it is consistent with the key names you would get from loading the checkpoint into a model.
-        This is a more memory-efficient method to obtain a state dict without initializing the nemo model.
-
-        Args:
-            path (Path): The path from which the model will be loaded.
-
-        Returns
-        -------
-            Tuple[Dict, Dict]: The loaded state dict and the yaml config dict.
-        """
-        config = io.load_context(str(self), subpath="model.config")
-        dist_ckpt_folder = path / "weights"
-        state_dict = {}
-
-        langauge_layers = config.language_transformer_config.num_layers
-        vision_layers = config.vision_transformer_config.num_layers
-        distributed_model_weights = load_distributed_model_weights(dist_ckpt_folder, True).items()
-        for k, v in distributed_model_weights:
-            if "_extra_state" in k:
-                continue
-            new_k = k.replace("module.", "")
-            if "layers" in new_k and (v.size(0) == langauge_layers or v.size(0) == vision_layers):
-                # Only split layers
-                for i in range(v.size(0)):
-                    state_dict[new_k.replace("layers", f"layers.{str(i)}")] = v[i]
-            state_dict[new_k] = v
-
-        source = _ModelState(state_dict)
-        return source, config
 
     @property
     def config(self) -> "HFQwen2VLConfig":
