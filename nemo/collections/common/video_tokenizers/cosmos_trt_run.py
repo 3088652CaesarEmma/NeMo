@@ -50,14 +50,18 @@ args = parser.parse_args()
 
 
 def main():
+    """Export and run tokenizer in TensorRT."""
     model = CausalVideoTokenizer.from_pretrained(args.tokenizer_name, use_pytorch=True, dtype="float")
 
     class VaeWrapper(torch.nn.Module):
+        """Wrapper class for VAE model to enable TensorRT compilation."""
+
         def __init__(self, vae):
             super().__init__()
             self.vae = vae
 
         def forward(self, input_tensor):
+            """Forward pass through the VAE autoencoder."""
             output_tensor = self.vae.autoencode(input_tensor)
             return output_tensor
 
@@ -91,7 +95,7 @@ def main():
     )
 
     input_tensor = torch.randn(max_shape).to('cuda').to(torch.float)
-    output = model_wrapper(input_tensor)
+    _ = model_wrapper(input_tensor)  # Warmup call to ensure TensorRT engine is compiled
 
 
 if __name__ == '__main__':
