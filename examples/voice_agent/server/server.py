@@ -25,7 +25,8 @@ from fastapi.middleware.cors import CORSMiddleware
 # Load environment variables
 load_dotenv(override=True)
 
-from bot_websocket_server import run_bot_websocket_server
+# from bot_websocket_server import run_bot_websocket_server
+from bot_websocket_server_smartturn import run_bot_websocket_server
 
 
 @asynccontextmanager

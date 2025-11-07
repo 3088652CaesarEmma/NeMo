@@ -33,7 +33,10 @@ class RTVIObserver(_RTVIObserver):
     async def _handle_llm_text_frame(self, frame: LLMTextFrame):
         """Handle LLM text output frames."""
         message = RTVIBotLLMTextMessage(data=RTVITextMessageData(text=frame.text))
-        await self.push_transport_message_urgent(message)
+        if hasattr(self, "send_rtvi_message"):
+            await self.send_rtvi_message(message)
+        else:
+            await self.push_transport_message_urgent(message)
 
         completed_text = await self._text_aggregator.aggregate(frame.text)
         if completed_text:
@@ -44,5 +47,5 @@ class RTVIObserver(_RTVIObserver):
         if len(text.strip()) > 0:
             message = RTVIBotTranscriptionMessage(data=RTVITextMessageData(text=text))
             logger.debug(f"Pushing bot transcription: `{text}`")
-            await self.push_transport_message_urgent(message)
+            await self.send_rtvi_message(message)
             self._bot_transcription = ""

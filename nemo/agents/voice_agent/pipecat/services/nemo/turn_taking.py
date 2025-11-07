@@ -48,6 +48,7 @@ class NeMoTurnTakingService(FrameProcessor):
         use_diar: bool = False,
         max_buffer_size: int = 3,
         bot_stop_delay: float = 0.5,
+        use_external_turn_analyzer: bool = False,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -57,6 +58,12 @@ class NeMoTurnTakingService(FrameProcessor):
         self.use_vad = use_vad
         self.use_diar = use_diar
         self.max_buffer_size = max_buffer_size
+        self.use_external_turn_analyzer = use_external_turn_analyzer
+
+        if self.use_external_turn_analyzer:
+            logger.info("Using external turn analyzer")
+        else:
+            logger.info("Using NeMoTurnTakingService as the turn analyzer")
 
         self.backchannel_phrases = self._load_backchannel_phrases(backchannel_phrases)
         self.backchannel_phrases_nopc = set([self.clean_text(phrase) for phrase in self.backchannel_phrases])
@@ -72,6 +79,7 @@ class NeMoTurnTakingService(FrameProcessor):
         if not self.use_vad:
             # if vad is not used, we assume the user is always speaking
             self._vad_user_speaking = True
+        self._last_user_speaking_time = time.time()
 
     def _load_backchannel_phrases(self, backchannel_phrases: Optional[Union[str, List[str]]] = None):
         if not backchannel_phrases:
@@ -116,6 +124,13 @@ class NeMoTurnTakingService(FrameProcessor):
         text = self.clean_text(text)
         return text in self.backchannel_phrases_nopc
 
+    def _has_non_empty_text(self, text: str) -> bool:
+        """
+        Check if the text is not empty.
+        """
+        text = text.strip().replace(self.eou_string, "").replace(self.eob_string, "")
+        return bool(text.strip())
+
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
 
@@ -130,11 +145,23 @@ class NeMoTurnTakingService(FrameProcessor):
                 self._bot_speaking = False
 
         if isinstance(frame, (TranscriptionFrame, InterimTranscriptionFrame)):
-            await self._handle_transcription(frame, direction)
+            if self._has_non_empty_text(frame.text):
+                # update the last user speaking time if text is not empty
+                self._last_user_speaking_time = time.time()
+            if self.use_external_turn_analyzer:
+                await self._handle_transcription_with_external_turn_analyzer(frame, direction)
+            else:
+                await self._handle_transcription(frame, direction)
         elif isinstance(frame, VADUserStartedSpeakingFrame):
-            await self._handle_user_started_speaking(frame, direction)
+            if self.use_external_turn_analyzer:
+                await self.push_frame(frame, direction)
+            else:
+                await self._handle_vad_user_started_speaking(frame, direction)
         elif isinstance(frame, VADUserStoppedSpeakingFrame):
-            await self._handle_user_stopped_speaking(frame, direction)
+            if self.use_external_turn_analyzer:
+                await self.push_frame(frame, direction)
+            else:
+                await self._handle_vad_user_stopped_speaking(frame, direction)
         elif isinstance(frame, BotStartedSpeakingFrame):
             logger.debug("BotStartedSpeakingFrame received")
             self._bot_speaking = True
@@ -148,6 +175,12 @@ class NeMoTurnTakingService(FrameProcessor):
         elif isinstance(frame, DiarResultFrame):
             logger.debug("DiarResultFrame received")
             await self._handle_diar_result(frame, direction)
+        elif isinstance(frame, UserStartedSpeakingFrame):
+            if self.use_external_turn_analyzer:
+                await self._handle_user_started_speaking(frame, direction)
+        elif isinstance(frame, UserStoppedSpeakingFrame):
+            if self.use_external_turn_analyzer:
+                await self._handle_user_stopped_speaking(frame, direction)
         else:
             await self.push_frame(frame, direction)
 
@@ -164,6 +197,16 @@ class NeMoTurnTakingService(FrameProcessor):
             ),
             direction=FrameDirection.UPSTREAM,
         )
+
+    async def _handle_transcription_with_external_turn_analyzer(
+        self, frame: TranscriptionFrame | InterimTranscriptionFrame, direction: FrameDirection
+    ):
+        text_segment = frame.text
+        if not text_segment.strip():
+            return
+        # ignore <EOU> and <EOB> tokens if any
+        text_segment = text_segment.replace(self.eou_string, "").replace(self.eob_string, "")
+        self._user_speaking_buffer += text_segment
 
     async def _handle_transcription(
         self, frame: TranscriptionFrame | InterimTranscriptionFrame, direction: FrameDirection
@@ -229,7 +272,7 @@ class NeMoTurnTakingService(FrameProcessor):
                 await self.push_frame(
                     TranscriptionFrame(
                         text=f"({curr_text})",
-                        user_id="",
+                        user_id=f"<speaker_{self._current_speaker_id}>",
                         timestamp=time_now_iso8601(),
                         language=self.language if self.language else Language.EN_US,
                         result={"text": f"Backchannel detected: {self._user_speaking_buffer+text_segment}"},
@@ -247,6 +290,8 @@ class NeMoTurnTakingService(FrameProcessor):
                 logger.debug(f"Appending text segment to user speaking buffer: `{self._user_speaking_buffer}`")
 
     async def _handle_completed_text(self, completed_text: str, direction: FrameDirection, is_final: bool = True):
+        eou_latency = time.time() - self._last_user_speaking_time
+        logger.debug(f"EOU latency: {eou_latency:.4f} seconds")
         if not self._have_sent_user_started_speaking:
             # if we haven't sent the user started speaking frame, we send it now
             # so that the bot can be interrupted and be ready to respond to the new user turn
@@ -263,7 +308,7 @@ class NeMoTurnTakingService(FrameProcessor):
         frame_type = TranscriptionFrame if is_final else InterimTranscriptionFrame
         text_frame = frame_type(
             text=completed_text,
-            user_id="",  # No speaker ID in this implementation
+            user_id=f"<speaker_{self._current_speaker_id}>",
             timestamp=time_now_iso8601(),
             language=self.language if self.language else Language.EN_US,
             result={"text": completed_text},
@@ -271,7 +316,7 @@ class NeMoTurnTakingService(FrameProcessor):
         logger.debug(f"Pushing text frame: {text_frame}")
         await self.push_frame(text_frame, direction)
 
-    async def _handle_user_started_speaking(self, frame: VADUserStartedSpeakingFrame, direction: FrameDirection):
+    async def _handle_vad_user_started_speaking(self, frame: VADUserStartedSpeakingFrame, direction: FrameDirection):
         self._vad_user_speaking = True
         logger.debug("NeMoTurnTakingService: VADUserStartedSpeakingFrame")
         await self.push_frame(frame, direction)
@@ -282,7 +327,7 @@ class NeMoTurnTakingService(FrameProcessor):
         """
         return text.strip().startswith("<speaker_") and text.strip().endswith(">")
 
-    async def _handle_user_stopped_speaking(self, frame: VADUserStoppedSpeakingFrame, direction: FrameDirection):
+    async def _handle_vad_user_stopped_speaking(self, frame: VADUserStoppedSpeakingFrame, direction: FrameDirection):
         """
         Handle the user stopped speaking frame.
         If the buffer is not empty:
@@ -298,6 +343,9 @@ class NeMoTurnTakingService(FrameProcessor):
         # if user buffer only contains speaker tags, we don't push the completed text frame
         if self._contains_only_speaker_tags(self._user_speaking_buffer):
             logger.debug(f"User buffer only contains speaker tags: `{self._user_speaking_buffer}`, ignoring")
+            return
+        elif not self._has_non_empty_text(self._user_speaking_buffer):
+            logger.debug(f"User buffer is empty: `{self._user_speaking_buffer}`, ignoring")
             return
 
         is_backchannel = self.is_backchannel(self._user_speaking_buffer)
@@ -317,7 +365,7 @@ class NeMoTurnTakingService(FrameProcessor):
             await self.push_frame(
                 TranscriptionFrame(
                     text=f"({self._user_speaking_buffer})",
-                    user_id="",
+                    user_id=f"<speaker_{self._current_speaker_id}>",
                     timestamp=time_now_iso8601(),
                     language=self.language if self.language else Language.EN_US,
                     result={"text": f"Backchannel detected: {self._user_speaking_buffer}"},
@@ -359,3 +407,41 @@ class NeMoTurnTakingService(FrameProcessor):
             self._user_speaking_buffer = f"<speaker_{new_speaker_id}> {self._user_speaking_buffer}"
         logger.debug(f"Speaker changed from {last_speaker_id} to {new_speaker_id}")
         self._current_speaker_id = new_speaker_id
+
+    async def _handle_user_started_speaking(self, frame: UserStartedSpeakingFrame, direction: FrameDirection):
+        logger.debug("User started speaking")
+        await self.push_frame(frame, direction)
+
+    async def _handle_user_stopped_speaking(self, frame: UserStoppedSpeakingFrame, direction: FrameDirection):
+        eou_latency = time.time() - self._last_user_speaking_time
+        logger.debug("User stopped speaking")
+        logger.debug(f"user speaking buffer: `{self._user_speaking_buffer}`")
+        if self._contains_only_speaker_tags(self._user_speaking_buffer):
+            logger.debug(f"User buffer only contains speaker tags: `{self._user_speaking_buffer}`, ignoring")
+            await self.push_frame(frame, direction)
+            return
+        elif not self._has_non_empty_text(self._user_speaking_buffer):
+            logger.debug(f"User buffer is empty: `{self._user_speaking_buffer}`, ignoring")
+            await self.push_frame(frame, direction)
+            return
+
+        logger.debug(f"EOU latency: {eou_latency:.4f} seconds")
+
+        completed_text = self._user_speaking_buffer.strip()
+        completed_text = completed_text.replace(self.eou_string, "").replace(self.eob_string, "").strip()
+
+        if self.use_diar and not completed_text.startswith("<speaker_") and self._prev_speaker_id is not None:
+            # if the completed text does not start with a speaker tag, we add the previous speaker tag to the beginning of the text
+            completed_text = f"<speaker_{self._prev_speaker_id}> {completed_text}"
+
+        text_frame = TranscriptionFrame(
+            text=completed_text,
+            user_id=f"<speaker_{self._current_speaker_id}>",
+            timestamp=time_now_iso8601(),
+            language=self.language if self.language else Language.EN_US,
+            result={"text": completed_text},
+        )
+        logger.debug(f"Pushing text frame: {text_frame}")
+        self._user_speaking_buffer = ""
+        await self.push_frame(text_frame, direction)
+        await self.push_frame(frame, direction)

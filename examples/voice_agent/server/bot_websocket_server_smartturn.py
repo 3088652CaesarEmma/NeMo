@@ -20,13 +20,13 @@ import signal
 import sys
 
 from loguru import logger
-from omegaconf import OmegaConf
-
-from pipecat.audio.vad.silero import SileroVADAnalyzer, VADParams
+from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
+from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import EndTaskFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
+from pipecat.processors.aggregators.llm_response import LLMUserAggregatorParams
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
 from pipecat.processors.frameworks.rtvi import RTVIAction, RTVIConfig, RTVIProcessor
 from pipecat.serializers.protobuf import ProtobufFrameSerializer
@@ -81,6 +81,9 @@ TRANSPORT_AUDIO_OUT_10MS_CHUNKS = config_manager.TRANSPORT_AUDIO_OUT_10MS_CHUNKS
 
 # VAD configuration
 vad_params = config_manager.get_vad_params()
+vad_params.stop_secs = 0.2  # override the default value to 0.2 seconds as recommended by the SmartTurn-V3 model
+logger.info(f"Set VAD stop_secs to {vad_params.stop_secs} seconds based on the SmartTurn-V3 model recommendation")
+turn_emulated_timeout = 0.8  # seconds to emulate the turn taking timeout
 
 # STT configuration
 STT_MODEL_PATH = config_manager.STT_MODEL_PATH
@@ -134,6 +137,9 @@ async def run_bot_websocket_server(port: int = 8765, host: str = "0.0.0.0"):
     )
     logger.info("VAD analyzer initialized")
 
+    turn_analyzer = LocalSmartTurnAnalyzerV3()
+    logger.info("Turn analyzer initialized")
+
     ws_transport = WebsocketServerTransport(
         params=WebsocketServerParams(
             serializer=ProtobufFrameSerializer(),
@@ -141,10 +147,10 @@ async def run_bot_websocket_server(port: int = 8765, host: str = "0.0.0.0"):
             audio_out_enabled=True,
             add_wav_header=False,
             vad_analyzer=vad_analyzer,
+            turn_analyzer=turn_analyzer,
             session_timeout=None,  # Disable session timeout
             audio_in_sample_rate=SAMPLE_RATE,
-            can_create_user_frames=TURN_TAKING_BACKCHANNEL_PHRASES_PATH
-            is None,  # if backchannel phrases are disabled, we can use VAD to interrupt the bot immediately
+            can_create_user_frames=True,  # allow the server to create user frames for the turn analyzer
             audio_out_10ms_chunks=TRANSPORT_AUDIO_OUT_10MS_CHUNKS,
         ),
         host=host,  # use 0.0.0.0 to indicate that the server should listen on all interfaces
@@ -160,6 +166,7 @@ async def run_bot_websocket_server(port: int = 8765, host: str = "0.0.0.0"):
         sample_rate=SAMPLE_RATE,
         audio_passthrough=True,
         has_turn_taking=True,
+        use_external_turn_analyzer=True,
         backend="legacy",
         decoder_type="rnnt",
     )
@@ -184,6 +191,7 @@ async def run_bot_websocket_server(port: int = 8765, host: str = "0.0.0.0"):
         max_buffer_size=TURN_TAKING_MAX_BUFFER_SIZE,
         bot_stop_delay=TURN_TAKING_BOT_STOP_DELAY,
         backchannel_phrases=TURN_TAKING_BACKCHANNEL_PHRASES_PATH,
+        use_external_turn_analyzer=True,
     )
     logger.info("Turn taking service initialized")
 
