@@ -12,12 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Example: Export vLLM HF model with optional LoRA and Triton deployment.
+
+Note: This example requires the Export-Deploy repository:
+  pip install git+https://github.com/NVIDIA-NeMo/Export-Deploy.git
+
+Additionally, vLLM must be installed or activated in your environment:
+  source /opt/venv/bin/activate
+"""
+
 import argparse
 
 try:
     from nemo.export.vllm_hf_exporter import vLLMHFExporter
-except ImportError:
-    raise Exception("vLLM must be installed or activated in your environment:\n" "  source /opt/venv/bin/activate")
+except ImportError as e:
+    raise ImportError(
+        "This example requires the Export-Deploy repository.\n"
+        "Install with: pip install git+https://github.com/NVIDIA-NeMo/Export-Deploy.git\n"
+        "Additionally, vLLM must be installed or activated:\n"
+        "  source /opt/venv/bin/activate"
+    ) from e
 
 from nemo.deploy import DeployPyTriton
 from nemo.deploy.nlp import NemoQueryLLM

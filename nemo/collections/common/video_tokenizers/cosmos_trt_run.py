@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Note: This script requires the Export-Deploy repository for TensorRT compilation.
+Install with: pip install git+https://github.com/NVIDIA-NeMo/Export-Deploy.git
+"""
+
 import argparse
 import os
 import shutil

@@ -28,6 +28,12 @@ Please see the official [NVIDIA Cosmos repository](https://github.com/NVIDIA/Cos
 for the complete list of supported tokenizers.
 
 ### Acceleration with TensorRT
+
+**Note:** TensorRT acceleration requires the Export-Deploy repository:
+```bash
+pip install git+https://github.com/NVIDIA-NeMo/Export-Deploy.git
+```
+
 To use these tokenizers with TensorRT and acheive up to 3X speedup during tokenization,
 users can define a lightweight wrapper model and then pass this wrapper model to `trt_compile`
 ```python
