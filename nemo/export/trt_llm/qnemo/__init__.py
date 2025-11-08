@@ -1,4 +1,4 @@
-# Copyright (c) 2024, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2025, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,5 +13,3 @@
 # limitations under the License.
 
 from .qnemo_to_tensorrt_llm import qnemo_to_tensorrt_llm
-
-__all__ = ["qnemo_to_tensorrt_llm"]
