@@ -167,8 +167,6 @@ async def run_bot_websocket_server(port: int = 8765, host: str = "0.0.0.0"):
         audio_passthrough=True,
         has_turn_taking=True,
         use_external_turn_analyzer=True,
-        backend="legacy",
-        decoder_type="rnnt",
     )
     logger.info("STT service initialized")
 
@@ -178,7 +176,6 @@ async def run_bot_websocket_server(port: int = 8765, host: str = "0.0.0.0"):
             device=STT_DEVICE,
             params=diar_params,
             sample_rate=SAMPLE_RATE,
-            backend="legacy",
             enabled=USE_DIAR,
         )
         logger.info("Diarization service initialized")
@@ -190,7 +187,7 @@ async def run_bot_websocket_server(port: int = 8765, host: str = "0.0.0.0"):
         use_diar=USE_DIAR,
         max_buffer_size=TURN_TAKING_MAX_BUFFER_SIZE,
         bot_stop_delay=TURN_TAKING_BOT_STOP_DELAY,
-        backchannel_phrases=TURN_TAKING_BACKCHANNEL_PHRASES_PATH,
+        backchannel_phrases=None,
         use_external_turn_analyzer=True,
     )
     logger.info("Turn taking service initialized")

@@ -118,6 +118,8 @@ class NeMoTurnTakingService(FrameProcessor):
         """
         Check if the text is a backchannel phrase.
         """
+        if not self.backchannel_phrases:
+            return False
         if text.startswith("<speaker_"):
             # if the text starts with a speaker tag, we remove it
             text = text[len("<speaker_0>") :]

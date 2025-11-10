@@ -68,8 +68,11 @@ class NemoSTTService(STTService):
         sample_rate: Optional[int] = 16000,
         params: Optional[NeMoSTTInputParams] = None,
         has_turn_taking: bool = False,
+        use_external_turn_analyzer: bool = False,
         backend: Optional[str] = "legacy",
         decoder_type: Optional[str] = "rnnt",
+        eou_string: Optional[str] = "<EOU>",
+        eob_string: Optional[str] = "<EOB>",
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -82,6 +85,9 @@ class NemoSTTService(STTService):
         self._has_turn_taking = has_turn_taking
         self._backend = backend
         self._decoder_type = decoder_type
+        self._eou_string = eou_string
+        self._eob_string = eob_string
+        self._use_external_turn_analyzer = use_external_turn_analyzer
         if not params:
             raise ValueError("params is required")
 
@@ -179,6 +185,10 @@ class NemoSTTService(STTService):
                     )
                 await self.stop_ttfb_metrics()
                 await self.stop_processing_metrics()
+
+            if self._use_external_turn_analyzer and isinstance(transcription, str):
+                # When using external turn analyzer, we drop the <EOU> and <EOB> tokens if any
+                transcription = transcription.replace(self._eou_string, "").replace(self._eob_string, "")
 
             if transcription:
                 logger.debug(f"Transcription (is_final={is_final}): `{transcription}`")
