@@ -678,7 +678,7 @@ class ExplicitSingleDecayFilter(nn.Module):
         """
         return self.filter(L, *args, **kwargs)
 
-    @torch.compile(mode="max-autotune")
+    # @torch.compile(mode="max-autotune")
     def filter(self, L, *args, **kwargs):
         """Compute the filter as a function of h and decay for the requested sequence length."""
         h = self.h[:, :L]
@@ -874,7 +874,8 @@ class ParallelHyenaOperator(nn.Module):
             self.conv_bias.data = conv_init_method(self.conv_bias.data)
             self.conv_bias.model_parallel = True
             self.conv_bias.partition_dim = 0
-            self.conv_bias.stride = 1
+            self.conv_bias.partition_stride = 1
+            #self.conv_bias.stride = lambda _: 1
 
     def forward_long(self, *, x1, x2, v, h, bias, inference_context):
         """Forward pass long."""
@@ -1157,7 +1158,8 @@ class ParallelShortHyenaOperator(nn.Module):
                 self.conv_bias.data = conv_init_method(self.conv_bias.data)
                 self.conv_bias.model_parallel = True
                 self.conv_bias.partition_dim = 0
-                self.conv_bias.stride = 1
+                self.conv_bias.partition_stride = 1
+                #self.conv_bias.stride = lambda _: 1
 
     def forward(self, x1, x2, v, inference_context=None, _hyena_use_cp=True):
         """Shape specification for inputs and outputs.

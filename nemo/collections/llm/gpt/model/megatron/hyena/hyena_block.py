@@ -200,6 +200,8 @@ class HyenaStack(MegatronModule):
                         inference_context=None,
                         packed_seq_params=packed_seq_params,
                     )
+                    if getattr(self.config, 'use_megatron_fsdp', False) or getattr(self.config, 'use_custom_fsdp', False):
+                        hidden_states = make_viewless_tensor(hidden_states, requires_grad=hidden_states.requires_grad, keep_graph=hidden_states.requires_grad)
                 return hidden_states, context
 
             return custom_forward
