@@ -196,6 +196,7 @@ class PreTrainingDataModule(pl.LightningDataModule, IOMixin):
         dataset_cls: Type[MegatronDataset] = GPTDataset,
         mmap_bin_files: Optional[bool] = True,
         object_storage_cache_path: Optional[str] = None,
+        build_kwargs: Optional[Dict[str, Any]] = None,
     ) -> None:
         super().__init__()
         if not isinstance(paths, (list, tuple, dict)):
@@ -206,8 +207,9 @@ class PreTrainingDataModule(pl.LightningDataModule, IOMixin):
         self.dataset_cls = dataset_cls
 
         validate_dataset_asset_accessibility(paths)
+        if build_kwargs is None:
+            build_kwargs = {}
 
-        build_kwargs = {}
         build_kwargs["mmap_bin_files"] = mmap_bin_files
         if isinstance(paths, dict):
             if split is not None:
