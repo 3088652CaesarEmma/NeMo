@@ -3444,3 +3444,496 @@ class MagpieTTSStreamingInference(MagpieTTSModel):
                 return predicted_codes, predicted_codes_lens, cross_attention_maps, headwise_cross_attention_maps
             else:
                 return predicted_codes, predicted_codes_lens
+
+
+    def generate_long_form_speech(
+        self,
+        batch,
+        end_of_text,
+        beginning_of_text,
+        max_decoder_steps=500,
+        temperature=0.7,
+        topk=80,
+        use_cfg=True,
+        cfg_scale=1.0,
+        estimate_alignment_from_layers=None,
+        lookahead_window_size=5,
+        start_prior_after_n_audio_steps=10,
+        apply_attention_prior=False,
+        apply_prior_to_layers=None,
+        prior_epsilon=1e-5,
+        compute_all_heads_attn_maps=False,
+        return_cross_attn_probs=False,
+        use_exponential_weight=False,
+        max_decoder_steps_in_each_session=300,
+    ):
+        """
+        Generates speech for long-form text by progressively shifting through text tokens.
+        
+        This method processes long text inputs by generating a fixed number of audio tokens per text token,
+        then shifting to the next text token. It maintains a sliding window over text and audio histories,
+        tracking how many audio tokens were generated for each text position.
+        
+        Args:
+            batch (dict): Input batch containing 'text' and 'text_lens'.
+            end_of_text (bool): Whether entire text has been provided.
+            beginning_of_text (bool): Whether this is the first chunk.
+            max_decoder_steps (int): Maximum total audio tokens to generate.
+            temperature (float): Sampling temperature for audio code generation.
+            topk (int): Top-k sampling parameter.
+            use_cfg (bool): Whether to use classifier-free guidance.
+            cfg_scale (float): CFG scale factor.
+            estimate_alignment_from_layers (list, optional): Layers to use for alignment estimation.
+            lookahead_window_size (int): Forward-looking window size for attention prior.
+            start_prior_after_n_audio_steps (int): Steps before applying attention prior.
+            apply_attention_prior (bool): Whether to apply attention prior.
+            apply_prior_to_layers (list, optional): Layers to apply prior to.
+            prior_epsilon (float): Base prior probability for non-targeted positions.
+            compute_all_heads_attn_maps (bool): Whether to compute all attention head maps.
+            return_cross_attn_probs (bool): Whether to return cross-attention probabilities.
+            use_exponential_weight (bool): Whether to use exponential weighting in prior.
+            max_decoder_steps_in_each_session (int): Number of audio tokens to generate before
+                shifting text by one token. Controls granularity of text-audio alignment.
+        
+        Returns:
+            tuple: (predicted_codes, predicted_codes_lens) or 
+                   (predicted_codes, predicted_codes_lens, cross_attention_maps, headwise_cross_attention_maps)
+                   if return_cross_attn_probs=True
+        """
+        device = batch['text'].device
+        print(f"self.model_type {self.model_type}")
+        with torch.no_grad():
+            self.audio_codes_input = self.audio_codes_input.to(device) # Already produced from previous iterations
+            self.audio_codes_lens = self.audio_codes_lens.to(device)
+            current_chunk_len = batch['text_lens']  # Length of the current chunk of text
+            print(f"...current_chunk_len {current_chunk_len}")
+            batch_size = batch["text"].size(0)
+            
+            # Track audio tokens generated in current session
+            audio_tokens_in_current_session = 0
+
+            # Next section is for processing text through encoder.
+            current_text = (
+                torch.cat([self.history_text, batch["text"]], dim=1)
+                if self.history_text is not None
+                else batch["text"]
+            )
+            # print(f"... 111 current_text {current_text.shape}")
+            # print(f"... 111 current_text {current_text}")
+            # Update current text based on the window size, current_text_len can be a maximum of true_window_size = 2000
+            self.true_window_size = current_chunk_len + 20
+            if not beginning_of_text:
+                current_text = current_text[:, max(0, current_text.shape[1] - self.true_window_size) :]
+            # print(f"... 222 current_text {current_text.shape}")
+            # print(f"... 222 current_text {current_text}")
+            current_text_lens = current_text.shape[1]
+            self.history_text = current_text
+            batch['text'] = current_text
+            batch['text_lens'] = torch.tensor([current_text_lens]).to(device).long()
+            context_tensors = self.prepare_context_tensors(batch)
+            # print(f"context_tensors['cond'] {context_tensors['cond'].shape}")
+            # print(f"context_tensors['cond'] {context_tensors['cond'][0,:,0]}")
+
+            # Update text encoder output based on the window size
+            # print(f"beginning_of_text {beginning_of_text}")
+            if not beginning_of_text:
+                context_tensors['cond'][:, :-current_chunk_len] = self.history_context_tensor[
+                    :, -(context_tensors['cond'].size(1) - current_chunk_len) :
+                ]
+            self.history_context_tensor = context_tensors['cond']
+            # print(f"333... self.history_context_tensor.shape {self.history_context_tensor.shape}")
+            # print(f"333... self.history_context_tensor[0,:,0] {self.history_context_tensor[0,:,0]}")
+            # TODO(sugh) Check if sliding logic is correct - only slide the audio codes corresponding to the 
+            # text tokens that have been slid.
+            # Sliding window for Audio codes - keeping the history
+            temp_start_idx = self.text_window_start_idx - self.num_text_tokens_slid_in_current_session
+            audio_codes_to_shift = sum([self.audio_tokens_per_text_token[i] for i in range(temp_start_idx, self.text_window_start_idx+1) if i in self.audio_tokens_per_text_token])
+            # print(f"audio_codes_to_shift {audio_codes_to_shift}")
+            # print(f"111... self.audio_codes_input.shape {self.audio_codes_input.shape}")
+            if not beginning_of_text:
+                # print(f"self.audio_codes_input.shape {self.audio_codes_input.shape}")
+                self.audio_codes_input = self.audio_codes_input[:, :, :-5]
+                # print(f"self.audio_codes_input.shape {self.audio_codes_input.shape}")
+                self.audio_codes_input = self.audio_codes_input[
+                    :, :, max(0, self.audio_codes_input.size(2) - audio_codes_to_shift) :
+                ].to(device)
+            # print(f"222... self.audio_codes_input.shape {self.audio_codes_input.shape}")
+            self.audio_codes_lens = torch.full((1,), self.audio_codes_input.size(2), device=device).long()
+            audio_codes_mask = get_mask_from_lengths(self.audio_codes_lens)
+
+            if use_cfg:
+                dummy_cond, dummy_cond_mask, dummy_additional_decoder_input, dummy_addition_dec_mask, _ = (
+                    self.prepare_dummy_cond_for_cfg(
+                        context_tensors['cond'],
+                        context_tensors['cond_mask'],
+                        context_tensors['additional_decoder_input'],
+                        context_tensors['additional_decoder_mask'],
+                    )
+                )
+
+            if self.history_attn_prior is not None:
+                print(f"111 self.history_attn_prior {self.history_attn_prior.shape}")
+                print(f"111 self.history_attn_prior {self.history_attn_prior[0]}")
+                # First case of infinite history .i.e. no window
+                if self.true_window_size > 1000:
+                    if self.history_attn_prior.size(2) < current_text_lens:
+                        right_side = (
+                            torch.zeros(
+                                self.history_attn_prior.size(0), 1, current_text_lens - self.history_attn_prior.size(2)
+                            ).to(device)
+                            + prior_epsilon
+                        )
+                        self.history_attn_prior = torch.cat([self.history_attn_prior, right_side], dim=2)
+                else:
+                    first_08_idx = (self.history_attn_prior[0] == 0.2).nonzero(as_tuple=True)[1][0].item() if (self.history_attn_prior[0] == 0.2).any() else -1
+                    print(f"...111 first_08_idx {first_08_idx}")
+                    # As we move the window, we need to discard the left side of the history, this logic is to do that.
+                    _tmp_attn_prior = (
+                        torch.zeros(self.history_attn_prior.size(0), 1, current_text_lens).to(device) + prior_epsilon
+                    )
+                    # New text chunk added to the right side of the history = delta_in_len_after_chunk
+                    delta_in_len_after_chunk = current_chunk_len
+                    if not isinstance(delta_in_len_after_chunk, int):
+                        delta_in_len_after_chunk = delta_in_len_after_chunk.item()
+                    # len_to_be_deleted_from_left = (history_attn_prior.size(2) + new chunk len) - current text len to be processed
+                    len_to_be_deleted_from_left = (
+                        self.history_attn_prior.size(2) + delta_in_len_after_chunk - current_text_lens
+                    )
+                    if not isinstance(len_to_be_deleted_from_left, int):
+                        len_to_be_deleted_from_left = len_to_be_deleted_from_left.item()
+                    # self.left_offset is the offset of the left side of the history that is to be discarded
+                    self.left_offset += len_to_be_deleted_from_left
+                    if not isinstance(self.left_offset, int):
+                        self.left_offset = self.left_offset.item()
+                    # Use the history attn prior that has been used to generate the audio in the last step
+                    _tmp_attn_prior[:, :, :-delta_in_len_after_chunk] = self.history_attn_prior[
+                        :, :, len_to_be_deleted_from_left:
+                    ]
+
+                    # _tmp_attn_prior[:, :, :-current_chunk_len] = prior_epsilon * prior_epsilon
+                    # _tmp_attn_prior[:, :, -current_chunk_len - 3] = prior_epsilon * prior_epsilon * prior_epsilon * prior_epsilon
+                    # _tmp_attn_prior[:, :, -current_chunk_len - 2] = prior_epsilon * prior_epsilon * prior_epsilon * prior_epsilon
+                    # _tmp_attn_prior[:, :, -current_chunk_len - 1] = prior_epsilon * prior_epsilon * prior_epsilon * prior_epsilon * prior_epsilon
+                    # _tmp_attn_prior[:, :, -current_chunk_len] = 0.2
+                    # _tmp_attn_prior[:, :, -current_chunk_len + 1] = 0.8
+                    # _tmp_attn_prior[:, :, -current_chunk_len + 2] = 0.8
+                    
+                    self.history_attn_prior = _tmp_attn_prior
+                    first_08_idx = (self.history_attn_prior[0] == 0.2).nonzero(as_tuple=True)[1][0].item() if (self.history_attn_prior[0] == 0.2).any() else -1
+                    print(f"...222 first_08_idx {first_08_idx}")
+                print(f"222 self.history_attn_prior {self.history_attn_prior.shape}")
+                print(f"222 self.history_attn_prior {self.history_attn_prior[0]}")
+
+            num_audio_tokens_to_predict = max_decoder_steps - self.overall_idx
+
+            cross_attention_scores_all_timesteps = []
+            all_heads_cross_attn_scores_all_timesteps = []
+            all_predictions = []
+            num_text_tokens_slid_in_current_session = 0
+
+            for idx in range(num_audio_tokens_to_predict):
+                audio_codes_embedded = self.embed_audio_tokens(self.audio_codes_input)
+                if context_tensors['additional_decoder_input'] is not None:
+                    _audio_codes_embedded = torch.cat(
+                        [context_tensors['additional_decoder_input'], audio_codes_embedded], dim=1
+                    )
+                    _audio_codes_mask = torch.cat(
+                        [context_tensors['additional_decoder_mask'], audio_codes_mask], dim=1
+                    )
+                else:
+                    _audio_codes_embedded = audio_codes_embedded
+                    _audio_codes_mask = audio_codes_mask
+
+                if apply_prior_to_layers is not None:
+                    attn_prior = [None for _ in range(self.cfg.decoder.n_layers)]
+                    for layer_idx in apply_prior_to_layers:
+                        attn_prior[layer_idx] = self.history_attn_prior
+                else:
+                    attn_prior = self.history_attn_prior
+
+                if self.model_type == 'multi_encoder_context_tts':
+                    attn_prior = [attn_prior, None]
+
+                if use_cfg:
+                    # Combine conditional and unconditional inputs into one batch
+                    if isinstance(context_tensors['cond'], list):
+                        cfg_cond = [
+                            torch.cat([cond_item, dummy_cond_item], dim=0)
+                            for cond_item, dummy_cond_item in zip(context_tensors['cond'], dummy_cond)
+                        ]
+                        cfg_cond_mask = [
+                            torch.cat([cond_mask_item, dummy_cond_mask_item], dim=0)
+                            for cond_mask_item, dummy_cond_mask_item in zip(
+                                context_tensors['cond_mask'], dummy_cond_mask
+                            )
+                        ]
+                    else:
+                        cfg_cond = torch.cat([context_tensors['cond'], dummy_cond], dim=0)
+                        cfg_cond_mask = torch.cat([context_tensors['cond_mask'], dummy_cond_mask], dim=0)
+                    cfg_audio_codes_embedded = torch.cat([_audio_codes_embedded, _audio_codes_embedded], dim=0)
+                    cfg_audio_codes_mask = torch.cat([_audio_codes_mask, _audio_codes_mask], dim=0)
+                    if dummy_additional_decoder_input is not None:
+                        cfg_audio_codes_embedded[batch_size:, : dummy_additional_decoder_input.size(1)] = (
+                            dummy_additional_decoder_input
+                        )
+                        cfg_audio_codes_mask[batch_size:, : dummy_additional_decoder_input.size(1)] = (
+                            dummy_addition_dec_mask
+                        )
+
+                    # if audio_tokens_in_current_session >= max_decoder_steps_in_each_session:
+                    #     print(f"111...idx {idx} cfg_audio_codes_embedded {cfg_audio_codes_embedded.shape}")
+                    #     print(f"cfg_audio_codes_mask {cfg_audio_codes_mask.shape}")
+                    #     print(f"cfg_cond {cfg_cond.shape}")
+                    #     print(f"cfg_cond_mask {cfg_cond_mask.shape}")
+                    #     print(f"attn_prior {attn_prior[0].shape if attn_prior is not None else None}")
+                    # print(f"context_tensors['multi_encoder_mapping'] {context_tensors['multi_encoder_mapping']}")
+                    # if idx <= 5 and attn_prior is not None:
+                    #     print(f"111...idx {idx} attn_prior {attn_prior[0]}")
+                    #     first_08_idx = (attn_prior[0] == 0.2).nonzero(as_tuple=True)[1][0].item() if (attn_prior[0] == 0.2).any() else -1
+                    #     print(f"111...first_08_idx attn_prior {first_08_idx}")
+
+                    combined_logits, attn_probs, _ = self.forward(
+                        dec_input_embedded=cfg_audio_codes_embedded,
+                        dec_input_mask=cfg_audio_codes_mask,
+                        cond=cfg_cond,
+                        cond_mask=cfg_cond_mask,
+                        attn_prior=attn_prior,
+                        multi_encoder_mapping=context_tensors['multi_encoder_mapping'],
+                    )
+
+                    cond_logits = combined_logits[:batch_size]
+                    uncond_logits = combined_logits[batch_size:]
+                    all_code_logits = (1 - cfg_scale) * uncond_logits + cfg_scale * cond_logits
+                else:
+                    batch_size = audio_codes_embedded.size(0)
+                    all_code_logits, attn_probs, _ = self.forward(
+                        dec_input_embedded=_audio_codes_embedded,
+                        dec_input_mask=_audio_codes_mask,
+                        cond=context_tensors['cond'],
+                        cond_mask=context_tensors['cond_mask'],
+                        attn_prior=attn_prior,
+                        multi_encoder_mapping=context_tensors['multi_encoder_mapping'],
+                    )
+
+                if apply_attention_prior:
+                    cross_attention_scores, all_heads_cross_attn_scores = self.get_cross_attention_scores(
+                        attn_probs
+                    )  # B, text_timesteps
+                    alignment_attention_scores = cross_attention_scores
+                    if estimate_alignment_from_layers is not None:
+                        alignment_attention_scores, _ = self.get_cross_attention_scores(
+                            attn_probs, filter_layers=estimate_alignment_from_layers
+                        )  # B, text_timesteps
+                    # cross_attention_scores_all_timesteps.append(cross_attention_scores)
+                    # all_heads_cross_attn_scores_all_timesteps.append(all_heads_cross_attn_scores)
+                    if return_cross_attn_probs:
+                        cross_attention_scores_all_timesteps.append(cross_attention_scores.detach())
+                        all_heads_cross_attn_scores_all_timesteps.append(
+                            [h.detach() for h in all_heads_cross_attn_scores]
+                        )
+                        print(f"111...cross_attention_scores {cross_attention_scores.shape}")
+                        print(f"111...cross_attention_scores_all_timesteps {len(cross_attention_scores_all_timesteps)}")
+                        print(f"111...all_heads_cross_attn_scores[0] {all_heads_cross_attn_scores[0].shape}")
+                        print(f"111...all_heads_cross_attn_scores_all_timesteps {len(all_heads_cross_attn_scores_all_timesteps)}")
+
+                    text_time_step_attended, self.attended_timestep_counter = self.get_most_attended_text_timestep(
+                        alignment_attention_scores=alignment_attention_scores,
+                        last_attended_timesteps=self.last_attended_timesteps,
+                        text_lens=context_tensors['text_lens'],
+                        lookahead_window_size=lookahead_window_size,
+                        attended_timestep_counter=self.attended_timestep_counter,
+                        batch_size=batch_size,
+                        left_offset=self.left_offset,
+                    )
+                    # print(f"text_time_step_attended {text_time_step_attended[0]} self.left_offset {self.left_offset}")
+                    # self.last_attended_timesteps.append(text_time_step_attended)
+                    self.last_attended_timesteps.append(
+                        text_time_step_attended.detach() if isinstance(text_time_step_attended, torch.Tensor) 
+                        else text_time_step_attended
+                    )
+                    # print(f"111...self.last_attended_timesteps {len(self.last_attended_timesteps)}")
+
+                    (
+                        self.history_attn_prior,
+                        self.unfinished_texts,
+                        self.finished_texts_counter,
+                        chunk_end_has_reached,
+                    ) = self.construct_streaming_inference_prior(
+                        prior_epsilon=prior_epsilon,
+                        cross_attention_scores=cross_attention_scores,
+                        text_lens=context_tensors['text_lens'],
+                        text_time_step_attended=text_time_step_attended,
+                        attended_timestep_counter=self.attended_timestep_counter,
+                        unfinished_texts=self.unfinished_texts,
+                        finished_texts_counter=self.finished_texts_counter,
+                        end_indices=self.end_indices,
+                        lookahead_window_size=lookahead_window_size,
+                        batch_size=batch_size,
+                        end_of_text=end_of_text,
+                        left_offset=self.left_offset,
+                        use_exponential=use_exponential_weight,
+                    )
+                    # print(f"text_time_step_attended {text_time_step_attended[0]}")
+                    # print(f"333 self.history_attn_prior {self.history_attn_prior.shape}")
+                    # print(f"333 self.history_attn_prior {self.history_attn_prior[0]}")
+                    # first_02_idx = (self.history_attn_prior[0] == 0.2).nonzero(as_tuple=True)[1][0].item() if (self.history_attn_prior[0] == 0.2).any() else -1
+                    # print(f"...333 idx {idx} first_02_idx {first_02_idx}")
+                    # first_08_idx = (self.history_attn_prior[0] == 0.8).nonzero(as_tuple=True)[1][0].item() if (self.history_attn_prior[0] == 0.8).any() else -1
+                    # print(f"...333 idx {idx} first_08_idx {first_08_idx}")
+                    # first_1_idx = (self.history_attn_prior[0] == 1.0).nonzero(as_tuple=True)[1][0].item() if (self.history_attn_prior[0] == 1.0).any() else -1
+                    # print(f"...333 idx {idx} first_1_idx {first_1_idx}")
+                    # print(f"self.overall_idx {self.overall_idx}")
+
+                for key in self.finished_texts_counter:
+                    self.finished_texts_counter[key] += 1
+                    if self.finished_texts_counter[key] > 10:
+                        # We should allow EOS to be predicted now.
+                        self.unfinished_texts[key] = False
+
+                finished_items = {
+                    k: v for k, v in self.finished_texts_counter.items() if v >= 15
+                }  # Items that have been close to the end for atleast 15 timesteps
+                unifinished_items = {k: v for k, v in self.unfinished_texts.items() if v}
+
+                all_code_logits_t = all_code_logits[:, -1, :]  # (B, num_codebooks * num_tokens_per_codebook)
+                audio_codes_next = self.sample_codes_from_logits(
+                    all_code_logits_t,
+                    temperature=temperature,
+                    topk=topk,
+                    unfinished_items=unifinished_items,
+                    finished_items=finished_items,
+                )  # (B, num_codebooks)
+                all_codes_next_argmax = self.sample_codes_from_logits(
+                    all_code_logits_t,
+                    temperature=0.01,
+                    topk=1,
+                    unfinished_items=unifinished_items,
+                    finished_items=finished_items,
+                )  # (B, num_codebooks)
+
+                # TODO(sugh) Check conversion of text_time_step_attended
+                # Track audio tokens per text token
+                if text_time_step_attended[-1] not in self.audio_tokens_per_text_token:
+                    self.audio_tokens_per_text_token[text_time_step_attended[-1]] = 0
+                self.audio_tokens_per_text_token[text_time_step_attended[-1]] += 1
+
+                for item_idx in range(batch_size):
+                    if item_idx not in self.end_indices:
+                        eos_in_pred_tokens_argmax = (all_codes_next_argmax[item_idx] == self.audio_eos_id).any().item()
+                        eos_in_pred_tokens_multinomial = (audio_codes_next[item_idx] == self.audio_eos_id).any().item()
+                        if (eos_in_pred_tokens_argmax or eos_in_pred_tokens_multinomial) and end_of_text:
+                            print(
+                                "End detected for item {} at local timestep {} and overall timestep {}".format(
+                                    item_idx, idx, self.overall_idx
+                                )
+                            )
+                            self.end_indices[item_idx] = self.overall_idx
+
+                all_predictions.append(audio_codes_next)
+
+                self.audio_codes_input = torch.cat([self.audio_codes_input, audio_codes_next], dim=-1)  # (B, C, T')
+                self.audio_codes_lens = self.audio_codes_lens + 1
+                audio_codes_mask = get_mask_from_lengths(self.audio_codes_lens)
+                
+                if len(self.end_indices) == batch_size:
+                    print("All ends reached")
+                    break
+                if not end_of_text and chunk_end_has_reached:
+                    # print("END DETECTED CHUNK END REACHED")
+                    break
+
+                self.overall_idx += 1
+                audio_tokens_in_current_session += 1
+                # print(f"audio_tokens_in_current_session {audio_tokens_in_current_session}")
+
+                # Check if we need to shift text by 1 token
+                if audio_tokens_in_current_session >= max_decoder_steps_in_each_session and current_text_lens > 1:
+                    shift_by = 1
+                    # logging.info(
+                    #     f"Shifting text by 1 token at audio timestep {self.overall_idx}, "
+                    #     f"current_text_position: {self.current_text_position}"
+                    # )
+                    # print(
+                    #     f"Shifting text by 1 token at audio timestep {self.overall_idx}, current_text_position: {self.current_text_position}"
+                    # )
+                    
+                    # Shift text tokens by 1 - history and current text
+                    # Update context tensors with shifted text - context_tensors['cond'], context_tensors['cond_mask'], self.history_context_tensor
+                    self.history_text = self.history_text[:, shift_by:]
+                    context_tensors['cond'] = context_tensors['cond'][:, shift_by:]
+                    context_tensors['cond_mask'] = context_tensors['cond_mask'][:, shift_by:]
+                    self.history_context_tensor = self.history_context_tensor[:, shift_by:]
+                    context_tensors['text_lens'] = context_tensors['text_lens'] - shift_by
+                    dummy_cond = dummy_cond[:, shift_by:]
+                    dummy_cond_mask = dummy_cond_mask[:, shift_by:]
+                    
+                    # Shift history_attn_prior by 1
+                    if self.history_attn_prior is not None:
+                        self.history_attn_prior = self.history_attn_prior[:, :, shift_by:]
+
+                    # Shift audio codes self.audio_codes_input by the corresponding tokens.
+                    audio_codes_to_shift = self.audio_tokens_per_text_token.get(self.text_window_start_idx, 0)
+                    # Reset session counter
+                    audio_tokens_in_current_session -= audio_codes_to_shift
+                    # audio_codes_to_shift = self.audio_tokens_per_text_token[self.text_window_start_idx] if self.text_window_start_idx in self.audio_tokens_per_text_token else 0
+                    self.audio_codes_input = self.audio_codes_input[:, :, audio_codes_to_shift:]
+                    self.audio_codes_lens = self.audio_codes_lens - audio_codes_to_shift
+                    audio_codes_mask = get_mask_from_lengths(self.audio_codes_lens)
+                    self.text_window_start_idx += shift_by
+                    self.left_offset += shift_by
+                    num_text_tokens_slid_in_current_session += shift_by
+
+                    # if len(self.last_attended_timesteps) > 0:
+                    #     # Only keep timesteps corresponding to current audio window
+                    #     timesteps_to_keep = self.audio_codes_lens.item()
+                    #     if len(self.last_attended_timesteps) > timesteps_to_keep:
+                    #         # Detach and keep only recent timesteps
+                    #         self.last_attended_timesteps = [
+                    #             t.detach() if isinstance(t, torch.Tensor) else t 
+                    #             for t in self.last_attended_timesteps[-timesteps_to_keep:]
+                    #         ]
+                # print(f"--------------------------")
+
+            predicted_codes = torch.stack(all_predictions, dim=-1)
+            predicted_codes = predicted_codes.squeeze(2)
+            predicted_codes_lens = [predicted_codes.size(2)]
+
+            self.num_text_tokens_slid_in_current_session = num_text_tokens_slid_in_current_session
+            
+            torch.cuda.empty_cache()
+            
+            if return_cross_attn_probs:
+                if len(cross_attention_scores_all_timesteps) > 0:
+                    # Pad cross-attention scores if shape mismatch detected
+                    text_dims = [score.shape[1] for score in cross_attention_scores_all_timesteps]
+                    max_text_dim = max(text_dims)
+                    
+                    if max_text_dim != min(text_dims):
+                        def pad_left(tensor, target_dim):
+                            if tensor.shape[1] < target_dim:
+                                pad = torch.zeros(tensor.shape[0], target_dim - tensor.shape[1], device=tensor.device, dtype=tensor.dtype) - 1
+                                return torch.cat([pad, tensor], dim=1)
+                            return tensor
+                        
+                        cross_attention_scores_all_timesteps = [pad_left(s, max_text_dim) for s in cross_attention_scores_all_timesteps]
+                        if all_heads_cross_attn_scores_all_timesteps:
+                            all_heads_cross_attn_scores_all_timesteps = [
+                                [pad_left(h, max_text_dim) for h in heads] for heads in all_heads_cross_attn_scores_all_timesteps
+                            ]
+                    
+                    cross_attention_maps = []
+                    # print(f"predicted_codes_lens {predicted_codes_lens}")
+                    # print(f"self.last_attended_timesteps {self.last_attended_timesteps}")
+                    cross_attention_maps_current, headwise_cross_attention_maps = self.get_inference_attention_plots(
+                        cross_attention_scores_all_timesteps,
+                        all_heads_cross_attn_scores_all_timesteps,
+                        torch.tensor([max_text_dim], device=device).long(),
+                        predicted_codes_lens,
+                        batch_size,
+                        compute_all_heads_attn_maps,
+                        self.last_attended_timesteps,
+                    ) # B, text_timesteps, T'
+                    cross_attention_maps.extend(cross_attention_maps_current)
+                return predicted_codes, predicted_codes_lens, cross_attention_maps, headwise_cross_attention_maps
+            else:
+                return predicted_codes, predicted_codes_lens, [], []
