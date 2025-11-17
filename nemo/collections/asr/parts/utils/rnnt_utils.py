@@ -108,6 +108,7 @@ class Hypothesis:
     last_token: Optional[torch.Tensor] = None
     token_duration: Optional[torch.Tensor] = None
     last_frame: Optional[int] = None
+    fused_biasing_id: int = -1  # -1 = "not used"
 
     @property
     def non_blank_frame_confidence(self) -> List[float]:

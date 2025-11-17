@@ -782,16 +782,23 @@ class GreedyBatchedRNNTInfer(_GreedyRNNTInfer, WithOptionalCudaGraphs):
         The main idea: search for next labels for the whole batch (evaluating Joint)
         and thus always evaluate prediction network with maximum possible batch size
         """
+        fused_biasing_ids = None
         if partial_hypotheses is None or all(hyp is None for hyp in partial_hypotheses):
             batched_state = None
         else:
             batched_state = self.decoding_computer.merge_to_batched_state(
                 [hyp.dec_state if hyp is not None else None for hyp in partial_hypotheses]
             )
+            fused_biasing_ids = np.asarray(
+                [hyp.fused_biasing_id if hyp is not None else -1 for hyp in partial_hypotheses]
+            )
+            if (fused_biasing_ids != -1).any():
+                fused_biasing_ids = torch.from_numpy(fused_biasing_ids).to(device=x.device)
         batched_hyps, alignments, batched_state = self.decoding_computer(
             x=x,
             out_len=out_len,
             prev_batched_state=batched_state,
+            fused_biasing_ids=fused_biasing_ids,
         )
         hyps = rnnt_utils.batched_hyps_to_hypotheses(batched_hyps, alignments, batch_size=x.shape[0])
         for hyp, state_item in zip(hyps, self.decoding_computer.split_batched_state(batched_state)):
@@ -2918,16 +2925,23 @@ class GreedyBatchedTDTInfer(_GreedyRNNTInfer, WithOptionalCudaGraphs):
         The main idea: search for next labels for the whole batch (evaluating Joint)
         and thus always evaluate prediction network with maximum possible batch size
         """
+        fused_biasing_ids = None
         if partial_hypotheses is None or all(hyp is None for hyp in partial_hypotheses):
             batched_state = None
         else:
             batched_state = self.decoding_computer.merge_to_batched_state(
                 [hyp.dec_state if hyp is not None else None for hyp in partial_hypotheses]
             )
+            fused_biasing_ids = np.asarray(
+                [hyp.fused_biasing_id if hyp is not None else -1 for hyp in partial_hypotheses]
+            )
+            if (fused_biasing_ids != -1).any():
+                fused_biasing_ids = torch.from_numpy(fused_biasing_ids).to(device=x.device)
         batched_hyps, alignments, batched_state = self.decoding_computer(
             x=x,
             out_len=out_len,
             prev_batched_state=batched_state,
+            fused_biasing_ids=fused_biasing_ids,
         )
         hyps = rnnt_utils.batched_hyps_to_hypotheses(batched_hyps, alignments, batch_size=x.shape[0])
         for hyp, state_item in zip(hyps, self.decoding_computer.split_batched_state(batched_state)):

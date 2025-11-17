@@ -254,6 +254,7 @@ class GreedyBatchedRNNTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBas
         encoder_output: torch.Tensor,
         encoder_output_length: torch.Tensor,
         prev_batched_state: Optional[BatchedLabelLoopingState] = None,
+        fused_biasing_ids: Optional[torch.Tensor] = None,
     ) -> tuple[rnnt_utils.BatchedHyps, Optional[rnnt_utils.BatchedAlignments], BatchedLabelLoopingState]:
         """
         Pure PyTorch implementation
@@ -262,7 +263,10 @@ class GreedyBatchedRNNTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBas
             encoder_output: output from the encoder
             encoder_output_length: lengths of the utterances in `encoder_output`
             prev_batched_state: previous batched decoding state
+            fused_biasing_ids: optional tensor [Batch] with ids of fused biasing models
         """
+        if fused_biasing_ids is not None:
+            raise NotImplementedError("Fused biasing models are not supported yet")
         batch_size, max_time, _unused = encoder_output.shape
         device = encoder_output.device
         if self.fusion_models is not None:
@@ -657,6 +661,7 @@ class GreedyBatchedRNNTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBas
         encoder_output: torch.Tensor,
         encoder_output_length: torch.Tensor,
         prev_batched_state: Optional[BatchedLabelLoopingState] = None,
+        fused_biasing_ids: Optional[torch.Tensor] = None,
     ) -> tuple[rnnt_utils.BatchedHyps, Optional[rnnt_utils.BatchedAlignments], BatchedLabelLoopingState]:
         """
         Implementation with CUDA graphs.
@@ -665,9 +670,12 @@ class GreedyBatchedRNNTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBas
             encoder_output: output from the encoder
             encoder_output_length: lengths of the utterances in `encoder_output`
             prev_batched_state: previous batched decoding state
+            fused_biasing_ids: optional tensor [Batch] with ids of fused biasing models
         """
         assert self.cuda_graphs_mode is not None
 
+        if fused_biasing_ids is not None:
+            raise NotImplementedError("Fused biasing models are not supported yet with CUDA graphs")
         # do not recalculate joint projection, project only once
         encoder_output = self.joint.project_encoder(encoder_output)
         current_batch_size = encoder_output.shape[0]
