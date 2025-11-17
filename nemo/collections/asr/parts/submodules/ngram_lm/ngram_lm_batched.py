@@ -599,7 +599,7 @@ class NGramGPULanguageModel(ModelPT):
             vocab_size: model vocabulary size
             use_triton: allow using Triton implementation; None (default) means "auto" (used if available)
         """
-        model = NGramGPULanguageModel.restore_from(restore_path=str(lm_path), map_location="cpu")
+        model = cls.restore_from(restore_path=str(lm_path), map_location="cpu")
         model._resolve_final()
         assert model.vocab_size == vocab_size
         model.use_triton = use_triton if use_triton is not None else TRITON_AVAILABLE
