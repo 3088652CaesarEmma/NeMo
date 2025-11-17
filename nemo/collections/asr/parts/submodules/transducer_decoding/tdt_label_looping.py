@@ -20,6 +20,7 @@ import torch
 import torch.nn.functional as F
 from omegaconf import DictConfig, ListConfig
 
+from nemo.collections.asr.parts.context_biasing.fused_boosting_model import FusedGPUBiasingModelBase
 from nemo.collections.asr.parts.submodules.ngram_lm import NGramGPULanguageModel
 from nemo.collections.asr.parts.submodules.transducer_decoding.label_looping_base import (
     BatchedLabelLoopingState,
@@ -304,8 +305,6 @@ class GreedyBatchedTDTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBase
             prev_batched_state: previous batched decoding state
             fused_biasing_ids: optional tensor [Batch] with ids of fused biasing models
         """
-        if fused_biasing_ids is not None:
-            raise NotImplementedError("Fused biasing models are not supported yet")
         batch_size, max_time, _unused = encoder_output.shape
         device = encoder_output.device
         if self.fusion_models is not None:
@@ -402,8 +401,9 @@ class GreedyBatchedTDTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBase
                 fusion_scores_list, fusion_states_candidates_list = [], []
                 logits_with_fusion = logits.clone()
                 for fusion_idx, fusion_model in enumerate(self.fusion_models):
+                    is_fused = isinstance(fusion_model, FusedGPUBiasingModelBase)
                     fusion_scores, fusion_states_candidates = fusion_model.advance(
-                        states=fusion_states_list[fusion_idx],
+                        states=fusion_states_list[fusion_idx], **({"model_ids": fused_biasing_ids} if is_fused else {})
                     )
                     fusion_scores = fusion_scores.to(dtype=float_dtype)
                     # combine logits with fusion model without blank

@@ -2935,7 +2935,7 @@ class GreedyBatchedTDTInfer(_GreedyRNNTInfer, WithOptionalCudaGraphs):
             fused_biasing_ids = np.asarray(
                 [hyp.fused_biasing_id if hyp is not None else -1 for hyp in partial_hypotheses]
             )
-            if (fused_biasing_ids != -1).any():
+            if (fused_biasing_ids >= 0).any():
                 fused_biasing_ids = torch.from_numpy(fused_biasing_ids).to(device=x.device)
         batched_hyps, alignments, batched_state = self.decoding_computer(
             x=x,
