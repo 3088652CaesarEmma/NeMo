@@ -783,7 +783,7 @@ class GreedyBatchedRNNTInfer(_GreedyRNNTInfer, WithOptionalCudaGraphs):
         and thus always evaluate prediction network with maximum possible batch size
         """
         fused_biasing_ids = None
-        if partial_hypotheses is None or all(hyp is None for hyp in partial_hypotheses):
+        if partial_hypotheses is None or all((hyp is None or hyp.dec_state is None) for hyp in partial_hypotheses):
             batched_state = None
         else:
             batched_state = self.decoding_computer.merge_to_batched_state(
@@ -2926,7 +2926,7 @@ class GreedyBatchedTDTInfer(_GreedyRNNTInfer, WithOptionalCudaGraphs):
         and thus always evaluate prediction network with maximum possible batch size
         """
         fused_biasing_ids = None
-        if partial_hypotheses is None or all(hyp is None for hyp in partial_hypotheses):
+        if partial_hypotheses is None or all((hyp is None or hyp.dec_state is None) for hyp in partial_hypotheses):
             batched_state = None
         else:
             batched_state = self.decoding_computer.merge_to_batched_state(
