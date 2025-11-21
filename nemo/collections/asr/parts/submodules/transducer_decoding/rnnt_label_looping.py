@@ -20,7 +20,10 @@ import torch
 import torch.nn.functional as F
 from omegaconf import DictConfig
 
-from nemo.collections.asr.parts.context_biasing.fused_boosting_model import FusedGPUBiasingModelBase
+from nemo.collections.asr.parts.context_biasing.biasing_multi_model import (
+    GPUBiasingMultiModel,
+    GPUBiasingMultiModelBase,
+)
 from nemo.collections.asr.parts.submodules.ngram_lm import NGramGPULanguageModel
 from nemo.collections.asr.parts.submodules.transducer_decoding.label_looping_base import (
     BatchedLabelLoopingState,
@@ -200,6 +203,7 @@ class GreedyBatchedRNNTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBas
         allow_cuda_graphs: bool = True,
         fusion_models: Optional[List[NGramGPULanguageModel]] = None,
         fusion_models_alpha: Optional[List[float]] = None,
+        enable_per_stream_biasing: bool = True,
     ):
         """
         Init method.
@@ -213,6 +217,7 @@ class GreedyBatchedRNNTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBas
             confidence_method_cfg: config for the confidence
             fusion_models: list of fusion models (ngram_lm_model and boosting_tree_model)
             fusion_models_alpha: list of fusion model weights (ngram_lm_alpha and boosting_tree_alpha)
+            enable_per_stream_biasing: enable multi-biasing model for per-stream customization
         """
         super().__init__()
         self.decoder = decoder
@@ -233,8 +238,22 @@ class GreedyBatchedRNNTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBas
         self.cuda_graphs_mode = None
         self.maybe_enable_cuda_graphs()
 
-        self.fusion_models = fusion_models
-        self.fusion_models_alpha = fusion_models_alpha
+        self.fusion_models = fusion_models or []
+        self.fusion_models_alpha = fusion_models_alpha or []
+
+        self.biasing_multi_model = GPUBiasingMultiModel() if enable_per_stream_biasing else None
+
+    def _all_fusion_models(
+        self, with_multi_model: bool = True
+    ) -> list[NGramGPULanguageModel | GPUBiasingMultiModelBase]:
+        if with_multi_model and (self.biasing_multi_model is not None):
+            return self.fusion_models + [self.biasing_multi_model]
+        return self.fusion_models
+
+    def has_fusion_models(self, with_multi_model: bool = True) -> bool:
+        if len(self.fusion_models) > 0:
+            return True
+        return with_multi_model and (self.biasing_multi_model is not None)
 
     def reset_cuda_graphs_state(self):
         """Reset state to release memory (for CUDA graphs implementations)"""
@@ -255,7 +274,7 @@ class GreedyBatchedRNNTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBas
         encoder_output: torch.Tensor,
         encoder_output_length: torch.Tensor,
         prev_batched_state: Optional[BatchedLabelLoopingState] = None,
-        fused_biasing_ids: Optional[torch.Tensor] = None,
+        multi_biasing_ids: Optional[torch.Tensor] = None,
     ) -> tuple[rnnt_utils.BatchedHyps, Optional[rnnt_utils.BatchedAlignments], BatchedLabelLoopingState]:
         """
         Pure PyTorch implementation
@@ -264,13 +283,14 @@ class GreedyBatchedRNNTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBas
             encoder_output: output from the encoder
             encoder_output_length: lengths of the utterances in `encoder_output`
             prev_batched_state: previous batched decoding state
-            fused_biasing_ids: optional tensor [Batch] with ids of fused biasing models
+            multi_biasing_ids: optional tensor [Batch] with ids of multi-biasing models
         """
         batch_size, max_time, _unused = encoder_output.shape
         device = encoder_output.device
-        if self.fusion_models is not None:
-            for fusion_model in self.fusion_models:
-                fusion_model.to(device)  # fusion_models is nn.Module, but self is not; need to move manually
+        for fusion_model in self._all_fusion_models():
+            fusion_model.to(device)  # fusion_models is nn.Module, but self is not; need to move manually
+
+        use_biasing_multi_model = (self.biasing_multi_model is not None) and (multi_biasing_ids is not None)
 
         # do not recalculate joint projection, project only once
         encoder_output_projected = self.joint.project_encoder(encoder_output)
@@ -321,12 +341,9 @@ class GreedyBatchedRNNTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBas
             decoder_output = self.joint.project_prednet(decoder_output)  # do not recalculate joint projection
 
             # fusion models
-            if self.fusion_models is not None:
-                fusion_states_list = []
-                for fusion_model in self.fusion_models:
-                    fusion_states_list.append(fusion_model.get_init_states(batch_size=batch_size, bos=True))
-            else:
-                fusion_states_list = None
+            fusion_states_list = []
+            for fusion_model in self._all_fusion_models(with_multi_model=use_biasing_multi_model):
+                fusion_states_list.append(fusion_model.get_init_states(batch_size=batch_size, bos=True))
         else:
             decoder_output = prev_batched_state.predictor_outputs
             state = prev_batched_state.predictor_states
@@ -347,20 +364,33 @@ class GreedyBatchedRNNTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBas
                 .squeeze(1)
             )
             scores, labels = logits.max(-1)
-            if self.fusion_models is not None:
+            if self.has_fusion_models(with_multi_model=use_biasing_multi_model):
                 fusion_scores_list, fusion_states_candidates_list = [], []
                 logits_with_fusion = logits.clone()
                 for fusion_idx, fusion_model in enumerate(self.fusion_models):
-                    is_fused = isinstance(fusion_model, FusedGPUBiasingModelBase)
                     fusion_scores, fusion_states_candidates = fusion_model.advance(
-                        states=fusion_states_list[fusion_idx], **({"model_ids": fused_biasing_ids} if is_fused else {})
+                        states=fusion_states_list[fusion_idx]
                     )
                     fusion_scores = fusion_scores.to(dtype=float_dtype)
+                    fusion_scores *= self.fusion_models_alpha[fusion_idx]
                     # combine logits with fusion model without blank
-                    logits_with_fusion[:, :-1] += self.fusion_models_alpha[fusion_idx] * fusion_scores
+                    logits_with_fusion[:, :-1] += fusion_scores
                     # save fusion scores and states candidates
                     fusion_scores_list.append(fusion_scores)
                     fusion_states_candidates_list.append(fusion_states_candidates)
+
+                if use_biasing_multi_model:
+                    fusion_idx = len(self.fusion_models)
+                    fusion_scores, fusion_states_candidates = self.biasing_multi_model.advance(
+                        states=fusion_states_list[fusion_idx], model_ids=multi_biasing_ids
+                    )
+                    fusion_scores = fusion_scores.to(dtype=float_dtype)
+                    # combine logits with fusion model without blank
+                    logits_with_fusion[:, :-1] += fusion_scores
+                    # save fusion scores and states candidates
+                    fusion_scores_list.append(fusion_scores)
+                    fusion_states_candidates_list.append(fusion_states_candidates)
+
                 # get max scores and labels without blank
                 fusion_scores_max, fusion_labels_max = logits_with_fusion[:, :-1].max(dim=-1)
                 # preserve "blank" / "non-blank" category
@@ -403,11 +433,11 @@ class GreedyBatchedRNNTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBas
                 # get labels (greedy) and scores from current logits, replace labels/scores with new
                 # labels[advance_mask] are blank, and we are looking for non-blank labels
                 more_scores, more_labels = logits.max(dim=-1)
-                if self.fusion_models is not None:
+                if self.has_fusion_models(with_multi_model=use_biasing_multi_model):
                     logits_with_fusion = logits.clone()
-                    for fusion_idx, fusion_scores in enumerate(fusion_scores_list):
+                    for fusion_scores in fusion_scores_list:
                         # combined scores with fusion model - without blank
-                        logits_with_fusion[:, :-1] += self.fusion_models_alpha[fusion_idx] * fusion_scores
+                        logits_with_fusion[:, :-1] += fusion_scores
                     # get max scores and labels without blank
                     more_scores_w_fusion, more_labels_w_fusion = logits_with_fusion[:, :-1].max(dim=-1)
                     # preserve "blank" / "non-blank" category
@@ -472,13 +502,13 @@ class GreedyBatchedRNNTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBas
                 active_mask.unsqueeze(-1).unsqueeze(-1), decoder_output, prev_decoder_output, out=decoder_output
             )
 
-            if self.fusion_models is not None:
-                for fusion_idx, fusion_states_candidates in enumerate(fusion_states_candidates_list):
+            if self.has_fusion_models(with_multi_model=use_biasing_multi_model):
+                for fusion_states, fusion_states_candidates in zip(fusion_states_list, fusion_states_candidates_list):
                     torch.where(
                         active_mask,
                         fusion_states_candidates[batch_indices, labels * active_mask],
-                        fusion_states_list[fusion_idx],
-                        out=fusion_states_list[fusion_idx],
+                        fusion_states,
+                        out=fusion_states,
                     )
 
             # stage 4: to avoid infinite looping, go to the next frame after max_symbols emission
@@ -662,7 +692,7 @@ class GreedyBatchedRNNTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBas
         encoder_output: torch.Tensor,
         encoder_output_length: torch.Tensor,
         prev_batched_state: Optional[BatchedLabelLoopingState] = None,
-        fused_biasing_ids: Optional[torch.Tensor] = None,
+        multi_biasing_ids: Optional[torch.Tensor] = None,
     ) -> tuple[rnnt_utils.BatchedHyps, Optional[rnnt_utils.BatchedAlignments], BatchedLabelLoopingState]:
         """
         Implementation with CUDA graphs.
@@ -671,11 +701,11 @@ class GreedyBatchedRNNTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBas
             encoder_output: output from the encoder
             encoder_output_length: lengths of the utterances in `encoder_output`
             prev_batched_state: previous batched decoding state
-            fused_biasing_ids: optional tensor [Batch] with ids of fused biasing models
+            multi_biasing_ids: optional tensor [Batch] with ids of multi-biasing models
         """
         assert self.cuda_graphs_mode is not None
 
-        if fused_biasing_ids is not None:
+        if multi_biasing_ids is not None:
             raise NotImplementedError("Fused biasing models are not supported yet with CUDA graphs")
         # do not recalculate joint projection, project only once
         encoder_output = self.joint.project_encoder(encoder_output)

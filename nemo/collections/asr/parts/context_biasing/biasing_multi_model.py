@@ -18,20 +18,12 @@ from typing import cast
 import torch
 import torch.nn as nn
 
-from nemo.collections.asr.parts.context_biasing import GPUBoostingTreeModel
 from nemo.collections.asr.parts.submodules.ngram_lm import NGramGPULanguageModel
 
-# from nemo.core.utils.optional_libs import TRITON_AVAILABLE, triton_required
 
-# if TRITON_AVAILABLE:
-#     import triton
-#
-#     from nemo.collections.asr.parts.submodules.ngram_lm.ngram_lm_triton import ngram_advance_triton_kernel
-
-
-class FusedGPUBiasingModelBase(abc.ABC, nn.Module):
+class GPUBiasingMultiModelBase(abc.ABC, nn.Module):
     @abstractmethod
-    def add_model(self, model: NGramGPULanguageModel) -> int:
+    def add_model(self, model: NGramGPULanguageModel, alpha: float = 1.0) -> int:
         raise NotImplementedError
 
     @abstractmethod
@@ -59,18 +51,34 @@ class FusedGPUBiasingModelBase(abc.ABC, nn.Module):
         """
         pass
 
+    @abstractmethod
+    def get_init_states(self, batch_size: int, bos=True) -> torch.Tensor:
+        """
+        Get batch of the initial states
 
-class FusedGPUBiasingModelNonBatched(FusedGPUBiasingModelBase):
+        Args:
+            batch_size: batch size
+            bos: use begin-of-sentence state
+
+        Returns:
+            tensor [B] of initial states
+        """
+        pass
+
+
+class GPUBiasingMultiModel(GPUBiasingMultiModelBase):
     """Reference implementation (incompatible with CUDA graphs)"""
 
     def __init__(self):
         super().__init__()
         self.models = nn.ModuleList([])
+        self.alphas: list[float] = []
         self.vocab_size: int | None = None
         self.float_dtype: torch.dtype | None = None
         self.bos_state: int | None = None
         self.start_state: int | None = None
         self._params_defined = False
+        self.free_ids = set()
 
     def _check_model_compatibility(self, model: NGramGPULanguageModel):
         if self.vocab_size != model.vocab_size:
@@ -80,16 +88,48 @@ class FusedGPUBiasingModelNonBatched(FusedGPUBiasingModelBase):
         if self.start_state != model.START_STATE:
             raise ValueError(f"Inconsistent start state")
 
-    def add_model(self, model: NGramGPULanguageModel) -> int:
+    def add_model(self, model: NGramGPULanguageModel, alpha: float = 1.0) -> int:
         if not self._params_defined:
             # there were no previous models
             self.vocab_size = model.vocab_size
             self.bos_state = model.bos_state
             self.start_state = model.START_STATE
-            self.float_dtype = model.arc_weights.dtype
+            self.float_dtype = model.arcs_weights.dtype
             self._params_defined = True
         self._check_model_compatibility(model=model)
-        raise NotImplementedError
+        try:
+            model_id = self.free_ids.pop()
+        except KeyError:
+            model_id = None
+        if model_id is None:
+            model_id = len(self.models)
+            self.models.append(model)
+            self.alphas.append(alpha)
+        else:
+            self.models[model_id] = model
+            self.alphas[model_id] = alpha
+        return model_id
+
+    def remove_model(self, model_id: int):
+        self.models[model_id] = nn.Identity()  # dummy nn model
+        self.alphas[model_id] = 0.0
+        self.free_ids.add(model_id)
+
+    def get_init_states(self, batch_size: int, bos=True) -> torch.Tensor:
+        """
+        Get batch of the initial states
+
+        Args:
+            batch_size: batch size
+            bos: use begin-of-sentence state
+
+        Returns:
+            tensor [B] of initial states
+        """
+        device = self.models[0].arcs_weights.device
+        return torch.full(
+            [batch_size], fill_value=self.bos_state if bos else self.start_state, device=device, dtype=torch.long
+        )
 
     def advance(
         self, states: torch.Tensor, model_ids: torch.Tensor, eos_id: int | None = None
@@ -115,12 +155,6 @@ class FusedGPUBiasingModelNonBatched(FusedGPUBiasingModelBase):
                 continue
             model = cast(NGramGPULanguageModel, self.models[model_id])
             scores_i, new_states_i = model.advance(states[batch_i : batch_i + 1], eos_id=eos_id)
-            scores[batch_i : batch_i + 1] = scores_i
+            scores[batch_i : batch_i + 1] = scores_i * self.alphas[model_id]
             new_states[batch_i : batch_i + 1] = new_states_i
         return scores, new_states
-
-
-class FusedGPUBiasingModel(FusedGPUBiasingModelBase):
-    def __init__(self):
-        super().__init__()
-        raise NotImplementedError
