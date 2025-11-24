@@ -35,7 +35,8 @@
 import os
 import shutil
 from collections import deque
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
+
 import numpy as np
 
 
@@ -152,9 +153,15 @@ class ContextGraph:
         for token, node in self.root.next.items():
             node.fail = self.root
             queue.append(node)
+        visited_ids = set()
+        visited_ids.add(self.root.id)
         while queue:
             current_node = queue.popleft()
+            if current_node.id in visited_ids:
+                continue
             for token, node in current_node.next.items():
+                if node.id in visited_ids:
+                    continue
                 fail = current_node.fail
                 if token in fail.next:
                     fail = fail.next[token]
@@ -177,14 +184,16 @@ class ContextGraph:
                 node.output = output
                 node.output_score += 0 if output is None else output.output_score
                 queue.append(node)
+            visited_ids.add(current_node.id)
 
     def build(
         self,
-        token_ids: List[List[int]],
+        token_ids: List[List[int]] | Any,
         phrases: Optional[List[str]] = None,
         scores: Optional[List[float]] = None,
         ac_thresholds: Optional[List[float]] = None,
         uniform_weights: Optional[bool] = False,
+        use_variative_transcripts=False,
     ):
         """Build the ContextGraph from a list of token list.
         It first build a trie from the given token lists, then fill the fail arc
@@ -235,7 +244,11 @@ class ContextGraph:
             # using the default score
             context_score = self.context_score if score == 0.0 else score
             threshold = self.ac_threshold if ac_threshold == 0.0 else ac_threshold
+            cur_nodes = [self.root]
             for i, token in enumerate(tokens):
+                if use_variative_transcripts:
+                    token_group = token
+                    token = token_group[0].token_id
                 if token not in node.next:
                     if i > 0 and not uniform_weights:
                         token_score = context_score * self.depth_scaling + np.log(
@@ -257,6 +270,13 @@ class ContextGraph:
                         phrase=phrase if is_end else "",
                         ac_threshold=threshold if is_end else 0.0,
                     )
+                    if use_variative_transcripts:
+                        for alt_token in token_group[1:]:
+                            if alt_token.length == 1:
+                                node.next[alt_token.token_id] = node.next[token]
+                            else:
+                                # continue
+                                cur_nodes[-alt_token.length].next[alt_token.token_id] = node.next[token]
                 else:
                     # node exists, get the score of shared state.
                     token_score = max(context_score, node.next[token].token_score)
@@ -270,6 +290,7 @@ class ContextGraph:
                         node.next[token].phrase = phrase
                         node.next[token].ac_threshold = threshold
                 node = node.next[token]
+                cur_nodes.append(node)
         self._fill_fail_output()
 
     def draw(
@@ -334,17 +355,20 @@ class ContextGraph:
         dot = graphviz.Digraph(name="Context Graph", graph_attr=graph_attr)
 
         seen = set()
+        drawn = set()
         queue = deque()
         queue.append(self.root)
         # root id is always 0
         dot.node("0", label="0", **default_node_attr)
         dot.edge("0", "0", color="red")
-        seen.add(0)
+        drawn.add(self.root.id)
 
         while len(queue):
             current_node = queue.popleft()
+            if current_node.id in seen:
+                continue
             for token, node in current_node.next.items():
-                if node.id not in seen:
+                if node.id not in drawn:
                     node_score = f"{node.node_score:.2f}".rstrip("0").rstrip(".")
                     output_score = f"{node.output_score:.2f}".rstrip("0").rstrip(".")
                     label = f"{node.id}/({node_score}, {output_score})"
@@ -352,22 +376,23 @@ class ContextGraph:
                         dot.node(str(node.id), label=label, **final_state_attr)
                     else:
                         dot.node(str(node.id), label=label, **default_node_attr)
-                    seen.add(node.id)
+                    dot.edge(
+                        str(node.id),
+                        str(node.fail.id),
+                        color="red",
+                    )
+                    if node.output is not None:
+                        dot.edge(
+                            str(node.id),
+                            str(node.output.id),
+                            color="green",
+                        )
+                    drawn.add(node.id)
                 weight = f"{node.token_score:.2f}".rstrip("0").rstrip(".")
                 label = str(token) if symbol_table is None else symbol_table[token]
                 dot.edge(str(current_node.id), str(node.id), label=f"{label}/{weight}")
-                dot.edge(
-                    str(node.id),
-                    str(node.fail.id),
-                    color="red",
-                )
-                if node.output is not None:
-                    dot.edge(
-                        str(node.id),
-                        str(node.output.id),
-                        color="green",
-                    )
                 queue.append(node)
+            seen.add(current_node.id)
 
         if filename:
             _, extension = os.path.splitext(filename)

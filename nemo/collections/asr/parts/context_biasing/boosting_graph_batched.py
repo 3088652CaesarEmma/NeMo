@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import os
-from collections import deque
+from collections import defaultdict, deque
 from dataclasses import InitVar, dataclass, field
 from typing import List, NamedTuple, Optional
 
@@ -27,6 +27,87 @@ from nemo.collections.asr.parts.submodules.ngram_lm import NGramGPULanguageModel
 from nemo.collections.common.tokenizers import AggregateTokenizer
 from nemo.collections.common.tokenizers.tokenizer_spec import TokenizerSpec
 from nemo.utils import logging
+
+
+class TokenWithLength(NamedTuple):
+    token_id: int
+    length: int = 1
+
+
+@dataclass
+class TokenizerVocabExtras:
+    vocab: list[str]
+    token2id: dict[str, int]
+    token_id2canonical_id: dict[int, int]
+    canonical_id2alternatives: dict[int, list[int]]
+    token_id2canonical_split: dict[int, tuple[int, ...]]
+    max_token_len: int
+
+    def __init__(self, tokenizer):
+        # vocab + inversed vocab (id2token/token2id)
+        vocab = tokenizer.vocab
+        vocab_len_no_special = tokenizer.tokenizer.get_piece_size()
+        self.vocab = vocab[:vocab_len_no_special]
+        self.token2id = dict(zip(vocab, range(len(vocab))))
+
+        # mapping: token_id -> canonical_id (lowercase)
+        self.token_id2canonical_id = dict()
+        for token, token_id in self.token2id.items():
+            if token.lower() != token and token.lower() in self.token2id:
+                self.token_id2canonical_id[token_id] = self.token2id[token.lower()]
+            else:
+                self.token_id2canonical_id[token_id] = token_id
+
+        # inverse mapping: canonical_id -> list of token_id alternatives
+        # TODO: fix (not necessary exists!)
+        self.canonical_id2alternatives = defaultdict(list)
+        for token_id, canonical_id in self.token_id2canonical_id.items():
+            self.canonical_id2alternatives[canonical_id].append(token_id)
+
+        # mapping: token_id -> canonical split + inverse
+        self.max_token_len = 1
+        self.token_id2canonical_split = dict()
+        for token, token_id in self.token2id.items():
+            if len(token) == 1:
+                canonical_split = (self.token_id2canonical_id[token_id],)
+            else:
+                try:
+                    canonical_split = tuple(
+                        self.token_id2canonical_id[self.token2id[sub_token]] for sub_token in token
+                    )
+                except KeyError:
+                    print(f"No split for token {token}:{token_id}")
+                    canonical_split = (self.token_id2canonical_id[token_id],)
+            self.token_id2canonical_split[token_id] = canonical_split
+            self.max_token_len = max(self.max_token_len, len(canonical_split))
+        # self.canonical_split2token_id = dict(zip(self.token_id2canonical_split.values(), self.token_id2canonical_split.keys()))
+        self.canonical_split2token_ids = defaultdict(list)
+        for token_id, canonical_split in self.token_id2canonical_split.items():
+            self.canonical_split2token_ids[canonical_split].append(token_id)
+            # if canonical_split in self.canonical_split2token_id: continue
+            # token_id = self.token_id2canonical_id[token_id]
+            # self.canonical_split2token_id[canonical_split] = token_id
+
+    def ids_to_canonical(self, token_ids: list[int]) -> list[int]:
+        canonical_ids = []
+        for token_id in token_ids:
+            canonical_ids.extend(self.token_id2canonical_split[token_id])
+        return canonical_ids
+
+    def ids_to_all_representations(self, token_ids: list[int]) -> list[list[TokenWithLength]]:
+        canonical_ids = self.ids_to_canonical(token_ids=token_ids)
+        representations: list[list[TokenWithLength]] = [[] for _ in range(len(canonical_ids))]
+        for i, canonical_token_id in enumerate(canonical_ids):
+            # add alternatives to canonical tokens
+            for token_id in self.canonical_id2alternatives[canonical_token_id]:
+                representations[i].append(TokenWithLength(token_id=token_id, length=1))
+            # add merges
+            # TODO: can be optimized with tree
+            for start in range(max(0, i - self.max_token_len), i):
+                if tuple(canonical_ids[start : i + 1]) in self.canonical_split2token_ids:
+                    for merged_token_id in self.canonical_split2token_ids[tuple(canonical_ids[start : i + 1])]:
+                        representations[i].append(TokenWithLength(token_id=merged_token_id, length=i - start + 1))
+        return representations
 
 
 @dataclass
@@ -54,6 +135,7 @@ class BoostingTreeModelConfig:
     source_lang: str = "en"  # The source language of the context-biasing phrases (for aggregate tokenizer)
     use_triton: bool = True  # Whether to use Triton for inference.
     uniform_weights: bool = False  # Whether to use uniform weights for the context-biasing tree as in Icefall
+    use_variative_bpe: bool = False
     use_bpe_dropout: bool = False  # Whether to use BPE dropout for generating alternative transcriptions
     num_of_transcriptions: int = (
         5  # The number of alternative transcriptions to generate for each context-biasing phrase
@@ -97,6 +179,8 @@ class BoostingTreeStorage:
     start_state: int = 0
     bos_state: int = 0
 
+    _state_mapping: dict[int, int] = field(default_factory=dict)
+
     def __post_init__(self, num_states_max: int, num_arcs_max: int):
         if max(num_states_max, num_arcs_max) < np.iinfo(np.int32).max:
             int_np_dtype = np.int32
@@ -133,12 +217,17 @@ class BoostingTreeStorage:
         added_symbols = set()
         num_vocab_labels = 0
         for tbranch in tbranches:
+            assert tbranch.start_node.id == 0, "should be root"
             ilabel = tbranch.symbol
             assert ilabel < self.vocab_size
             arc_id = ilabel
             added_symbols.add(ilabel)
-            next_state = self.num_states
-            self.num_states += 1
+            if tbranch.next_node.id in self._state_mapping:
+                next_state = self._state_mapping[tbranch.next_node.id]
+            else:
+                next_state = self.num_states
+                self.num_states += 1
+                self._state_mapping[tbranch.next_node.id] = next_state
             self.arcs[arc_id] = (self.start_state, next_state, ilabel, tbranch.next_node.token_score)
             self.num_arcs += 1
 
@@ -170,6 +259,7 @@ class BoostingTreeStorage:
         tbranches = sorted(tbranches, key=lambda x: (x.start_node.id, x.symbol))
 
         for tbranch in tbranches:
+            assert tbranch.start_node.id in self._state_mapping
             ilabel = tbranch.symbol
             from_state = self._node_cache[tbranch.start_node.id]
             assert ilabel < self.vocab_size
@@ -182,9 +272,13 @@ class BoostingTreeStorage:
                 backoff_weight = tbranch.next_node.fail.node_score - tbranch.next_node.node_score
 
             arc_id = self.num_arcs
-            next_state = self.num_states
             self.num_arcs += 1
-            self.num_states += 1
+            if tbranch.next_node.id in self._state_mapping:
+                next_state = self._state_mapping[tbranch.next_node.id]
+            else:
+                next_state = self.num_states
+                self.num_states += 1
+                self._state_mapping[tbranch.next_node.id] = next_state
             token_score = tbranch.next_node.token_score
             if self.uniform_weights and tbranch.next_node.is_end:
                 token_score += tbranch.next_node.node_score
@@ -299,18 +393,21 @@ class GPUBoostingTreeModel(NGramGPULanguageModel):
         seen = set()
         queue = deque()
         queue.append(context_graph.root)
-        seen.add(0)
+        # seen.add(0)
         order2cnt = {}
         tbranches_list = []
 
         # read context graph tree in breadth-first order to add branches for boosting tree generation
         while len(queue):
             current_node = queue.popleft()
+            if current_node.id in seen:
+                continue
             for token, node in current_node.next.items():
-                if node.id not in seen:
-                    tbranches_list.append(TBranch(symbol=token, start_node=current_node, next_node=node))
-                    order2cnt[node.level] = order2cnt.get(node.level, 0) + 1
-                    queue.append(node)
+                tbranches_list.append(TBranch(symbol=token, start_node=current_node, next_node=node))
+                order2cnt[current_node.level + 1] = order2cnt.get(current_node.level + 1, 0) + 1
+                queue.append(node)
+            seen.add(current_node.id)
+        tbranches_list.sort(key=lambda t: (t.start_node.level, t.start_node.id, t.next_node.level, t.next_node.id))
 
         return order2cnt, tbranches_list
 
@@ -350,7 +447,7 @@ class GPUBoostingTreeModel(NGramGPULanguageModel):
             num_states_max=max_states,
             num_states=0,
             num_arcs=0,
-            num_arcs_max=max_states * 2 + vocab_size * 2 + 1,
+            num_arcs_max=sum(order2cnt.values()) + vocab_size * 2 + 1,
             unk_score=unk_score,
             final_eos_score=final_eos_score,
             vocab_size=vocab_size,
@@ -531,6 +628,11 @@ class GPUBoostingTreeModel(NGramGPULanguageModel):
         phrases_dict = {}
         is_aggregate_tokenizer = isinstance(tokenizer, AggregateTokenizer)
 
+        if cfg.use_variative_bpe:
+            cfg.use_bpe_dropout = False
+            assert not is_aggregate_tokenizer
+            tokenizer_extras = TokenizerVocabExtras(tokenizer)
+
         if cfg.use_bpe_dropout:
             if is_aggregate_tokenizer:
                 logging.warning(
@@ -547,7 +649,11 @@ class GPUBoostingTreeModel(NGramGPULanguageModel):
                 if is_aggregate_tokenizer:
                     phrases_dict[phrase] = tokenizer.text_to_ids(phrase, cfg.source_lang)
                 else:
-                    phrases_dict[phrase] = tokenizer.text_to_ids(phrase)
+                    token_ids = tokenizer.text_to_ids(phrase)
+                    if cfg.use_variative_bpe:
+                        phrases_dict[phrase] = tokenizer_extras.ids_to_all_representations(token_ids)
+                    else:
+                        phrases_dict[phrase] = token_ids
 
         # 3. build pythoncontext graph
         contexts, scores, phrases = [], [], []
@@ -563,7 +669,16 @@ class GPUBoostingTreeModel(NGramGPULanguageModel):
                 phrases.append(phrase)
 
         context_graph = ContextGraph(context_score=cfg.context_score, depth_scaling=cfg.depth_scaling)
-        context_graph.build(token_ids=contexts, scores=scores, phrases=phrases, uniform_weights=cfg.uniform_weights)
+        context_graph.build(
+            token_ids=contexts,
+            scores=scores,
+            phrases=phrases,
+            uniform_weights=cfg.uniform_weights,
+            use_variative_transcripts=cfg.use_variative_bpe,
+        )
+
+        # graph_name = "no_var"
+        # context_graph.draw(title=f"graph_{graph_name}", symbol_table=tokenizer.vocab, filename=f"/Users/vbataev/code/nemo/.sandbox/graph_{graph_name}.pdf")
 
         # 4. build GPU boosting tree model from python context graph
         boosting_tree_model = GPUBoostingTreeModel.from_context_graph(
