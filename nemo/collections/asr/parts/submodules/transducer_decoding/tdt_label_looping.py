@@ -394,7 +394,7 @@ class GreedyBatchedTDTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBase
 
             # fusion models
             fusion_states_list = []
-            for fusion_model in self._all_fusion_models(with_multi_model=use_biasing_multi_model):
+            for fusion_model in self._all_fusion_models(with_multi_model=True):
                 fusion_states_list.append(fusion_model.get_init_states(batch_size=batch_size, bos=True))
         else:
             decoder_output = prev_batched_state.predictor_outputs
