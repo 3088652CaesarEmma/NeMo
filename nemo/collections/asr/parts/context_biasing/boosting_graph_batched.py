@@ -94,8 +94,11 @@ class TokenizerVocabExtras:
             canonical_ids.extend(self.token_id2canonical_split[token_id])
         return canonical_ids
 
-    def ids_to_all_representations(self, token_ids: list[int]) -> list[list[TokenWithLength]]:
+    def ids_to_all_representations(self, token_ids: list[int]) -> tuple[list[int], list[list[TokenWithLength]]]:
+        orig_len = [len(self.token_id2canonical_split[token_id]) for token_id in token_ids]
         canonical_ids = self.ids_to_canonical(token_ids=token_ids)
+        if len(canonical_ids) != sum(orig_len):
+            logging.warning(f"unequal len: {len(canonical_ids)} != {sum(orig_len)}")
         representations: list[list[TokenWithLength]] = [[] for _ in range(len(canonical_ids))]
         for i, canonical_token_id in enumerate(canonical_ids):
             # add alternatives to canonical tokens
@@ -107,7 +110,7 @@ class TokenizerVocabExtras:
                 if tuple(canonical_ids[start : i + 1]) in self.canonical_split2token_ids:
                     for merged_token_id in self.canonical_split2token_ids[tuple(canonical_ids[start : i + 1])]:
                         representations[i].append(TokenWithLength(token_id=merged_token_id, length=i - start + 1))
-        return representations
+        return orig_len, representations
 
 
 @dataclass
@@ -228,7 +231,12 @@ class BoostingTreeStorage:
                 next_state = self.num_states
                 self.num_states += 1
                 self._state_mapping[tbranch.next_node.id] = next_state
-            self.arcs[arc_id] = (self.start_state, next_state, ilabel, tbranch.next_node.token_score)
+            self.arcs[arc_id] = (
+                self.start_state,
+                next_state,
+                ilabel,
+                tbranch.next_node.node_score - tbranch.start_node.node_score,
+            )
             self.num_arcs += 1
 
             if tbranch.next_node.is_end:
@@ -279,7 +287,8 @@ class BoostingTreeStorage:
                 next_state = self.num_states
                 self.num_states += 1
                 self._state_mapping[tbranch.next_node.id] = next_state
-            token_score = tbranch.next_node.token_score
+            # token_score = tbranch.next_node.token_score
+            token_score = tbranch.next_node.node_score - tbranch.start_node.node_score
             if self.uniform_weights and tbranch.next_node.is_end:
                 token_score += tbranch.next_node.node_score
 

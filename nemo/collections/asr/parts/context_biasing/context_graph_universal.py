@@ -188,7 +188,7 @@ class ContextGraph:
 
     def build(
         self,
-        token_ids: List[List[int]] | Any,
+        token_ids: List[List[int]] | tuple[list[int], list[list[Any]]],
         phrases: Optional[List[str]] = None,
         scores: Optional[List[float]] = None,
         ac_thresholds: Optional[List[float]] = None,
@@ -235,6 +235,21 @@ class ContextGraph:
         if ac_thresholds is not None:
             assert len(ac_thresholds) == num_phrases, (len(ac_thresholds), num_phrases)
 
+        def get_token_score(depth: int):
+            if depth > 0 and not uniform_weights:
+                token_score = context_score * self.depth_scaling + np.log(
+                    depth + 1
+                )  # depth scaling is used to give a larger score for all tokens after the first one
+            else:
+                token_score = context_score
+            return token_score
+
+        def softmax(x):
+            x_max = np.max(x, axis=-1, keepdims=True)
+            exp_x = np.exp(x - x_max)
+            sum_exp_x = np.sum(exp_x, axis=-1, keepdims=True)
+            return exp_x / sum_exp_x
+
         for index, tokens in enumerate(token_ids):
             phrase = "" if phrases is None else phrases[index]
             score = 0.0 if scores is None else scores[index]
@@ -245,17 +260,29 @@ class ContextGraph:
             context_score = self.context_score if score == 0.0 else score
             threshold = self.ac_threshold if ac_threshold == 0.0 else ac_threshold
             cur_nodes = [self.root]
+
+            if use_variative_transcripts:
+                orig_len, tokens = tokens
+                token_scores = [0.0 for _ in range(len(tokens))]
+                depth = 0
+                k = 0
+                for cur_len in orig_len:
+                    token_score = get_token_score(depth=depth)  # / cur_len
+                    probs = softmax(np.asarray([np.log(p + 1) for p in range(cur_len)]))
+                    for t in range(k, k + cur_len):
+                        token_scores[t] = token_score * probs[t - k]
+                    k += cur_len
+                    depth += 1
+            else:
+                token_scores = [0.0 for _ in range(len(tokens))]
+                for i in range(len(tokens)):
+                    token_scores[i] = get_token_score(depth=i)
             for i, token in enumerate(tokens):
                 if use_variative_transcripts:
                     token_group = token
                     token = token_group[0].token_id
                 if token not in node.next:
-                    if i > 0 and not uniform_weights:
-                        token_score = context_score * self.depth_scaling + np.log(
-                            i + 1
-                        )  # depth scaling is used to give a larger score for all tokens after the first one
-                    else:
-                        token_score = context_score
+                    token_score = token_scores[i]
                     self.num_nodes += 1
                     is_end = i == len(tokens) - 1
                     node_score = node.node_score + token_score
@@ -279,7 +306,10 @@ class ContextGraph:
                                 cur_nodes[-alt_token.length].next[alt_token.token_id] = node.next[token]
                 else:
                     # node exists, get the score of shared state.
-                    token_score = max(context_score, node.next[token].token_score)
+                    if use_variative_transcripts:
+                        token_score = node.next[token].node_score - node.node_score
+                    else:
+                        token_score = max(context_score, node.next[token].token_score)
                     node.next[token].token_score = token_score
                     node_score = node.node_score + token_score
                     node.next[token].node_score = node_score
@@ -388,7 +418,8 @@ class ContextGraph:
                             color="green",
                         )
                     drawn.add(node.id)
-                weight = f"{node.token_score:.2f}".rstrip("0").rstrip(".")
+                # weight = f"{node.token_score:.2f}".rstrip("0").rstrip(".")
+                weight = f"{node.node_score - current_node.node_score:.2f}".rstrip("0").rstrip(".")
                 label = str(token) if symbol_table is None else symbol_table[token]
                 dot.edge(str(current_node.id), str(node.id), label=f"{label}/{weight}")
                 queue.append(node)
