@@ -181,6 +181,13 @@ class Hypothesis:
         """Clean the decoding state to save memory."""
         self.dec_state = None
 
+    def has_biasing_request(self) -> bool:
+        return self.biasing_cfg is not None and (not self.biasing_cfg.is_empty())
+
+    @classmethod
+    def empty_with_biasing_cfg(cls, biasing_cfg: BiasingRequestItem):
+        return cls(y_sequence=[], score=0.0, biasing_cfg=biasing_cfg)
+
 
 @dataclass
 class NBestHypotheses:

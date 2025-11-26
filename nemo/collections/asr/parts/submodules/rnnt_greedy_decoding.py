@@ -795,7 +795,7 @@ class GreedyBatchedRNNTInfer(_GreedyRNNTInfer, WithOptionalCudaGraphs):
         else:
             multi_biasing_ids = np.full([len(partial_hypotheses)], fill_value=-1)
             for batch_i, hyp in enumerate(partial_hypotheses):
-                if hyp is None or hyp.biasing_cfg is None or hyp.biasing_cfg.is_empty():
+                if hyp is None or (not hyp.has_biasing_request()):
                     continue
                 # biasing_cfg is not empty
                 if hyp.biasing_cfg.multi_model_id is None:
@@ -2950,7 +2950,7 @@ class GreedyBatchedTDTInfer(_GreedyRNNTInfer, WithOptionalCudaGraphs):
         else:
             multi_biasing_ids = np.full([len(partial_hypotheses)], fill_value=-1)
             for batch_i, hyp in enumerate(partial_hypotheses):
-                if hyp is None or hyp.biasing_cfg is None or hyp.biasing_cfg.is_empty():
+                if hyp is None or (not hyp.has_biasing_request()):
                     continue
                 # biasing_cfg is not empty
                 if hyp.biasing_cfg.multi_model_id is None:
