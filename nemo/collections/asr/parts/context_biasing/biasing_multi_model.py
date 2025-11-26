@@ -130,9 +130,9 @@ class GPUBiasingMultiModel(GPUBiasingMultiModelBase):
         if self.vocab_size != model.vocab_size:
             raise ValueError(f"Inconsistent vocab size: {model.vocab_size}")
         if self.bos_state != model.bos_state:
-            raise ValueError(f"Inconsistent bos state")
+            raise ValueError(f"Inconsistent bos state: {self.bos_state} vs {model.bos_state}")
         if self.start_state != model.START_STATE:
-            raise ValueError(f"Inconsistent start state")
+            raise ValueError(f"Inconsistent start state: {self.start_state} vs {model.START_STATE}")
 
     def add_model(self, model: NGramGPULanguageModel, alpha: float = 1.0) -> int:
         if not self._params_defined:
