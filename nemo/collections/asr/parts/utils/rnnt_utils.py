@@ -31,7 +31,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
 
-from nemo.collections.asr.parts.context_biasing.biasing_multi_model import BiasingRequestItem
+from nemo.collections.asr.parts.context_biasing.biasing_multi_model import BiasingRequestItemConfig
 
 
 @dataclass
@@ -110,7 +110,7 @@ class Hypothesis:
     last_token: Optional[torch.Tensor] = None
     token_duration: Optional[torch.Tensor] = None
     last_frame: Optional[int] = None
-    biasing_cfg: BiasingRequestItem | None = None
+    biasing_cfg: BiasingRequestItemConfig | None = None
 
     @property
     def non_blank_frame_confidence(self) -> List[float]:
@@ -185,7 +185,7 @@ class Hypothesis:
         return self.biasing_cfg is not None and (not self.biasing_cfg.is_empty())
 
     @classmethod
-    def empty_with_biasing_cfg(cls, biasing_cfg: BiasingRequestItem):
+    def empty_with_biasing_cfg(cls, biasing_cfg: BiasingRequestItemConfig):
         return cls(y_sequence=[], score=0.0, biasing_cfg=biasing_cfg)
 
 

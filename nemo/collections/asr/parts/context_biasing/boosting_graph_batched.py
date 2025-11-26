@@ -31,6 +31,13 @@ from nemo.utils import logging
 
 
 @dataclass
+class PhraseItem:
+    phrase: str
+    lang: str
+    weight: float = 1.0
+
+
+@dataclass
 class BoostingTreeModelConfig:
     """
     Boosting tree model config
@@ -41,7 +48,9 @@ class BoostingTreeModelConfig:
     key_phrases_list: Optional[list[str]] = (
         None  # The list of context-biasing phrases ['word1', 'word2', 'word3', ...]
     )
-    key_phrases_list_with_lang: list[tuple[str, str]] = None
+    # The list of context-biasing phrases with custom options:
+    # [PhraseItem("word1", lang="en"), PhraseItem("frase dos", lang="es"), ...]
+    key_phrase_items_list: list[PhraseItem] | None = None
     context_score: float = 1.0  # The score for each arc transition in the context graph
     depth_scaling: float = (
         2.0  # The scaling factor for the depth of the context graph (2.0 for CTC, RNN-T and TDT, 1.0 for Canary)
@@ -68,7 +77,7 @@ class BoostingTreeModelConfig:
             cfg.model_path is None
             and cfg.key_phrases_file is None
             and (not cfg.key_phrases_list)
-            and (not cfg.key_phrases_list_with_lang)
+            and (not cfg.key_phrase_items_list)
         )
 
 
@@ -521,17 +530,18 @@ class GPUBoostingTreeModel(NGramGPULanguageModel):
             return cls.from_file(lm_path=cfg.model_path, vocab_size=tokenizer.vocab_size)
 
         # 1. read key phrases from file or list
-        if cfg.key_phrases_file is not None and bool(cfg.key_phrases_list or cfg.key_phrases_list_with_lang):
+        phrase_items_list: list[PhraseItem]
+        if cfg.key_phrases_file is not None and bool(cfg.key_phrases_list or cfg.key_phrase_items_list):
             raise ValueError("Both file and phrases specified, use only one")
         elif cfg.key_phrases_file:
             with open(cfg.key_phrases_file, "r", encoding="utf-8") as f:
-                phrases_list = [(line.strip(), cfg.source_lang) for line in f]
-        elif cfg.key_phrases_list or cfg.key_phrases_list_with_lang:
-            phrases_list = []
+                phrase_items_list = [PhraseItem(line.strip(), cfg.source_lang) for line in f]
+        elif cfg.key_phrases_list or cfg.key_phrase_items_list:
+            phrase_items_list = []
             if cfg.key_phrases_list:
-                phrases_list = [(phrase, cfg.source_lang) for phrase in cfg.key_phrases_list]
-            if cfg.key_phrases_list_with_lang:
-                phrases_list += cfg.key_phrases_list_with_lang
+                phrase_items_list = [PhraseItem(phrase, cfg.source_lang) for phrase in cfg.key_phrases_list]
+            if cfg.key_phrase_items_list:
+                phrase_items_list += cfg.key_phrase_items_list
         else:
             raise ValueError("No key phrases file or list specified")
 
@@ -548,12 +558,15 @@ class GPUBoostingTreeModel(NGramGPULanguageModel):
                 use_bpe_dropout = False
             spm.set_random_generator_seed(1234)  # fix random seed for reproducibility of BPE dropout
 
-        for phrase, lang in phrases_list:
+        for phrase_item in phrase_items_list:
+            phrase = phrase_item.phrase
+            if phrase_item.weight != 1.0:
+                raise NotImplementedError("Custom per-phrase weight not supported")
             if use_bpe_dropout:
                 phrases_dict[phrase] = cls.get_alternative_transcripts(cfg, tokenizer, phrase)
             else:
                 if is_aggregate_tokenizer:
-                    phrases_dict[phrase] = tokenizer.text_to_ids(phrase, lang)
+                    phrases_dict[phrase] = tokenizer.text_to_ids(phrase, phrase_item.lang)
                 else:
                     phrases_dict[phrase] = tokenizer.text_to_ids(phrase)
 
