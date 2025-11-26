@@ -13,9 +13,10 @@
 # limitations under the License.
 
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TypeAlias
 from nemo.collections.asr.inference.utils.enums import ASROutputGranularity
+from nemo.collections.asr.parts.context_biasing.biasing_multi_model import BiasingRequestItemConfig
 
 
 @dataclass(slots=True)
@@ -29,6 +30,7 @@ class ASRRequestOptions:
     enable_pnc: bool = None
     stop_history_eou: int = None
     asr_output_granularity: ASROutputGranularity | str = None
+    biasing_cfg: BiasingRequestItemConfig = field(default_factory=BiasingRequestItemConfig)
 
     def __post_init__(self) -> None:
         """
@@ -76,7 +78,11 @@ class ASRRequestOptions:
             asr_output_granularity=(
                 default_asr_output_granularity if self.asr_output_granularity is None else self.asr_output_granularity
             ),
+            biasing_cfg=self.biasing_cfg,
         )
+
+    def has_biasing_request(self):
+        return not self.biasing_cfg.is_empty()
 
 
 RequestOptions: TypeAlias = ASRRequestOptions
