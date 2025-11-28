@@ -32,9 +32,9 @@ from nemo.utils import logging
 
 @dataclass
 class PhraseItem:
-    phrase: str
-    lang: str
-    weight: float = 1.0
+    phrase: str  # phrase itself
+    lang: str  # per-phrase language (for aggregate tokenizer)
+    # custom weight can be further added
 
 
 @dataclass
@@ -50,6 +50,7 @@ class BoostingTreeModelConfig:
     )
     # The list of context-biasing phrases with custom options:
     # [PhraseItem("word1", lang="en"), PhraseItem("frase dos", lang="es"), ...]
+    # in CLI: key_phrase_items_list='[{phrase:"word1",lang:en},{phrase:"frase dos",lang:es}]'
     key_phrase_items_list: list[PhraseItem] | None = None
     context_score: float = 1.0  # The score for each arc transition in the context graph
     depth_scaling: float = (
@@ -560,8 +561,6 @@ class GPUBoostingTreeModel(NGramGPULanguageModel):
 
         for phrase_item in phrase_items_list:
             phrase = phrase_item.phrase
-            if phrase_item.weight != 1.0:
-                raise NotImplementedError("Custom per-phrase weight not supported")
             if use_bpe_dropout:
                 phrases_dict[phrase] = cls.get_alternative_transcripts(cfg, tokenizer, phrase)
             else:
