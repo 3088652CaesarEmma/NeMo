@@ -334,3 +334,7 @@ class StreamingState:
             decoded_words = decoded_words[1:]
 
         self.words.extend(decoded_words)
+
+    def has_biasing_request(self) -> bool:
+        """Return True if options contains non-empty biasing request"""
+        return self.options is not None and self.options.has_biasing_request()
