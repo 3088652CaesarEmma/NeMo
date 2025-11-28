@@ -204,7 +204,7 @@ class GreedyBatchedRNNTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBas
         allow_cuda_graphs: bool = True,
         fusion_models: Optional[List[NGramGPULanguageModel]] = None,
         fusion_models_alpha: Optional[List[float]] = None,
-        enable_per_stream_biasing: bool = True,
+        enable_per_stream_biasing: bool = False,
     ):
         """
         Init method.

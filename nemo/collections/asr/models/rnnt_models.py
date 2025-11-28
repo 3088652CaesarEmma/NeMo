@@ -1008,7 +1008,7 @@ class EncDecRNNTModel(ASRModel, ASRModuleMixin, ExportableEncDecModel, ASRTransc
             biasing_multi_model = self.decoding.decoding.decoding_computer.biasing_multi_model
         except AttributeError:
             biasing_multi_model = None
-        if biasing_multi_model is not None and trcfg.partial_hypothesis:
+        if trcfg.partial_hypothesis:
             for partial_hyp in trcfg.partial_hypothesis:
                 if (
                     isinstance(partial_hyp, Hypothesis)
@@ -1016,9 +1016,12 @@ class EncDecRNNTModel(ASRModel, ASRModuleMixin, ExportableEncDecModel, ASRTransc
                     and partial_hyp.biasing_cfg.auto_manage_multi_model
                     and partial_hyp.biasing_cfg.multi_model_id is None
                 ):
-                    partial_hyp.biasing_cfg.add_to_multi_model(
-                        tokenizer=self.tokenizer, biasing_multi_model=biasing_multi_model
-                    )
+                    if biasing_multi_model is not None:
+                        partial_hyp.biasing_cfg.add_to_multi_model(
+                            tokenizer=self.tokenizer, biasing_multi_model=biasing_multi_model
+                        )
+                    else:
+                        logging.warning("Requested biasing for hypothesis, but multi-model is not found, skipping.")
 
     def _transcribe_on_end(self, trcfg: TranscribeConfig):
         super()._transcribe_on_end(trcfg=trcfg)
