@@ -30,7 +30,7 @@ from nemo.core.utils.optional_libs import TRITON_AVAILABLE, triton_required
 if TRITON_AVAILABLE:
     import triton
 
-    # from nemo.collections.asr.parts.submodules.ngram_lm.ngram_lm_triton import multi_model_advance_triton_kernel
+    from nemo.collections.asr.parts.submodules.ngram_lm.ngram_lm_triton import ngram_multi_advance_triton_kernel
 
 
 @dataclass
@@ -247,8 +247,8 @@ class GPUBiasingMultiModel(GPUBiasingMultiModelBase):
         self.num_arcs = nn.Buffer(torch.zeros([self.num_models_reserved], dtype=torch.int64))
         self.num_arcs_extended = nn.Buffer(torch.zeros([self.num_models_reserved], dtype=torch.int64))
 
-        self.num_states_all = self.INIT_NUM_STATES
-        self.num_arcs_extended_all = self.INIT_NUM_ARCS  # + extra padding
+        self.num_states_total = self.INIT_NUM_STATES
+        self.num_arcs_extended_total = self.INIT_NUM_ARCS  # + extra padding
         self.num_states_reserved = self.INIT_NUM_STATES
         self.num_arcs_extended_reserved = self.INIT_NUM_ARCS  # + extra padding
 
@@ -281,11 +281,11 @@ class GPUBiasingMultiModel(GPUBiasingMultiModelBase):
         device = self.arcs_weights.device
         float_dtype = self.arcs_weights.dtype
         int_dtype = self.from_states.dtype
-        if self.num_arcs_extended_all + add_num_arcs_extended > self.num_arcs_extended_reserved:
+        if self.num_arcs_extended_total + add_num_arcs_extended > self.num_arcs_extended_reserved:
             # min allocation: 2x
             add_num_arcs = max(
                 self.num_arcs_extended_reserved,
-                self.num_arcs_extended_all + add_num_arcs_extended - self.num_arcs_extended_reserved,
+                self.num_arcs_extended_total + add_num_arcs_extended - self.num_arcs_extended_reserved,
             )
             self.arcs_weights.data = torch.cat(
                 (self.arcs_weights.data, torch.zeros([add_num_arcs], dtype=float_dtype, device=device))
@@ -302,10 +302,10 @@ class GPUBiasingMultiModel(GPUBiasingMultiModelBase):
             self.num_arcs_extended_reserved += add_num_arcs
             reallocated = True
 
-        if self.num_states_all + add_num_states > self.num_states_reserved:
+        if self.num_states_total + add_num_states > self.num_states_reserved:
             # min allocation: 2x
             add_num_states = max(
-                self.num_states_reserved, self.num_states_all + add_num_states - self.num_states_reserved
+                self.num_states_reserved, self.num_states_total + add_num_states - self.num_states_reserved
             )
             self.start_end_arcs.data = torch.cat(
                 (self.start_end_arcs.data, torch.zeros([add_num_states], dtype=int_dtype, device=device))
@@ -361,8 +361,8 @@ class GPUBiasingMultiModel(GPUBiasingMultiModelBase):
         self.num_arcs[model_id] = model.num_arcs
         self.num_arcs_extended[model_id] = model.num_arcs_extended
 
-        states_start = self.num_states_all
-        arcs_start = self.num_arcs_extended_all
+        states_start = self.num_states_total
+        arcs_start = self.num_arcs_extended_total
 
         # arcs-related data
         self.arcs_weights.data[arcs_start : arcs_start + model.num_arcs].copy_(
@@ -389,8 +389,8 @@ class GPUBiasingMultiModel(GPUBiasingMultiModelBase):
             model.final_weights.data[: model.num_states]
         )
 
-        self.num_states_all += model.num_states
-        self.num_arcs_extended_all += model.num_arcs_extended
+        self.num_states_total += model.num_states
+        self.num_arcs_extended_total += model.num_arcs_extended
 
         self.alphas[model_id] = alpha
         self.num_models += 1
@@ -463,22 +463,26 @@ class GPUBiasingMultiModel(GPUBiasingMultiModelBase):
         scores = torch.zeros([batch_size, self.vocab_size], device=device, dtype=self.arcs_weights.dtype)
         new_states = torch.zeros([batch_size, self.vocab_size], dtype=torch.long, device=device)
 
-        raise NotImplementedError
+        states_offsets = torch.cumsum(self.num_states, dim=-1) - self.num_states
+        arcs_offsets = (torch.cumsum(self.num_arcs_extended, dim=-1) - self.num_arcs_extended,)
 
-        # ngram_advance_triton_kernel[batch_size,](
-        #     vocab_size=self.vocab_size,
-        #     states_ptr=states,
-        #     new_states_ptr=new_states,
-        #     scores_ptr=scores,
-        #     start_state=self.START_STATE,
-        #     to_states_ptr=self.to_states,
-        #     ilabels_ptr=self.ilabels,
-        #     arcs_weights_ptr=self.arcs_weights,
-        #     start_end_arcs_ptr=self.start_end_arcs,
-        #     backoff_to_states_ptr=self.backoff_to_states,
-        #     backoff_weights_ptr=self.backoff_weights,
-        #     BLOCK_SIZE=triton.next_power_of_2(self.vocab_size),
-        # )
+        ngram_multi_advance_triton_kernel[batch_size,](
+            vocab_size=self.vocab_size,
+            states_ptr=states,
+            new_states_out_ptr=new_states,
+            scores_out_ptr=scores,
+            start_state=self.START_STATE,
+            model_ids_ptr=model_ids,
+            states_offsets_ptr=states_offsets,
+            arcs_offsets_ptr=arcs_offsets,
+            to_states_ptr=self.to_states,
+            ilabels_ptr=self.ilabels,
+            arcs_weights_ptr=self.arcs_weights,
+            start_end_arcs_ptr=self.start_end_arcs,
+            backoff_to_states_ptr=self.backoff_to_states,
+            backoff_weights_ptr=self.backoff_weights,
+            BLOCK_SIZE=triton.next_power_of_2(self.vocab_size),
+        )
 
         return scores, new_states
 
