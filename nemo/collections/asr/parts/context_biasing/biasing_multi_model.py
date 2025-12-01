@@ -228,43 +228,34 @@ class GPUBiasingMultiModel(GPUBiasingMultiModelBase):
         if reallocation_callback_fn is not None:
             self.reallocation_callbacks.append(reallocation_callback_fn)
 
-        self.num_models = 0
-
         int_dtype = torch.int64
 
-        self.num_states_all = self.INIT_NUM_STATES
-        self.num_arcs_all = self.INIT_NUM_ARCS
-        self.num_arcs_extended_all = self.INIT_NUM_ARCS  # + extra padding
         self.num_models = 0
-
-        self.num_states_reserved = self.INIT_NUM_STATES
-        self.num_arcs_reserved = self.INIT_NUM_ARCS
-        self.num_arcs_extended_reserved = self.INIT_NUM_ARCS  # + extra padding
         self.num_models_reserved = self.INIT_NUM_MODELS
 
         # store each model properties
         self.alphas = nn.Buffer(torch.zeros([self.num_models_reserved]))
-        self.start_states_offsets = nn.Buffer(torch.zeros([self.num_models_reserved], dtype=torch.int64))
         self.num_states = nn.Buffer(torch.zeros([self.num_models_reserved], dtype=torch.int64))
         self.num_arcs = nn.Buffer(torch.zeros([self.num_models_reserved], dtype=torch.int64))
         self.num_arcs_extended = nn.Buffer(torch.zeros([self.num_models_reserved], dtype=torch.int64))
 
-        # parameters: weights (forward/backoff/final)
-        self.arcs_weights = nn.Parameter(torch.zeros([self.num_arcs_extended_all]))
-        self.backoff_weights = nn.Parameter(torch.zeros([self.num_states_all]))
-        # TODO check final resolved
-        self.final_weights = nn.Parameter(torch.zeros([self.num_states_all]))
+        self.num_states_all = self.INIT_NUM_STATES
+        self.num_arcs_extended_all = self.INIT_NUM_ARCS  # + extra padding
+        self.num_states_reserved = self.INIT_NUM_STATES
+        self.num_arcs_extended_reserved = self.INIT_NUM_ARCS  # + extra padding
 
-        # buffers: LM (suffix tree) structure
-        # arcs data
-        self.from_states = nn.Buffer(torch.zeros([self.num_arcs_extended_all], dtype=int_dtype))
-        self.to_states = nn.Buffer(torch.zeros([self.num_arcs_extended_all], dtype=int_dtype))
-        self.ilabels = nn.Buffer(torch.zeros([self.num_arcs_extended_all], dtype=int_dtype))
+        # arcs-related data
+        self.arcs_weights = nn.Parameter(torch.zeros([self.num_arcs_extended_reserved]))
+        self.from_states = nn.Buffer(torch.zeros([self.num_arcs_extended_reserved], dtype=int_dtype))
+        self.to_states = nn.Buffer(torch.zeros([self.num_arcs_extended_reserved], dtype=int_dtype))
+        self.ilabels = nn.Buffer(torch.zeros([self.num_arcs_extended_reserved], dtype=int_dtype))
 
-        # states data
-        self.backoff_to_states = nn.Buffer(torch.zeros([self.num_states_all], dtype=int_dtype))
-        self.start_end_arcs = nn.Buffer(torch.zeros([self.num_states_all, 2], dtype=int_dtype))
-        self.state_order = nn.Buffer(torch.zeros([self.num_states_all], dtype=int_dtype))
+        # states-related data
+        self.start_end_arcs = nn.Buffer(torch.zeros([self.num_states_reserved, 2], dtype=int_dtype))
+        self.state_order = nn.Buffer(torch.zeros([self.num_states_reserved], dtype=int_dtype))
+        self.backoff_to_states = nn.Buffer(torch.zeros([self.num_states_reserved], dtype=int_dtype))
+        self.backoff_weights = nn.Parameter(torch.zeros([self.num_states_reserved]))
+        self.final_weights = nn.Parameter(torch.zeros([self.num_states_reserved]))
 
     def _check_model_compatibility(self, model: NGramGPULanguageModel):
         if self.vocab_size != model.vocab_size:
@@ -273,12 +264,70 @@ class GPUBiasingMultiModel(GPUBiasingMultiModelBase):
             raise ValueError(f"Inconsistent bos state: {self.bos_state} vs {model.bos_state}")
         if self.start_state != model.START_STATE:
             raise ValueError(f"Inconsistent start state: {self.start_state} vs {model.START_STATE}")
+        if not model._final_resolved:
+            model._resolve_final()
 
-    def _maybe_extend(
-        self, add_num_models: int, add_num_states: int, add_num_arcs: int, add_num_arcs_extended: int
-    ) -> bool:
+    def _maybe_extend_arcs_and_states(self, add_num_states: int, add_num_arcs_extended: int) -> bool:
         """Extend memory, return True if any tensor is reallocated"""
-        ...
+        reallocated = False
+        device = self.arcs_weights.device
+        float_dtype = self.arcs_weights.dtype
+        int_dtype = self.from_states.dtype
+        if self.num_arcs_extended_all + add_num_arcs_extended > self.num_arcs_extended_reserved:
+            # min allocation: 2x
+            add_num_arcs = max(
+                self.num_arcs_extended_reserved,
+                self.num_arcs_extended_all + add_num_arcs_extended - self.num_arcs_extended_reserved,
+            )
+            self.arcs_weights.data = torch.cat(
+                (self.arcs_weights.data, torch.zeros([add_num_arcs], dtype=float_dtype, device=device))
+            )
+            self.from_states.data = torch.cat(
+                (self.from_states.data, torch.zeros([add_num_arcs], dtype=int_dtype, device=device))
+            )
+            self.to_states.data = torch.cat(
+                (self.to_states.data, torch.zeros([add_num_arcs], dtype=int_dtype, device=device))
+            )
+            self.ilabels.data = torch.cat(
+                (self.ilabels.data, torch.zeros([add_num_arcs], dtype=int_dtype, device=device))
+            )
+            self.num_arcs_extended_reserved += add_num_arcs
+            reallocated = True
+
+        if self.num_states_all + add_num_states > self.num_states_reserved:
+            # min allocation: 2x
+            add_num_states = max(
+                self.num_states_reserved, self.num_states_all + add_num_states - self.num_states_reserved
+            )
+            self.start_end_arcs.data = torch.cat(
+                (self.start_end_arcs.data, torch.zeros([add_num_states], dtype=int_dtype, device=device))
+            )
+            self.state_order.data = torch.cat(
+                (self.state_order.data, torch.zeros([add_num_states], dtype=int_dtype, device=device))
+            )
+            self.backoff_to_states.data = torch.cat(
+                (self.backoff_to_states.data, torch.zeros([add_num_states], dtype=int_dtype, device=device))
+            )
+            self.backoff_weights.data = torch.cat(
+                (self.backoff_weights.data, torch.zeros([add_num_states], dtype=float_dtype, device=device))
+            )
+            self.final_weights.data = torch.cat(
+                (self.final_weights.data, torch.zeros([add_num_states], dtype=float_dtype, device=device))
+            )
+            self.num_states_reserved += add_num_states
+            reallocated = True
+
+        return reallocated
+
+    def _extend_num_models(self):
+        assert self.num_models_reserved > 0
+        self.num_models_reserved *= 2
+        self.alphas.data = torch.cat((self.alphas.data, torch.zeros_like(self.alphas.data)), dim=-1)
+        self.num_states.data = torch.cat((self.num_states.data, torch.zeros_like(self.num_states.data)), dim=-1)
+        self.num_arcs.data = torch.cat((self.num_arcs.data, torch.zeros_like(self.num_arcs.data)), dim=-1)
+        self.num_arcs_extended.data = torch.cat(
+            (self.num_arcs_extended.data, torch.zeros_like(self.num_arcs_extended.data)), dim=-1
+        )
 
     def add_model(self, model: GPUBoostingTreeModel, alpha: float = 1.0) -> int:
         if not self._params_defined:
@@ -290,11 +339,56 @@ class GPUBiasingMultiModel(GPUBiasingMultiModelBase):
             self._params_defined = True
         self._check_model_compatibility(model=model)
 
+        reallocated = False
+        if self.num_models >= self.num_models_reserved:
+            self._extend_num_models()
+            reallocated = True
         model_id = self.num_models
-        self.num_models += 1
+
+        reallocated |= self._maybe_extend_arcs_and_states(
+            add_num_states=model.num_states,
+            add_num_arcs_extended=model.num_arcs_extended,
+        )
+        self.num_states[model_id] = model.num_states
+        self.num_arcs[model_id] = model.num_arcs
+        self.num_arcs_extended[model_id] = model.num_arcs_extended
+
+        states_start = self.num_states_all
+        arcs_start = self.num_arcs_extended_all
+
+        # arcs-related data
+        self.arcs_weights.data[arcs_start : arcs_start + model.num_arcs].copy_(
+            model.arcs_weights.data[: model.num_arcs]
+        )
+        self.from_states.data[arcs_start : arcs_start + model.num_arcs].copy_(model.from_states.data[: model.num_arcs])
+        self.to_states.data[arcs_start : arcs_start + model.num_arcs].copy_(model.to_states.data[: model.num_arcs])
+        self.ilabels.data[arcs_start : arcs_start + model.num_arcs].copy_(model.ilabels.data[: model.num_arcs])
+
+        # states-related data
+        self.start_end_arcs.data[states_start : states_start + model.num_states].copy_(
+            model.start_end_arcs.data[: model.num_states]
+        )
+        self.state_order.data[states_start : states_start + model.num_states].copy_(
+            model.state_order.data[: model.num_states]
+        )
+        self.backoff_to_states.data[states_start : states_start + model.num_states].copy_(
+            model.backoff_to_states.data[: model.num_states]
+        )
+        self.backoff_weights.data[states_start : states_start + model.num_states].copy_(
+            model.backoff_weights.data[: model.num_states]
+        )
+        self.final_weights.data[states_start : states_start + model.num_states].copy_(
+            model.final_weights.data[: model.num_states]
+        )
+
+        self.num_states_all += model.num_states
+        self.num_arcs_extended_all += model.num_arcs_extended
 
         self.alphas[model_id] = alpha
-        # TODO: store model
+        self.num_models += 1
+        if reallocated:
+            for reallocation_callback_fn in self.reallocation_callbacks:
+                reallocation_callback_fn()
         return model_id
 
     def remove_model(self, model_id: int):
