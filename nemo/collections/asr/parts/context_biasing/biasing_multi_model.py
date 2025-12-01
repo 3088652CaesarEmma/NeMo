@@ -443,20 +443,21 @@ class GPUBiasingMultiModel(GPUBiasingMultiModelBase):
             self.num_states.data[self.num_models :].fill_(0)
             self.num_arcs.data[self.num_models :].fill_(0)
             self.num_arcs_extended.data[self.num_models :].fill_(0)
-            # arcs-related data
-            self.arcs_weights.data[self.num_arcs_extended_total :].fill_(0.0)
-            self.from_states.data[self.num_arcs_extended_total :].fill_(0)
-            self.to_states.data[self.num_arcs_extended_total :].fill_(0)
-            self.ilabels.data[self.num_arcs_extended_total :].fill_(0)
-
-            # states-related data
-            self.start_end_arcs.data[self.num_states_total :].fill_(0)
-            self.state_order.data[self.num_states_total :].fill_(0)
-            self.backoff_to_states.data[self.num_states_total :].fill_(0)
-            self.backoff_weights.data[self.num_states_total :].fill_(0.0)
-            self.final_weights.data[self.num_states_total :].fill_(0.0)
         else:
+            # TODO: move arcs/states using torch.roll
             logging.info(f"Removal of biasing model {model_id} is deferred, since {self.num_models - 1} exists")
+        # arcs-related data
+        self.arcs_weights.data[self.num_arcs_extended_total :].fill_(0.0)
+        self.from_states.data[self.num_arcs_extended_total :].fill_(0)
+        self.to_states.data[self.num_arcs_extended_total :].fill_(0)
+        self.ilabels.data[self.num_arcs_extended_total :].fill_(0)
+
+        # states-related data
+        self.start_end_arcs.data[self.num_states_total :].fill_(0)
+        self.state_order.data[self.num_states_total :].fill_(0)
+        self.backoff_to_states.data[self.num_states_total :].fill_(0)
+        self.backoff_weights.data[self.num_states_total :].fill_(0.0)
+        self.final_weights.data[self.num_states_total :].fill_(0.0)
 
     def get_init_states(self, batch_size: int, bos=True) -> torch.Tensor:
         """

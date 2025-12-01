@@ -136,17 +136,14 @@ def ngram_multi_advance_triton_kernel(
     to_states_ptr += model_arcs_offset
     ilabels_ptr += model_arcs_offset
     arcs_weights_ptr += model_arcs_offset
-    start_end_arcs_ptr += model_states_offset
+    start_end_arcs_ptr += model_states_offset * 2
     backoff_to_states_ptr += model_states_offset
     backoff_weights_ptr += model_states_offset
 
     # NB: number of arcs in current state is <= vocab_size and BLOCK_SIZE
     vocab_offsets = tl.arange(0, BLOCK_SIZE)
-    vocab_mask = vocab_offsets < vocab_size
-    # fill in initial values: new_states = -1 (not found yet), scores = 0
-    # moved to caller function, uncomment if needed
-    # tl.store(new_states_out_ptr + batch_i * vocab_size + vocab_offsets, -1, mask=vocab_mask)
-    # tl.store(scores_out_ptr + batch_i * vocab_size + vocab_offsets, 0.0, mask=vocab_mask)
+    # fill in initial values: new_states = -1 (not found yet), scores = 0: moved to caller function
+    # (NB: caller function should fill scores with 0, states with -1)
 
     accumulated_backoff = 0.0
     start_state_not_processed = True
