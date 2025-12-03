@@ -54,6 +54,7 @@ class ContextState:
         level: int,
         phrase: str = "",
         ac_threshold: float = 1.0,
+        is_primary: bool = True,
     ):
         """Create a ContextState.
 
@@ -91,11 +92,12 @@ class ContextState:
         self.output_score = output_score
         self.is_end = is_end
         self.level = level
-        self.next = {}
+        self.next: dict[int, "ContextState"] = {}
         self.phrase = phrase
         self.ac_threshold = ac_threshold
-        self.fail = None
-        self.output = None
+        self.fail: "ContextState | None" = None
+        self.output: "ContextState | None" = None
+        self.is_primary = is_primary
 
 
 class ContextGraph:
@@ -186,6 +188,15 @@ class ContextGraph:
                 queue.append(node)
             visited_ids.add(current_node.id)
 
+    def _get_token_score(self, depth: int, uniform_weights: Optional[bool], context_score: float):
+        if depth > 0 and not uniform_weights:
+            token_score = context_score * self.depth_scaling + np.log(
+                depth + 1
+            )  # depth scaling is used to give a larger score for all tokens after the first one
+        else:
+            token_score = context_score
+        return token_score
+
     def build(
         self,
         token_ids: List[List[int]] | tuple[list[int], list[list[Any]]],
@@ -193,7 +204,7 @@ class ContextGraph:
         scores: Optional[List[float]] = None,
         ac_thresholds: Optional[List[float]] = None,
         uniform_weights: Optional[bool] = False,
-        use_variative_transcripts=False,
+        use_variative_bpe: bool = False,
     ):
         """Build the ContextGraph from a list of token list.
         It first build a trie from the given token lists, then fill the fail arc
@@ -235,15 +246,6 @@ class ContextGraph:
         if ac_thresholds is not None:
             assert len(ac_thresholds) == num_phrases, (len(ac_thresholds), num_phrases)
 
-        def get_token_score(depth: int):
-            if depth > 0 and not uniform_weights:
-                token_score = context_score * self.depth_scaling + np.log(
-                    depth + 1
-                )  # depth scaling is used to give a larger score for all tokens after the first one
-            else:
-                token_score = context_score
-            return token_score
-
         def softmax(x):
             x_max = np.max(x, axis=-1, keepdims=True)
             exp_x = np.exp(x - x_max)
@@ -261,24 +263,30 @@ class ContextGraph:
             threshold = self.ac_threshold if ac_threshold == 0.0 else ac_threshold
             cur_nodes = [self.root]
 
-            if use_variative_transcripts:
-                orig_len, tokens = tokens
+            if use_variative_bpe:
+                orig_lengths, tokens = tokens
                 token_scores = [0.0 for _ in range(len(tokens))]
+                node_path_to_primary = [False for _ in range(len(tokens))]
                 depth = 0
                 k = 0
-                for cur_len in orig_len:
-                    token_score = get_token_score(depth=depth)  # / cur_len
+                for cur_len in orig_lengths:
+                    node_path_to_primary[k + cur_len - 1] = True
+                    token_score = self._get_token_score(
+                        depth=depth, uniform_weights=uniform_weights, context_score=context_score
+                    )  # / cur_len
                     probs = softmax(np.asarray([np.log(p + 1) for p in range(cur_len)]))
                     for t in range(k, k + cur_len):
                         token_scores[t] = token_score * probs[t - k]
                     k += cur_len
                     depth += 1
             else:
-                token_scores = [0.0 for _ in range(len(tokens))]
-                for i in range(len(tokens)):
-                    token_scores[i] = get_token_score(depth=i)
+                token_scores = [
+                    self._get_token_score(depth=i, uniform_weights=uniform_weights, context_score=context_score)
+                    for i in range(len(tokens))
+                ]
+                node_path_to_primary = [True for _ in range(len(tokens))]
             for i, token in enumerate(tokens):
-                if use_variative_transcripts:
+                if use_variative_bpe:
                     token_group = token
                     token = token_group[0].token_id
                 if token not in node.next:
@@ -286,7 +294,7 @@ class ContextGraph:
                     self.num_nodes += 1
                     is_end = i == len(tokens) - 1
                     node_score = node.node_score + token_score
-                    node.next[token] = ContextState(
+                    new_state = ContextState(
                         id=self.num_nodes,
                         token=token,
                         token_score=token_score,
@@ -296,17 +304,19 @@ class ContextGraph:
                         level=i + 1,
                         phrase=phrase if is_end else "",
                         ac_threshold=threshold if is_end else 0.0,
+                        is_primary=node_path_to_primary[i],
                     )
-                    if use_variative_transcripts:
+                    node.next[token] = new_state
+                    if use_variative_bpe:
                         for alt_token in token_group[1:]:
                             if alt_token.length == 1:
-                                node.next[alt_token.token_id] = node.next[token]
+                                node.next[alt_token.token_id] = new_state
                             else:
                                 # continue
-                                cur_nodes[-alt_token.length].next[alt_token.token_id] = node.next[token]
+                                cur_nodes[-alt_token.length].next[alt_token.token_id] = new_state
                 else:
                     # node exists, get the score of shared state.
-                    if use_variative_transcripts:
+                    if use_variative_bpe:
                         token_score = node.next[token].node_score - node.node_score
                     else:
                         token_score = max(context_score, node.next[token].token_score)
@@ -376,6 +386,12 @@ class ContextGraph:
             "fontsize": "14",
         }
 
+        default_non_primary_node_attr = {
+            "shape": "circle",
+            "style": "dashed",
+            "fontsize": "13",
+        }
+
         final_state_attr = {
             "shape": "doublecircle",
             "style": "bold",
@@ -397,6 +413,7 @@ class ContextGraph:
             current_node = queue.popleft()
             if current_node.id in seen:
                 continue
+            node: ContextState
             for token, node in current_node.next.items():
                 if node.id not in drawn:
                     node_score = f"{node.node_score:.2f}".rstrip("0").rstrip(".")
@@ -405,10 +422,22 @@ class ContextGraph:
                     if node.is_end:
                         dot.node(str(node.id), label=label, **final_state_attr)
                     else:
-                        dot.node(str(node.id), label=label, **default_node_attr)
+                        dot.node(
+                            str(node.id),
+                            label=label,
+                            **(default_node_attr if node.is_primary else default_non_primary_node_attr),
+                        )
+
+                    # backoff
+                    if node.is_end:
+                        weight = 0.0
+                    else:
+                        weight = node.node_score - node.fail.node_score
+                    label = f"<boff>/{weight:.2f}"
                     dot.edge(
                         str(node.id),
                         str(node.fail.id),
+                        label=label,
                         color="red",
                     )
                     if node.output is not None:

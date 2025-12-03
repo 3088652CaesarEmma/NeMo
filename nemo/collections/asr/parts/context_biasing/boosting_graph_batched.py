@@ -43,7 +43,7 @@ class TokenWithLength(NamedTuple):
 
 
 @dataclass
-class TokenizerVocabExtras:
+class TokenizerExtras:
     vocab: list[str]
     token2id: dict[str, int]
     token_id2canonical_id: dict[int, int]
@@ -660,7 +660,7 @@ class GPUBoostingTreeModel(NGramGPULanguageModel):
         if cfg.use_variative_bpe:
             use_bpe_dropout = False
             assert not is_aggregate_tokenizer
-            tokenizer_extras = TokenizerVocabExtras(tokenizer)
+            tokenizer_extras = TokenizerExtras(tokenizer)
         if use_bpe_dropout:
             if is_aggregate_tokenizer:
                 logging.warning(
@@ -683,7 +683,7 @@ class GPUBoostingTreeModel(NGramGPULanguageModel):
                     else:
                         phrases_dict[phrase] = token_ids
 
-        # 3. build pythoncontext graph
+        # 3. build python context graph
         contexts, scores, phrases = [], [], []
         for phrase in phrases_dict:
             if use_bpe_dropout:
@@ -702,7 +702,7 @@ class GPUBoostingTreeModel(NGramGPULanguageModel):
             scores=scores,
             phrases=phrases,
             uniform_weights=cfg.uniform_weights,
-            use_variative_transcripts=cfg.use_variative_bpe,
+            use_variative_bpe=cfg.use_variative_bpe,
         )
 
         # graph_name = "no_var"
