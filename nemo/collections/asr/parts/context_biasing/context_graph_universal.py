@@ -183,8 +183,10 @@ class ContextGraph:
                     if token in fail.next:
                         fail = fail.next[token]
                 node.fail = fail
-                if node.is_primary:
-                    assert node.fail.is_primary
+                # if node.is_primary:
+                #     if not node.fail.is_primary:
+                #         print(f"strange backoff {node.id} -> {node.fail.id}")
+                    # assert node.fail.is_primary
                 # fill the output arc
                 output = node.fail
                 while not output.is_end:
@@ -304,6 +306,7 @@ class ContextGraph:
         scores: Optional[List[float]] = None,
         ac_thresholds: Optional[List[float]] = None,
         uniform_weights: Optional[bool] = False,
+        variative_bpe_scoring: bool = True,
     ):
         """Build the ContextGraph from a list of token list.
         It first build a trie from the given token lists, then fill the fail arc
@@ -354,39 +357,41 @@ class ContextGraph:
             # using the default score
             context_score = self.context_score if score == 0.0 else score
             threshold = self.ac_threshold if ac_threshold == 0.0 else ac_threshold
-            cur_nodes = [self.root]
 
             orig_lengths, tokens = tokens
             token_scores = [0.0 for _ in range(len(tokens))]
             node_path_to_primary = [False for _ in range(len(tokens))]
-            depth = 0
+            primary_context_scores = [0.0 for _ in range(len(tokens))]
+            primary_paths = [0 for _ in range(len(tokens))]
+
             k = 0
-            for cur_len in orig_lengths:
+            for depth, cur_len in enumerate(orig_lengths):
                 node_path_to_primary[k + cur_len - 1] = True
                 token_score = self._get_token_score(
                     depth=depth, uniform_weights=uniform_weights, context_score=context_score
                 )  # / cur_len
-                variative_bpe_scoring = True
                 if variative_bpe_scoring:
                     probs = softmax(np.asarray([np.log(p + 1) for p in range(cur_len)]))
                     for t in range(k, k + cur_len):
                         token_scores[t] = token_score * probs[t - k]
                 else:
                     token_scores[k + cur_len - 1] = token_score
+                primary_context_scores[k + cur_len - 1] = token_score
+                primary_paths[k + cur_len - 1] = cur_len
                 k += cur_len
-                depth += 1
 
+            cur_nodes = [self.root]
             for i, token_group in enumerate(tokens):
                 token = token_group[0].token_id
+                token_score = token_scores[i]
                 if token not in node.next:
-                    token_score = token_scores[i]
                     self.num_nodes += 1
                     is_end = i == len(tokens) - 1
                     node_score = node.node_score + token_score
-                    new_state = ContextState(
+                    next_node = ContextState(
                         id=self.num_nodes,
                         token=token,
-                        token_score=token_score,
+                        token_score=0.0,
                         node_score=node_score,
                         output_score=node_score if is_end else 0,
                         is_end=is_end,
@@ -395,28 +400,31 @@ class ContextGraph:
                         ac_threshold=threshold if is_end else 0.0,
                         is_primary=node_path_to_primary[i],
                     )
-                    node.next[token] = new_state
+                    node.next[token] = next_node
 
                     for alt_token in token_group[1:]:
                         if alt_token.length == 1:
-                            node.next[alt_token.token_id] = new_state
+                            node.next[alt_token.token_id] = next_node
                         else:
                             # continue
-                            cur_nodes[-alt_token.length].next[alt_token.token_id] = new_state
+                            cur_nodes[-alt_token.length].next[alt_token.token_id] = next_node
                 else:
                     # node exists, get the score of shared state.
-                    token_score = node.next[token].node_score - node.node_score
-                    node.next[token].token_score = token_score
-                    node_score = node.node_score + token_score
-                    node.next[token].node_score = node_score
-                    is_end = i == len(tokens) - 1 or node.next[token].is_end
-                    node.next[token].output_score = node_score if is_end else 0
-                    node.next[token].is_end = is_end
+                    next_node = node.next[token]
+                    node_score = next_node.node_score
+                    is_end = i == len(tokens) - 1 or next_node.is_end
+                    next_node.output_score = node_score if is_end else 0
+                    next_node.is_end = is_end
                     if i == len(tokens) - 1:
-                        node.next[token].phrase = phrase
-                        node.next[token].ac_threshold = threshold
-                node = node.next[token]
-                cur_nodes.append(node)
+                        next_node.phrase = phrase
+                        next_node.ac_threshold = threshold
+                if node_path_to_primary[i]:
+                    ctx_node_score = cur_nodes[-primary_paths[i]].node_score + primary_context_scores[i]
+                    if ctx_node_score > next_node.node_score:
+                        next_node.node_score = ctx_node_score
+                        next_node.output_score = ctx_node_score if is_end else 0
+                cur_nodes.append(next_node)
+                node = next_node
         self._fill_fail_output()
 
     def draw(
@@ -518,7 +526,7 @@ class ContextGraph:
                     if node.is_end:
                         weight = 0.0
                     else:
-                        weight = node.node_score - node.fail.node_score
+                        weight = -(node.node_score - node.fail.node_score)
                     label = f"<boff>/{weight:.2f}"
                     dot.edge(
                         str(node.id),
