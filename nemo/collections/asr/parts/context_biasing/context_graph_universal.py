@@ -169,7 +169,7 @@ class ContextGraph:
             if current_node.id in visited_ids:
                 continue
             for token, node in current_node.next.items():
-                if node.id in visited_ids:
+                if node.id in visited_ids or node.fail is not None:
                     continue
                 fail = current_node.fail
                 if token in fail.next:
@@ -183,20 +183,15 @@ class ContextGraph:
                     if token in fail.next:
                         fail = fail.next[token]
                 node.fail = fail
-                # if node.is_primary:
-                #     if not node.fail.is_primary:
-                #         print(f"strange backoff {node.id} -> {node.fail.id}")
-                # assert node.fail.is_primary
                 # fill the output arc
-                if node.output is None:
-                    output = node.fail
-                    while not output.is_end:
-                        output = output.fail
-                        if output.token == -1:  # root
-                            output = None
-                            break
-                    node.output = output
-                    node.output_score += 0 if output is None else output.output_score
+                output = node.fail
+                while not output.is_end:
+                    output = output.fail
+                    if output.token == -1:  # root
+                        output = None
+                        break
+                node.output = output
+                node.output_score += 0 if output is None else output.output_score
                 queue.append(node)
             visited_ids.add(current_node.id)
 
@@ -416,6 +411,7 @@ class ContextGraph:
                     is_end = i == len(tokens) - 1 or next_node.is_end
                     next_node.output_score = node_score if is_end else 0
                     next_node.is_end = is_end
+                    next_node.is_primary |= node_path_to_primary[i]
                     if i == len(tokens) - 1:
                         next_node.phrase = phrase
                         next_node.ac_threshold = threshold
