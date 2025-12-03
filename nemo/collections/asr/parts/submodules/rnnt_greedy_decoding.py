@@ -597,8 +597,9 @@ class GreedyBatchedRNNTInfer(_GreedyRNNTInfer, WithOptionalCudaGraphs):
             which makes it especially useful for scaling the prediction network.
         use_cuda_graph_decoder: if CUDA graphs should be enabled for decoding
                                 (currently recommended only for inference)
-        fusion_models: list of fusion models to use for decoding
-        fusion_models_alpha: list of alpha values for fusion models
+        fusion_models: list of fusion models (ngram_lm_model and boosting_tree_model)
+        fusion_models_alpha: list of fusion model weights (ngram_lm_alpha and boosting_tree_alpha)
+        enable_per_stream_biasing: enable multi-biasing model for per-stream customization
     """
 
     def __init__(
@@ -614,6 +615,7 @@ class GreedyBatchedRNNTInfer(_GreedyRNNTInfer, WithOptionalCudaGraphs):
         use_cuda_graph_decoder: bool = True,
         fusion_models: Optional[List[NGramGPULanguageModel | GPUBoostingTreeModel]] = None,
         fusion_models_alpha: Optional[List[float]] = None,
+        enable_per_stream_biasing: bool = False,
     ):
         super().__init__(
             decoder_model=decoder_model,
@@ -646,6 +648,7 @@ class GreedyBatchedRNNTInfer(_GreedyRNNTInfer, WithOptionalCudaGraphs):
                     allow_cuda_graphs=self.use_cuda_graph_decoder,
                     fusion_models=fusion_models,
                     fusion_models_alpha=fusion_models_alpha,
+                    enable_per_stream_biasing=enable_per_stream_biasing,
                 )
             else:
                 # Frame-Looping algorithm
@@ -795,13 +798,13 @@ class GreedyBatchedRNNTInfer(_GreedyRNNTInfer, WithOptionalCudaGraphs):
         else:
             multi_biasing_ids = np.full([len(partial_hypotheses)], fill_value=-1)
             for batch_i, hyp in enumerate(partial_hypotheses):
-                if hyp is None or hyp.biasing_cfg is None:
+                if hyp is None or (not hyp.has_biasing_request()):
                     continue
-                if hyp.biasing_cfg.multi_biasing_id is None:
-                    if not hyp.biasing_cfg.boosting_tree_cfg.is_empty(hyp.biasing_cfg.boosting_tree_cfg):
-                        logging.warning(f"Boosting tree requested in index {batch_i}, not compiled, skipping")
+                # biasing_cfg is not empty
+                if hyp.biasing_cfg.multi_model_id is None:
+                    logging.warning(f"Boosting tree requested in index {batch_i}, not compiled, skipping")
                     continue
-                multi_biasing_ids[batch_i] = hyp.biasing_cfg.multi_biasing_id
+                multi_biasing_ids[batch_i] = hyp.biasing_cfg.multi_model_id
             if (multi_biasing_ids != -1).any():
                 multi_biasing_ids = torch.from_numpy(multi_biasing_ids).to(device=x.device)
             else:
@@ -2467,6 +2470,7 @@ class GreedyBatchedRNNTInferConfig:
     ngram_lm_alpha: float = 0.0
     boosting_tree: BoostingTreeModelConfig = field(default_factory=BoostingTreeModelConfig)
     boosting_tree_alpha: float = 0.0
+    enable_per_stream_biasing: bool = False
 
     def __post_init__(self):
         # OmegaConf.structured ensures that post_init check is always executed
@@ -2814,8 +2818,9 @@ class GreedyBatchedTDTInfer(_GreedyRNNTInfer, WithOptionalCudaGraphs):
 
         use_cuda_graph_decoder: if CUDA graphs should be enabled for decoding
                                 (currently recommended only for inference)
-        ngram_lm_model: optional n-gram language model (LM) file to use for decoding
-        ngram_lm_alpha: LM weight
+        fusion_models: list of fusion models (ngram_lm_model and boosting_tree_model)
+        fusion_models_alpha: list of fusion model weights (ngram_lm_alpha and boosting_tree_alpha)
+        enable_per_stream_biasing: enable multi-biasing model for per-stream customization
     """
 
     def __init__(
@@ -2833,6 +2838,7 @@ class GreedyBatchedTDTInfer(_GreedyRNNTInfer, WithOptionalCudaGraphs):
         use_cuda_graph_decoder: bool = True,
         fusion_models: Optional[List[NGramGPULanguageModel]] = None,
         fusion_models_alpha: Optional[List[float]] = None,
+        enable_per_stream_biasing: bool = False,
     ):
         super().__init__(
             decoder_model=decoder_model,
@@ -2867,6 +2873,7 @@ class GreedyBatchedTDTInfer(_GreedyRNNTInfer, WithOptionalCudaGraphs):
                 allow_cuda_graphs=use_cuda_graph_decoder,
                 fusion_models=fusion_models,
                 fusion_models_alpha=fusion_models_alpha,
+                enable_per_stream_biasing=enable_per_stream_biasing,
             )
             self._greedy_decode = self._greedy_decode_blank_as_pad_loop_labels
         else:
@@ -2950,13 +2957,13 @@ class GreedyBatchedTDTInfer(_GreedyRNNTInfer, WithOptionalCudaGraphs):
         else:
             multi_biasing_ids = np.full([len(partial_hypotheses)], fill_value=-1)
             for batch_i, hyp in enumerate(partial_hypotheses):
-                if hyp is None or hyp.biasing_cfg is None:
+                if hyp is None or (not hyp.has_biasing_request()):
                     continue
-                if hyp.biasing_cfg.multi_biasing_id is None:
-                    if not hyp.biasing_cfg.boosting_tree_cfg.is_empty(hyp.biasing_cfg.boosting_tree_cfg):
-                        logging.warning(f"Boosting tree requested in index {batch_i}, not compiled, skipping")
+                # biasing_cfg is not empty
+                if hyp.biasing_cfg.multi_model_id is None:
+                    logging.warning(f"Boosting tree requested in index {batch_i}, not compiled, skipping")
                     continue
-                multi_biasing_ids[batch_i] = hyp.biasing_cfg.multi_biasing_id
+                multi_biasing_ids[batch_i] = hyp.biasing_cfg.multi_model_id
             if (multi_biasing_ids != -1).any():
                 multi_biasing_ids = torch.from_numpy(multi_biasing_ids).to(device=x.device)
             else:

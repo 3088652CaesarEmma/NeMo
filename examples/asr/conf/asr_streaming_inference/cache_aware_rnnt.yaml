@@ -7,7 +7,28 @@ asr:
   device_id: 0                                                          # GPU device ID
   compute_dtype: bfloat16                                               # Compute precision: 'bfloat16' for Ampere+, 'float16' for older GPUs, or 'float32'               
   use_amp: true                                                         # Enable Automatic Mixed Precision
-
+  decoding:
+    strategy: "greedy_batch"
+    preserve_alignments: false
+    fused_batch_size: -1
+    greedy:
+      use_cuda_graph_decoder: false  # Disabled due to issues with decoding
+      enable_per_stream_biasing: false  # Per-stream biasing in decoder
+      max_symbols: 10
+      # n-gram LM
+      ngram_lm_model: null  # The path to built '.nemo' NGPU-LM model
+      ngram_lm_alpha: 0.0  # Weight of the LM model
+      # phrase boosting
+      boosting_tree:
+        model_path: null  # The path to built '.nemo' boosting tree model
+        key_phrases_file: null  # The path to the context-biasing list file (one phrase per line)
+        key_phrases_list: null  # The list of context-biasing phrases ['word1', 'word2', 'word3', ...]
+        key_phrase_items_list: null  # The list of context-biasing phrases with custom fields
+        # in CLI: [{phrase:"word1",lang:en},{phrase:"frase dos",lang:es}]
+        # in code: [PhraseItem(phrase="word1, lang="en"), PhraseItem(phrase2="frase dos", lang="es")]
+        source_lang: "en"  # The source language of the context-biasing phrases (for aggregate tokenizer),
+        # used with `key_phrases_file` and `key_phrases_list`
+      boosting_tree_alpha: 0.0  # Weight of the boosting tree
 
 # ==========================================
 # Inverse Text Normalization Configuration

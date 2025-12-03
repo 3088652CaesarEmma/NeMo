@@ -34,6 +34,7 @@ from nemo.collections.asr.parts.submodules.transducer_decoding.label_looping_bas
 from nemo.collections.asr.parts.utils import rnnt_utils
 from nemo.collections.asr.parts.utils.asr_confidence_utils import ConfidenceMethodMixin
 from nemo.core.utils.cuda_python_utils import cu_call, run_nvrtc, with_conditional_node
+from nemo.utils import logging
 
 try:
     from cuda.bindings import runtime as cudart
@@ -203,7 +204,7 @@ class GreedyBatchedRNNTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBas
         allow_cuda_graphs: bool = True,
         fusion_models: Optional[List[NGramGPULanguageModel]] = None,
         fusion_models_alpha: Optional[List[float]] = None,
-        enable_per_stream_biasing: bool = True,
+        enable_per_stream_biasing: bool = False,
     ):
         """
         Init method.
@@ -227,6 +228,9 @@ class GreedyBatchedRNNTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBas
         self.preserve_alignments = preserve_alignments
         self.preserve_frame_confidence = preserve_frame_confidence
         self.allow_cuda_graphs = allow_cuda_graphs
+        if self.allow_cuda_graphs and enable_per_stream_biasing:
+            logging.warning("Per stream biasing is not compatible currently with CUDA graphs, switching off")
+            self.allow_cuda_graphs = False
         self._SOS = self._blank_index
         self._init_confidence_method(confidence_method_cfg=confidence_method_cfg)
         assert self._SOS == self._blank_index  # "blank as pad" algorithm only
@@ -241,7 +245,11 @@ class GreedyBatchedRNNTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBas
         self.fusion_models = fusion_models or []
         self.fusion_models_alpha = fusion_models_alpha or []
 
-        self.biasing_multi_model = GPUBiasingMultiModel() if enable_per_stream_biasing else None
+        self.biasing_multi_model = (
+            GPUBiasingMultiModel(reallocation_callback_fn=self.reset_cuda_graphs_state)
+            if enable_per_stream_biasing
+            else None
+        )
 
     def _all_fusion_models(
         self, with_multi_model: bool = True
@@ -342,7 +350,7 @@ class GreedyBatchedRNNTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBas
 
             # fusion models
             fusion_states_list = []
-            for fusion_model in self._all_fusion_models(with_multi_model=use_biasing_multi_model):
+            for fusion_model in self._all_fusion_models(with_multi_model=True):
                 fusion_states_list.append(fusion_model.get_init_states(batch_size=batch_size, bos=True))
         else:
             decoder_output = prev_batched_state.predictor_outputs

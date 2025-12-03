@@ -560,14 +560,14 @@ class NGramGPULanguageModel(ModelPT):
             int_dtype = torch.int64
         # buffers: LM (suffix tree) structure
         # arcs data
-        self.register_buffer("from_states", torch.zeros([self.num_arcs_extended], dtype=int_dtype))
-        self.register_buffer("to_states", torch.zeros([self.num_arcs_extended], dtype=int_dtype))
-        self.register_buffer("ilabels", torch.zeros([self.num_arcs_extended], dtype=int_dtype))
+        self.from_states = nn.Buffer(torch.zeros([self.num_arcs_extended], dtype=int_dtype))
+        self.to_states = nn.Buffer(torch.zeros([self.num_arcs_extended], dtype=int_dtype))
+        self.ilabels = nn.Buffer(torch.zeros([self.num_arcs_extended], dtype=int_dtype))
 
         # states data
-        self.register_buffer("backoff_to_states", torch.zeros([self.num_states], dtype=int_dtype))
-        self.register_buffer("start_end_arcs", torch.zeros([self.num_states, 2], dtype=int_dtype))
-        self.register_buffer("state_order", torch.zeros([self.num_states], dtype=int_dtype))
+        self.backoff_to_states = nn.Buffer(torch.zeros([self.num_states], dtype=int_dtype))
+        self.start_end_arcs = nn.Buffer(torch.zeros([self.num_states, 2], dtype=int_dtype))
+        self.state_order = nn.Buffer(torch.zeros([self.num_states], dtype=int_dtype))
 
         self._final_resolved = False
 

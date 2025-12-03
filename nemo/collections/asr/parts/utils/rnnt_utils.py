@@ -31,32 +31,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
 
-from nemo.collections.asr.parts.context_biasing.biasing_multi_model import GPUBiasingMultiModelBase
-from nemo.collections.asr.parts.context_biasing.boosting_graph_batched import (
-    BoostingTreeModelConfig,
-    GPUBoostingTreeModel,
-)
-from nemo.utils import logging
-
-
-@dataclass
-class HypBiasingRequestConfig:
-    boosting_tree_cfg: BoostingTreeModelConfig = field(default_factory=BoostingTreeModelConfig)
-    boosting_tree_alpha: float = 1.0
-    multi_biasing_id: int | None = None  # compiled model id
-
-    def add_to_multi_model_(self, tokenizer, biasing_multi_model: GPUBiasingMultiModelBase):
-        if self.boosting_tree_cfg.is_empty(self.boosting_tree_cfg):
-            logging.warning("Nothing to compile, boosting request is empty")
-            return
-        boosting_tree = GPUBoostingTreeModel.from_config(self.boosting_tree_cfg, tokenizer=tokenizer)
-        self.multi_biasing_id = biasing_multi_model.add_model(model=boosting_tree, alpha=self.boosting_tree_alpha)
-
-    def remove_from_multi_model_(self, biasing_multi_model: GPUBiasingMultiModelBase):
-        if self.multi_biasing_id is None:
-            return
-        biasing_multi_model.remove_model(self.multi_biasing_id)
-        self.multi_biasing_id = None
+from nemo.collections.asr.parts.context_biasing.biasing_multi_model import BiasingRequestItemConfig
 
 
 @dataclass
@@ -135,7 +110,7 @@ class Hypothesis:
     last_token: Optional[torch.Tensor] = None
     token_duration: Optional[torch.Tensor] = None
     last_frame: Optional[int] = None
-    biasing_cfg: HypBiasingRequestConfig | None = None
+    biasing_cfg: BiasingRequestItemConfig | None = None
 
     @property
     def non_blank_frame_confidence(self) -> List[float]:
@@ -205,6 +180,15 @@ class Hypothesis:
     def clean_decoding_state_(self):
         """Clean the decoding state to save memory."""
         self.dec_state = None
+
+    def has_biasing_request(self) -> bool:
+        """Return True if contains non-empty biasing request"""
+        return self.biasing_cfg is not None and (not self.biasing_cfg.is_empty())
+
+    @classmethod
+    def empty_with_biasing_cfg(cls, biasing_cfg: BiasingRequestItemConfig):
+        """Constructor of empty hypothesis with biasing request"""
+        return cls(y_sequence=[], score=0.0, biasing_cfg=biasing_cfg)
 
 
 @dataclass
