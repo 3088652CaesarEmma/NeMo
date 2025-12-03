@@ -697,13 +697,20 @@ class GPUBoostingTreeModel(NGramGPULanguageModel):
                 phrases.append(phrase)
 
         context_graph = ContextGraph(context_score=cfg.context_score, depth_scaling=cfg.depth_scaling)
-        context_graph.build(
-            token_ids=contexts,
-            scores=scores,
-            phrases=phrases,
-            uniform_weights=cfg.uniform_weights,
-            use_variative_bpe=cfg.use_variative_bpe,
-        )
+        if cfg.use_variative_bpe:
+            context_graph.build_from_variative_bpe(
+                token_ids=contexts,
+                scores=scores,
+                phrases=phrases,
+                uniform_weights=cfg.uniform_weights,
+            )
+        else:
+            context_graph.build(
+                token_ids=contexts,
+                scores=scores,
+                phrases=phrases,
+                uniform_weights=cfg.uniform_weights,
+            )
 
         # graph_name = "no_var"
         # context_graph.draw(title=f"graph_{graph_name}", symbol_table=tokenizer.vocab, filename=f"/Users/vbataev/code/nemo/.sandbox/graph_{graph_name}.pdf")

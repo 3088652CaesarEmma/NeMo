@@ -40,6 +40,13 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 
+def softmax(x):
+    x_max = np.max(x, axis=-1, keepdims=True)
+    exp_x = np.exp(x - x_max)
+    sum_exp_x = np.sum(exp_x, axis=-1, keepdims=True)
+    return exp_x / sum_exp_x
+
+
 class ContextState:
     """The state in ContextGraph"""
 
@@ -95,9 +102,9 @@ class ContextState:
         self.next: dict[int, "ContextState"] = {}
         self.phrase = phrase
         self.ac_threshold = ac_threshold
+        self.is_primary = is_primary
         self.fail: "ContextState | None" = None
         self.output: "ContextState | None" = None
-        self.is_primary = is_primary
 
 
 class ContextGraph:
@@ -176,6 +183,8 @@ class ContextGraph:
                     if token in fail.next:
                         fail = fail.next[token]
                 node.fail = fail
+                if node.is_primary:
+                    assert node.fail.is_primary
                 # fill the output arc
                 output = node.fail
                 while not output.is_end:
@@ -199,12 +208,11 @@ class ContextGraph:
 
     def build(
         self,
-        token_ids: List[List[int]] | tuple[list[int], list[list[Any]]],
+        token_ids: List[List[int]],
         phrases: Optional[List[str]] = None,
         scores: Optional[List[float]] = None,
         ac_thresholds: Optional[List[float]] = None,
         uniform_weights: Optional[bool] = False,
-        use_variative_bpe: bool = False,
     ):
         """Build the ContextGraph from a list of token list.
         It first build a trie from the given token lists, then fill the fail arc
@@ -246,11 +254,96 @@ class ContextGraph:
         if ac_thresholds is not None:
             assert len(ac_thresholds) == num_phrases, (len(ac_thresholds), num_phrases)
 
-        def softmax(x):
-            x_max = np.max(x, axis=-1, keepdims=True)
-            exp_x = np.exp(x - x_max)
-            sum_exp_x = np.sum(exp_x, axis=-1, keepdims=True)
-            return exp_x / sum_exp_x
+        for index, tokens in enumerate(token_ids):
+            phrase = "" if phrases is None else phrases[index]
+            score = 0.0 if scores is None else scores[index]
+            ac_threshold = 0.0 if ac_thresholds is None else ac_thresholds[index]
+            node = self.root
+            # If has customized score using the customized token score, otherwise
+            # using the default score
+            context_score = self.context_score if score == 0.0 else score
+            threshold = self.ac_threshold if ac_threshold == 0.0 else ac_threshold
+            for i, token in enumerate(tokens):
+                if token not in node.next:
+                    token_score = self._get_token_score(
+                        depth=i, uniform_weights=uniform_weights, context_score=context_score
+                    )
+                    self.num_nodes += 1
+                    is_end = i == len(tokens) - 1
+                    node_score = node.node_score + token_score
+                    node.next[token] = ContextState(
+                        id=self.num_nodes,
+                        token=token,
+                        token_score=token_score,
+                        node_score=node_score,
+                        output_score=node_score if is_end else 0,
+                        is_end=is_end,
+                        level=i + 1,
+                        phrase=phrase if is_end else "",
+                        ac_threshold=threshold if is_end else 0.0,
+                    )
+                else:
+                    # node exists, get the score of shared state.
+                    token_score = max(context_score, node.next[token].token_score)
+                    node.next[token].token_score = token_score
+                    node_score = node.node_score + token_score
+                    node.next[token].node_score = node_score
+                    is_end = i == len(tokens) - 1 or node.next[token].is_end
+                    node.next[token].output_score = node_score if is_end else 0
+                    node.next[token].is_end = is_end
+                    if i == len(tokens) - 1:
+                        node.next[token].phrase = phrase
+                        node.next[token].ac_threshold = threshold
+                node = node.next[token]
+        self._fill_fail_output()
+
+    def build_from_variative_bpe(
+        self,
+        token_ids: list[tuple[list[int], list[list[Any]]]],
+        phrases: Optional[List[str]] = None,
+        scores: Optional[List[float]] = None,
+        ac_thresholds: Optional[List[float]] = None,
+        uniform_weights: Optional[bool] = False,
+    ):
+        """Build the ContextGraph from a list of token list.
+        It first build a trie from the given token lists, then fill the fail arc
+        for each trie node.
+
+        See https://en.wikipedia.org/wiki/Trie for how to build a trie.
+
+        Args:
+          token_ids:
+            The given token lists to build the ContextGraph, it is a list of
+            token list, the token list contains the token ids
+            for a word/phrase. The token id could be an id of a char
+            (modeling with single Chinese char) or an id of a BPE
+            (modeling with BPEs).
+          phrases:
+            The given phrases, they are the original text of the token_ids, the
+            length of `phrases` MUST be equal to the length of `token_ids`.
+          scores:
+            The customize boosting score(token level) for each word/phrase,
+            0 means using the default value (i.e. self.context_score).
+            It is a list of floats, and the length of `scores` MUST be equal to
+            the length of `token_ids`.
+          ac_thresholds:
+            The customize trigger acoustic threshold (probability) for each phrase,
+            0 means using the default value (i.e. self.ac_threshold). It is
+            used only when this graph applied for the keywords spotting system.
+            The length of `ac_threshold` MUST be equal to the length of `token_ids`.
+          uniform_weights:
+            If True, the weights will be distributed uniformly for all tokens as in Icefall.
+
+        Note: The phrases would have shared states, the score of the shared states is
+              the MAXIMUM value among all the tokens sharing this state.
+        """
+        num_phrases = len(token_ids)
+        if phrases is not None:
+            assert len(phrases) == num_phrases, (len(phrases), num_phrases)
+        if scores is not None:
+            assert len(scores) == num_phrases, (len(scores), num_phrases)
+        if ac_thresholds is not None:
+            assert len(ac_thresholds) == num_phrases, (len(ac_thresholds), num_phrases)
 
         for index, tokens in enumerate(token_ids):
             phrase = "" if phrases is None else phrases[index]
@@ -263,32 +356,28 @@ class ContextGraph:
             threshold = self.ac_threshold if ac_threshold == 0.0 else ac_threshold
             cur_nodes = [self.root]
 
-            if use_variative_bpe:
-                orig_lengths, tokens = tokens
-                token_scores = [0.0 for _ in range(len(tokens))]
-                node_path_to_primary = [False for _ in range(len(tokens))]
-                depth = 0
-                k = 0
-                for cur_len in orig_lengths:
-                    node_path_to_primary[k + cur_len - 1] = True
-                    token_score = self._get_token_score(
-                        depth=depth, uniform_weights=uniform_weights, context_score=context_score
-                    )  # / cur_len
+            orig_lengths, tokens = tokens
+            token_scores = [0.0 for _ in range(len(tokens))]
+            node_path_to_primary = [False for _ in range(len(tokens))]
+            depth = 0
+            k = 0
+            for cur_len in orig_lengths:
+                node_path_to_primary[k + cur_len - 1] = True
+                token_score = self._get_token_score(
+                    depth=depth, uniform_weights=uniform_weights, context_score=context_score
+                )  # / cur_len
+                variative_bpe_scoring = True
+                if variative_bpe_scoring:
                     probs = softmax(np.asarray([np.log(p + 1) for p in range(cur_len)]))
                     for t in range(k, k + cur_len):
                         token_scores[t] = token_score * probs[t - k]
-                    k += cur_len
-                    depth += 1
-            else:
-                token_scores = [
-                    self._get_token_score(depth=i, uniform_weights=uniform_weights, context_score=context_score)
-                    for i in range(len(tokens))
-                ]
-                node_path_to_primary = [True for _ in range(len(tokens))]
-            for i, token in enumerate(tokens):
-                if use_variative_bpe:
-                    token_group = token
-                    token = token_group[0].token_id
+                else:
+                    token_scores[k + cur_len - 1] = token_score
+                k += cur_len
+                depth += 1
+
+            for i, token_group in enumerate(tokens):
+                token = token_group[0].token_id
                 if token not in node.next:
                     token_score = token_scores[i]
                     self.num_nodes += 1
@@ -307,19 +396,16 @@ class ContextGraph:
                         is_primary=node_path_to_primary[i],
                     )
                     node.next[token] = new_state
-                    if use_variative_bpe:
-                        for alt_token in token_group[1:]:
-                            if alt_token.length == 1:
-                                node.next[alt_token.token_id] = new_state
-                            else:
-                                # continue
-                                cur_nodes[-alt_token.length].next[alt_token.token_id] = new_state
+
+                    for alt_token in token_group[1:]:
+                        if alt_token.length == 1:
+                            node.next[alt_token.token_id] = new_state
+                        else:
+                            # continue
+                            cur_nodes[-alt_token.length].next[alt_token.token_id] = new_state
                 else:
                     # node exists, get the score of shared state.
-                    if use_variative_bpe:
-                        token_score = node.next[token].node_score - node.node_score
-                    else:
-                        token_score = max(context_score, node.next[token].token_score)
+                    token_score = node.next[token].node_score - node.node_score
                     node.next[token].token_score = token_score
                     node_score = node.node_score + token_score
                     node.next[token].node_score = node_score
