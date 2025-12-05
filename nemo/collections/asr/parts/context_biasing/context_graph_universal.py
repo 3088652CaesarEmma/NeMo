@@ -377,13 +377,15 @@ class ContextGraph:
                 k += cur_len
 
             cur_nodes = [self.root]
+            acc_score = 0.0
             for i, token_group in enumerate(tokens):
                 token = token_group[0].token_id
                 token_score = token_scores[i]
+                acc_score += token_score
                 if token not in node.next:
                     self.num_nodes += 1
                     is_end = i == len(tokens) - 1
-                    node_score = node.node_score + token_score
+                    node_score = acc_score - node.node_score
                     next_node = ContextState(
                         id=self.num_nodes,
                         token=token,
