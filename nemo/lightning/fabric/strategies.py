@@ -242,10 +242,7 @@ class FabricMegatronStrategy(DDPStrategy):
 
         assert optimizer_config.lr is not None, "Learning rate must be set in optimizer config"
 
-        return _strategy_lib.setup_megatron_optimizer(
-            model,
-            optimizer_config
-        )
+        return _strategy_lib.setup_megatron_optimizer(model, optimizer_config)
 
     @override
     def setup_optimizer(self, optimizer: Optimizer) -> Optimizer:

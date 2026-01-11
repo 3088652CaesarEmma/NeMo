@@ -107,10 +107,7 @@ class MegatronOptimizerModule(OptimizerModule):
         if not isinstance(model, MegatronParallel):
             raise ValueError("Model must be an instance of MegatronParallel")
 
-        optimizer = setup_megatron_optimizer(
-            model,
-            self.config
-        )
+        optimizer = setup_megatron_optimizer(model, self.config)
 
         return [optimizer]
 
