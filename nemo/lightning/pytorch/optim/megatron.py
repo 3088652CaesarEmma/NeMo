@@ -109,10 +109,7 @@ class MegatronOptimizerModule(OptimizerModule):
 
         optimizer = setup_megatron_optimizer(
             model,
-            self.config,
-            no_weight_decay_cond=self.no_weight_decay_cond,
-            scale_lr_cond=self.scale_lr_cond,
-            lr_mult=self.lr_mult,
+            self.config
         )
 
         return [optimizer]

@@ -671,9 +671,6 @@ def _sync_from_last_pipeline_stage(value: torch.Tensor, broadcast: bool = False)
 def setup_megatron_optimizer(
     model,
     config,
-    no_weight_decay_cond: Optional[Callable] = None,
-    scale_lr_cond: Optional[Callable] = None,
-    lr_mult: float = 1.0,
 ):
     """ """
     from megatron.core.optimizer import OptimizerConfig, get_megatron_optimizer
@@ -712,9 +709,6 @@ def setup_megatron_optimizer(
     mcore_opt = get_megatron_optimizer(
         config,
         ddp_modules,
-        no_weight_decay_cond=no_weight_decay_cond,
-        scale_lr_cond=scale_lr_cond,
-        lr_mult=lr_mult,
         use_gloo_process_groups=app_state.use_gloo_process_groups,
     )
     # Pytorch does not have the concept of an `lr_mult` or a `wd_mult` but these are added to param

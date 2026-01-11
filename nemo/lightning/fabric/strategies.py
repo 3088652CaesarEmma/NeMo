@@ -244,10 +244,7 @@ class FabricMegatronStrategy(DDPStrategy):
 
         return _strategy_lib.setup_megatron_optimizer(
             model,
-            optimizer_config,
-            no_weight_decay_cond=no_weight_decay_cond,
-            scale_lr_cond=scale_lr_cond,
-            lr_mult=lr_mult,
+            optimizer_config
         )
 
     @override
