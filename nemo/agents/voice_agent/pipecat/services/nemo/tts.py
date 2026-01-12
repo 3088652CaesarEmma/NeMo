@@ -14,8 +14,11 @@
 
 import asyncio
 import inspect
+import os
+import queue
 from collections.abc import AsyncGenerator
 from typing import Iterator, List, Optional
+from omegaconf import DictConfig, OmegaConf
 
 import numpy as np
 import torch
@@ -33,6 +36,7 @@ from pipecat.frames.frames import (
 )
 from pipecat.services.llm_service import FunctionCallParams
 from pipecat.services.tts_service import TTSService
+from pipecat.utils.text.simple_text_aggregator import SimpleTextAggregator
 
 from nemo.agents.voice_agent.pipecat.utils.tool_calling.mixins import ToolCallingMixin
 from nemo.collections.tts.models import FastPitchModel, HifiGanModel
@@ -61,6 +65,7 @@ class BaseNemoTTSService(TTSService):
         **kwargs,
     ):
         super().__init__(sample_rate=sample_rate, **kwargs)
+        logger.info(f"Initializing TTS service with model: {model} and device: {device}")
         self._model_name = model
         self._device = device
         self._model = self._setup_model()
@@ -68,10 +73,10 @@ class BaseNemoTTSService(TTSService):
         if think_tokens is not None:
             assert (
                 isinstance(think_tokens, list) and len(think_tokens) == 2
-            ), f"think_tokens must be a list of two strings: {think_tokens}"
+            ), f"think_tokens must be a list of two strings, but got type {type(think_tokens)}: {think_tokens}"
 
         # Background processing infrastructure - no response handler needed
-        self._tts_queue = asyncio.Queue()
+        self._tts_queue = queue.Queue()
         self._processing_task = None
         self._processing_running = False
 
@@ -114,7 +119,7 @@ class BaseNemoTTSService(TTSService):
     async def _stop_tasks(self):
         """Stop background processing tasks."""
         self._processing_running = False
-        await self._tts_queue.put(None)  # Signal to stop processing
+        await asyncio.to_thread(self._tts_queue.put, None)  # Signal to stop processing
 
         if self._processing_task:
             await self.cancel_task(self._processing_task)
@@ -125,8 +130,7 @@ class BaseNemoTTSService(TTSService):
         try:
             while self._processing_running:
                 try:
-                    future = asyncio.run_coroutine_threadsafe(self._tts_queue.get(), self.get_event_loop())
-                    request = future.result()
+                    request = self._tts_queue.get()
 
                     if request is None:  # Stop signal
                         logger.debug("Received stop signal in TTS background processor")
@@ -259,7 +263,7 @@ class BaseNemoTTSService(TTSService):
 
             try:
                 # Queue the TTS request for background processing
-                await self._tts_queue.put((text, request_id))
+                await asyncio.to_thread(self._tts_queue.put, (text, request_id))
 
                 # Wait for the result directly from our request queue
                 result = await request_queue.get()
@@ -433,6 +437,7 @@ class KokoroTTSService(BaseNemoTTSService, ToolCallingMixin):
 
     def __init__(
         self,
+        model: str = "hexgrad/Kokoro-82M",
         lang_code: str = "a",
         voice: str = "af_heart",
         device: str = "cuda",
@@ -444,7 +449,7 @@ class KokoroTTSService(BaseNemoTTSService, ToolCallingMixin):
         self._voice = voice
         self._speed = speed
         assert speed > 0, "Speed must be greater than 0"
-        model_name = f"kokoro-{lang_code}-{voice}"
+        model_name = model
         self._speed_lambda = 1.0
         self._original_speed = speed
         self._original_voice = voice
@@ -466,8 +471,8 @@ class KokoroTTSService(BaseNemoTTSService, ToolCallingMixin):
             lang_code = self._lang_code
         if voice is None:
             voice = self._voice
-        logger.info(f"Loading Kokoro TTS model with lang_code={lang_code}, voice={voice}")
-        pipeline = KPipeline(lang_code=lang_code)
+        logger.info(f"Loading Kokoro TTS model with model={self._model_name}, lang_code={lang_code}, voice={voice}")
+        pipeline = KPipeline(lang_code=lang_code, device=self._device, repo_id=self._model_name)
         return pipeline
 
     def _generate_audio(self, text: str) -> Iterator[np.ndarray]:
@@ -480,21 +485,22 @@ class KokoroTTSService(BaseNemoTTSService, ToolCallingMixin):
             Audio data as numpy arrays
         """
         try:
-            # Generate audio using Kokoro pipeline
-            generator = self._model(text, voice=self._voice, speed=self._speed)
+            with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
+                # Generate audio using Kokoro pipeline
+                generator = self._model(text, voice=self._voice, speed=self._speed)
 
-            # The generator yields tuples of (gs, ps, audio)
-            # We only need the audio component
-            for i, (gs, ps, audio) in enumerate(generator):
-                logger.debug(
-                    f"Kokoro generated audio chunk {i}: gs={gs}, ps={ps},"
-                    f"audio_shape={audio.shape if hasattr(audio, 'shape') else len(audio)}"
-                )
-                if isinstance(audio, torch.Tensor):
-                    audio = audio.detach().cpu().numpy()
-                # Kokoro returns audio as numpy array in float32 format [-1, 1]
-                # The base class will handle conversion to int16 bytes
-                yield audio
+                # The generator yields tuples of (gs, ps, audio)
+                # We only need the audio component
+                for i, (gs, ps, audio) in enumerate(generator):
+                    logger.debug(
+                        f"Kokoro generated audio chunk {i}: gs={gs}, ps={ps},"
+                        f"audio_shape={audio.shape if hasattr(audio, 'shape') else len(audio)}"
+                    )
+                    if isinstance(audio, torch.Tensor):
+                        audio = audio.detach().cpu().numpy()
+                    # Kokoro returns audio as numpy array in float32 format [-1, 1]
+                    # The base class will handle conversion to int16 bytes
+                    yield audio
 
         except Exception as e:
             logger.error(f"Error generating audio with Kokoro: {e}")
@@ -658,3 +664,93 @@ class KokoroTTSService(BaseNemoTTSService, ToolCallingMixin):
         self.register_direct_function("tool_tts_set_speed", self.tool_tts_set_speed)
         self.register_direct_function("tool_tts_set_voice", self.tool_tts_set_voice)
         self.register_direct_function("tool_tts_reset_voice", self.tool_tts_reset_voice)
+
+
+class MagpieTTSService(BaseNemoTTSService, ToolCallingMixin):
+    SPEAKER_MAP = {
+        "John": 0,
+        "Sofia": 1,
+        "Aria": 2,
+        "Jason": 3,
+        "Leo": 4
+    }
+
+    def __init__(self, model: str = "nvidia/magpie_tts_multilingual_357m", language: str = "en", speaker: str = "Sofia", apply_TN: bool = False, device: str = "cuda", **kwargs):
+        self._language = language
+        self._current_speaker = speaker
+        self._apply_TN = apply_TN
+        super().__init__(model=model, device=device, **kwargs)
+        self.setup_tool_calling()
+
+    def _setup_model(self):
+        from nemo.collections.tts.models import MagpieTTSModel
+        if self._model_name.endswith(".nemo"):
+            model = MagpieTTSModel.restore_from(self._model_name, map_location=torch.device(self._device))
+        else:
+            model = MagpieTTSModel.from_pretrained(self._model_name, map_location=torch.device(self._device))
+        model.eval()
+
+        text = "Warming up the Magpie TTS model, this will help the model to respond faster for later requests."
+        with torch.no_grad():
+            _, _ = model.do_tts(text, language=self._language, apply_TN=self._apply_TN, speaker_index=self.SPEAKER_MAP[self._current_speaker])
+        torch.cuda.empty_cache()
+        return model
+
+    def _generate_audio(self, text: str) -> Iterator[np.ndarray]:
+        audio, audio_len = self._model.do_tts(text, language=self._language, apply_TN=self._apply_TN, speaker_index=self.SPEAKER_MAP[self._current_speaker])
+        audio_len = audio_len.view(-1).item()
+        audio = audio.detach().view(-1).cpu().numpy()
+        yield audio[:audio_len]
+
+    def setup_tool_calling(self):
+        pass
+
+
+def get_tts_service_from_config(config: DictConfig, text_aggregator: Optional[SimpleTextAggregator] = None) -> BaseNemoTTSService:
+    """Get the TTS service from the configuration.
+
+    Args:
+        config: The DictConfig object containing the TTS configuration.
+        text_aggregator: The text aggregator to use for text segmentation.
+
+    Returns:
+        The TTS service.
+    """
+    if isinstance(config, DictConfig):
+        config = OmegaConf.to_container(config, resolve=True)
+    model = config.get("model", None)
+    device = config.get("device", "cuda")
+    if config.get("type", None) != "nemo":
+        raise ValueError(f"Invalid TTS type: {config.get('type', None)}, only 'nemo' is supported")
+    if model is None:
+        raise ValueError("Model is required for Nemo TTS service")
+
+    if model == "fastpitch-hifigan":
+        return NeMoFastPitchHiFiGANTTSService(
+            fastpitch_model=config.get("main_model_id", None),
+            hifigan_model=config.get("sub_model_id", None),
+            device=device,
+            text_aggregator=text_aggregator,
+            think_tokens=config.get("think_tokens", None),
+        )
+    elif model == "magpie":
+        return MagpieTTSService(
+            model=config.get("main_model_id", None),
+            language=config.get("language", "en"),
+            speaker=config.get("speaker", "Sofia"),
+            apply_TN=config.get("apply_TN", False),
+            device=device,
+            text_aggregator=text_aggregator,
+            think_tokens=config.get("think_tokens", None),
+        )
+    elif model == "kokoro":
+        return KokoroTTSService(
+            model=config.get("main_model_id", "hexgrad/Kokoro-82M"),
+            voice=config.get("sub_model_id", "af_heart"),
+            device=device,
+            speed=config.get("speed", 1.0),
+            text_aggregator=text_aggregator,
+            think_tokens=config.get("think_tokens", None),
+        )
+    else:
+        raise ValueError(f"Invalid model: {model}, only 'fastpitch-hifigan' and 'magpie' are supported")

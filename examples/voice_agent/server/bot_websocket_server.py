@@ -33,7 +33,7 @@ from nemo.agents.voice_agent.pipecat.processors.frameworks.rtvi import RTVIObser
 from nemo.agents.voice_agent.pipecat.services.nemo.diar import NemoDiarService
 from nemo.agents.voice_agent.pipecat.services.nemo.llm import get_llm_service_from_config
 from nemo.agents.voice_agent.pipecat.services.nemo.stt import ASR_EOU_MODELS, NemoSTTService
-from nemo.agents.voice_agent.pipecat.services.nemo.tts import KokoroTTSService, NeMoFastPitchHiFiGANTTSService
+from nemo.agents.voice_agent.pipecat.services.nemo.tts import get_tts_service_from_config
 from nemo.agents.voice_agent.pipecat.services.nemo.turn_taking import NeMoTurnTakingService
 from nemo.agents.voice_agent.pipecat.transports.network.websocket_server import (
     WebsocketServerParams,
@@ -193,33 +193,22 @@ async def run_bot_websocket_server(host: str = "0.0.0.0", port: int = 8765):
     )
     logger.info("Turn taking service initialized")
 
-    logger.info("Initializing LLM service...")
-
-    llm = get_llm_service_from_config(server_config.llm)
-    logger.info("LLM service initialized")
-
     text_aggregator = SimpleSegmentedTextAggregator(punctuation_marks=TTS_EXTRA_SEPARATOR)
 
     if TTS_TYPE == "nemo":
-        tts = NeMoFastPitchHiFiGANTTSService(
-            fastpitch_model=TTS_MAIN_MODEL_ID,
-            hifigan_model=TTS_SUB_MODEL_ID,
-            device=TTS_DEVICE,
-            text_aggregator=text_aggregator,
-            think_tokens=TTS_THINK_TOKENS,
-        )
-    elif TTS_TYPE == "kokoro":
-        tts = KokoroTTSService(
-            voice=TTS_SUB_MODEL_ID,
-            device=TTS_DEVICE,
-            speed=config_manager.server_config.tts.speed,
-            text_aggregator=text_aggregator,
-            think_tokens=TTS_THINK_TOKENS,
-        )
+        tts = get_tts_service_from_config(config_manager.server_config.tts, text_aggregator)
     else:
         raise ValueError(f"Invalid TTS type: {TTS_TYPE}")
 
     logger.info("TTS service initialized")
+
+    # Setup logging again to avoid logger from being overwritten during setting up the pipeline components
+    setup_logging()
+
+    # Put LLM in the end of model initialization to reduce the chance of running out of HBM memory
+    logger.info("Initializing LLM service...")
+    llm = get_llm_service_from_config(server_config.llm)
+    logger.info("LLM service initialized")
 
     context = OpenAILLMContext(
         messages=[
@@ -232,7 +221,7 @@ async def run_bot_websocket_server(host: str = "0.0.0.0", port: int = 8765):
 
     if server_config.llm.get("enable_tool_calling", False):
         logger.info("Tools calling for LLM is enabled by config, registering tools...")
-        register_direct_tools_to_llm(llm=llm, context=context, tool_mixins=[tts], tools=[tool_get_city_weather])
+        register_direct_tools_to_llm(llm=llm, context=context, tool_mixins=[], tools=[tool_get_city_weather])
     else:
         logger.info("Tools calling for LLM is disabled by config, skipping tool registration.")
 
@@ -309,9 +298,6 @@ async def run_bot_websocket_server(host: str = "0.0.0.0", port: int = 8765):
 
     # Track task state
     task_running = True
-
-    # Setup logging again to avoid logger from being overwritten during setting up the pipeline components
-    setup_logging()
 
     @rtvi.event_handler("on_client_ready")
     async def on_client_ready(rtvi: RTVIProcessor):

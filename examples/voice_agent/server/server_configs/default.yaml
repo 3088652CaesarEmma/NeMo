@@ -4,7 +4,7 @@
 # Specify the type and an a model identifier to automatically configure the model.
 
 transport:
-  audio_out_10ms_chunks: 10  # use 4 as websocket default, but increasing to a larger number might have less glitches in TTS output
+  audio_out_10ms_chunks: 4  # use 4 as websocket default, but increasing to a larger number might have less glitches in TTS output
 
 vad:
   type: silero
@@ -49,7 +49,19 @@ llm:
   system_prompt: "You are a helpful AI agent named Lisa. Start by greeting the user warmly and introducing yourself within one sentence. Your answer should be concise and to the point. You might also see speaker tags (<speaker_0>, <speaker_1>, etc.) in the user context. You should respond to the user based on the speaker tag and the context of that speaker. Do not include the speaker tags in your response, use them only to identify the speaker. Avoid using emoji in your response."
 
 tts:
-  type: kokoro # choices in ['nemo', 'kokoro']
-  model: "hexgrad/Kokoro-82M"
+  type: nemo 
+  model: "kokoro"
   model_config: "./server_configs/tts_configs/kokoro_82M.yaml"
   device: "cuda"
+
+# tts:
+#   type: nemo 
+#   model: "fastpitch-hifigan"
+#   model_config: "./server_configs/tts_configs/nemo_fastpitch-hifigan.yaml"
+#   device: "cuda"
+
+# tts:
+#   type: nemo 
+#   model: "magpie"
+#   model_config: "./server_configs/tts_configs/nemo_magpie_tts.yaml"
+#   device: "cuda"
