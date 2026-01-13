@@ -14,9 +14,9 @@
 
 import asyncio
 import inspect
-import os
-import queue
+import uuid
 from collections.abc import AsyncGenerator
+from datetime import datetime
 from typing import Iterator, List, Optional
 from omegaconf import DictConfig, OmegaConf
 
@@ -38,6 +38,7 @@ from pipecat.services.llm_service import FunctionCallParams
 from pipecat.services.tts_service import TTSService
 
 from nemo.agents.voice_agent.pipecat.utils.text.simple_text_aggregator import SimpleSegmentedTextAggregator
+from nemo.agents.voice_agent.pipecat.services.nemo.audio_logger import AudioLogger
 from nemo.agents.voice_agent.pipecat.utils.tool_calling.mixins import ToolCallingMixin
 from nemo.collections.tts.models import FastPitchModel, HifiGanModel
 
@@ -62,6 +63,7 @@ class BaseNemoTTSService(TTSService, ToolCallingMixin):
         device: str = "cuda",
         sample_rate: int = 22050,
         think_tokens: Optional[List[str]] = None,
+        audio_logger: Optional[AudioLogger] = None,
         **kwargs,
     ):
         super().__init__(sample_rate=sample_rate, **kwargs)
@@ -70,6 +72,7 @@ class BaseNemoTTSService(TTSService, ToolCallingMixin):
         self._device = device
         self._model = self._setup_model()
         self._think_tokens = think_tokens
+        self._audio_logger = audio_logger
         if think_tokens is not None:
             assert (
                 isinstance(think_tokens, list) and len(think_tokens) == 2
@@ -260,8 +263,11 @@ class BaseNemoTTSService(TTSService, ToolCallingMixin):
             await self.start_ttfb_metrics()
             yield TTSStartedFrame()
 
+            # Increment turn index at the start of agent speaking (only if speaker changed)
+            if self._audio_logger is not None:
+                self._audio_logger.increment_turn_index(speaker="agent")
+
             # Generate unique request ID
-            import uuid
 
             request_id = str(uuid.uuid4())
 
@@ -290,6 +296,12 @@ class BaseNemoTTSService(TTSService, ToolCallingMixin):
 
                 await self.start_tts_usage_metrics(text)
 
+                # Collect all audio for logging
+                all_audio_bytes = b""
+                # Capture the start time when TTS begins (not when it ends)
+                if self._audio_logger is not None and self._audio_logger.first_audio_timestamp is None:
+                    self._audio_logger.first_audio_timestamp = datetime.now()
+
                 # Process the audio result (same as before)
                 if (
                     inspect.isgenerator(audio_result)
@@ -302,11 +314,15 @@ class BaseNemoTTSService(TTSService, ToolCallingMixin):
                         if first_chunk:
                             await self.stop_ttfb_metrics()
                             first_chunk = False
+                            # Capture start time on first chunk
+                            if self._audio_logger is not None:
+                                tts_start_time = self._audio_logger.get_time_from_start_of_session()
 
                         if audio_chunk is None:
                             break
 
                         audio_bytes = self._convert_to_bytes(audio_chunk)
+                        all_audio_bytes += audio_bytes
                         chunk_size = self.chunk_size
                         for i in range(0, len(audio_bytes), chunk_size):
                             audio_chunk_bytes = audio_bytes[i : i + chunk_size]
@@ -320,7 +336,11 @@ class BaseNemoTTSService(TTSService, ToolCallingMixin):
                 else:
                     # Handle single result case
                     await self.stop_ttfb_metrics()
+                    # Capture start time for single result
+                    if self._audio_logger is not None:
+                        tts_start_time = self._audio_logger.get_time_from_start_of_session()
                     audio_bytes = self._convert_to_bytes(audio_result)
+                    all_audio_bytes = audio_bytes
 
                     chunk_size = self.chunk_size
                     for i in range(0, len(audio_bytes), chunk_size):
@@ -330,6 +350,22 @@ class BaseNemoTTSService(TTSService, ToolCallingMixin):
 
                         frame = TTSAudioRawFrame(audio=chunk, sample_rate=self.sample_rate, num_channels=1)
                         yield frame
+
+                # Log the complete audio if logger is available
+                if self._audio_logger is not None and all_audio_bytes:
+                    try:
+                        self._audio_logger.log_agent_audio(
+                            audio_data=all_audio_bytes,
+                            text=text,
+                            sample_rate=self.sample_rate,
+                            num_channels=1,
+                            additional_metadata={
+                                "model": self._model_name,
+                            },
+                            tts_generation_time=tts_start_time,
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to log agent audio: {e}")
 
                 yield TTSStoppedFrame()
 
@@ -714,7 +750,7 @@ class MagpieTTSService(BaseNemoTTSService):
         pass
 
 
-def get_tts_service_from_config(config: DictConfig) -> BaseNemoTTSService:
+def get_tts_service_from_config(config: DictConfig, audio_logger: Optional[AudioLogger] = None) -> BaseNemoTTSService:
     """Get the TTS service from the configuration.
 
     Args:
@@ -747,6 +783,7 @@ def get_tts_service_from_config(config: DictConfig) -> BaseNemoTTSService:
             device=device,
             text_aggregator=text_aggregator,
             think_tokens=config.get("think_tokens", None),
+            audio_logger=audio_logger,
         )
     elif model == "magpie":
         return MagpieTTSService(
@@ -757,6 +794,7 @@ def get_tts_service_from_config(config: DictConfig) -> BaseNemoTTSService:
             device=device,
             text_aggregator=text_aggregator,
             think_tokens=config.get("think_tokens", None),
+            audio_logger=audio_logger,
         )
     elif model == "kokoro":
         return KokoroTTSService(
@@ -766,7 +804,8 @@ def get_tts_service_from_config(config: DictConfig) -> BaseNemoTTSService:
             speed=config.get("speed", 1.0),
             text_aggregator=text_aggregator,
             think_tokens=config.get("think_tokens", None),
-            sample_rate=24000
+            sample_rate=24000,
+            audio_logger=audio_logger,
         )
     else:
         raise ValueError(f"Invalid model: {model}, only 'fastpitch-hifigan' and 'magpie' are supported")
