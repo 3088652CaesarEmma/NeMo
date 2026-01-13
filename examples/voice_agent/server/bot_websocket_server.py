@@ -39,7 +39,6 @@ from nemo.agents.voice_agent.pipecat.transports.network.websocket_server import 
     WebsocketServerParams,
     WebsocketServerTransport,
 )
-from nemo.agents.voice_agent.pipecat.utils.text.simple_text_aggregator import SimpleSegmentedTextAggregator
 from nemo.agents.voice_agent.pipecat.utils.tool_calling.basic_tools import tool_get_city_weather
 from nemo.agents.voice_agent.pipecat.utils.tool_calling.mixins import register_direct_tools_to_llm
 from nemo.agents.voice_agent.utils.config_manager import ConfigManager
@@ -99,11 +98,6 @@ TURN_TAKING_BOT_STOP_DELAY = config_manager.TURN_TAKING_BOT_STOP_DELAY
 
 # TTS configuration
 TTS_TYPE = config_manager.server_config.tts.type
-TTS_MAIN_MODEL_ID = config_manager.TTS_MAIN_MODEL_ID
-TTS_SUB_MODEL_ID = config_manager.TTS_SUB_MODEL_ID
-TTS_DEVICE = config_manager.TTS_DEVICE
-TTS_THINK_TOKENS = config_manager.TTS_THINK_TOKENS
-TTS_EXTRA_SEPARATOR = config_manager.TTS_EXTRA_SEPARATOR
 
 
 def signal_handler(signum, frame):
@@ -193,10 +187,8 @@ async def run_bot_websocket_server(host: str = "0.0.0.0", port: int = 8765):
     )
     logger.info("Turn taking service initialized")
 
-    text_aggregator = SimpleSegmentedTextAggregator(punctuation_marks=TTS_EXTRA_SEPARATOR)
-
     if TTS_TYPE == "nemo":
-        tts = get_tts_service_from_config(config_manager.server_config.tts, text_aggregator)
+        tts = get_tts_service_from_config(config_manager.server_config.tts)
     else:
         raise ValueError(f"Invalid TTS type: {TTS_TYPE}")
 
@@ -221,7 +213,7 @@ async def run_bot_websocket_server(host: str = "0.0.0.0", port: int = 8765):
 
     if server_config.llm.get("enable_tool_calling", False):
         logger.info("Tools calling for LLM is enabled by config, registering tools...")
-        register_direct_tools_to_llm(llm=llm, context=context, tool_mixins=[], tools=[tool_get_city_weather])
+        register_direct_tools_to_llm(llm=llm, context=context, tool_mixins=[tts], tools=[tool_get_city_weather])
     else:
         logger.info("Tools calling for LLM is disabled by config, skipping tool registration.")
 
@@ -330,7 +322,7 @@ async def run_bot_websocket_server(host: str = "0.0.0.0", port: int = 8765):
                 if "ConnectionClosedOK" not in str(e) and "1005" not in str(e):
                     logger.warning(f"Error sending EndTaskFrame: {e}")
                 else:
-                    logger.debug(f"Normal connection closure: {e}")
+                    logger.info(f"Normal connection closure: {e}")
 
     @ws_transport.event_handler("on_session_timeout")
     async def on_session_timeout(transport, client):

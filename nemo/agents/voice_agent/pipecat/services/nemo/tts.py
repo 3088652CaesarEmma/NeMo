@@ -36,13 +36,13 @@ from pipecat.frames.frames import (
 )
 from pipecat.services.llm_service import FunctionCallParams
 from pipecat.services.tts_service import TTSService
-from pipecat.utils.text.simple_text_aggregator import SimpleTextAggregator
 
+from nemo.agents.voice_agent.pipecat.utils.text.simple_text_aggregator import SimpleSegmentedTextAggregator
 from nemo.agents.voice_agent.pipecat.utils.tool_calling.mixins import ToolCallingMixin
 from nemo.collections.tts.models import FastPitchModel, HifiGanModel
 
 
-class BaseNemoTTSService(TTSService):
+class BaseNemoTTSService(TTSService, ToolCallingMixin):
     """Text-to-Speech service using Nemo TTS models.
 
     This service works with any TTS model that exposes a generate(text) method
@@ -83,6 +83,14 @@ class BaseNemoTTSService(TTSService):
         # Track pending requests with their response queues
         self._pending_requests = {}
         self._have_seen_think_tokens = False
+
+        self.setup_tool_calling()
+
+    def setup_tool_calling(self):
+        """
+        Setup the tool calling mixin by registering all available tools.
+        """
+        pass # No tools by default
 
     def _setup_model(self):
         raise NotImplementedError("Subclass must implement _setup_model")
@@ -421,7 +429,7 @@ class NeMoFastPitchHiFiGANTTSService(BaseNemoTTSService):
             yield audio
 
 
-class KokoroTTSService(BaseNemoTTSService, ToolCallingMixin):
+class KokoroTTSService(BaseNemoTTSService):
     """Text-to-Speech service using Kokoro-82M model.
 
     Kokoro is an open-weight TTS model with 82 million parameters.
@@ -666,7 +674,7 @@ class KokoroTTSService(BaseNemoTTSService, ToolCallingMixin):
         self.register_direct_function("tool_tts_reset_voice", self.tool_tts_reset_voice)
 
 
-class MagpieTTSService(BaseNemoTTSService, ToolCallingMixin):
+class MagpieTTSService(BaseNemoTTSService):
     SPEAKER_MAP = {
         "John": 0,
         "Sofia": 1,
@@ -706,7 +714,7 @@ class MagpieTTSService(BaseNemoTTSService, ToolCallingMixin):
         pass
 
 
-def get_tts_service_from_config(config: DictConfig, text_aggregator: Optional[SimpleTextAggregator] = None) -> BaseNemoTTSService:
+def get_tts_service_from_config(config: DictConfig) -> BaseNemoTTSService:
     """Get the TTS service from the configuration.
 
     Args:
@@ -724,6 +732,13 @@ def get_tts_service_from_config(config: DictConfig, text_aggregator: Optional[Si
         raise ValueError(f"Invalid TTS type: {config.get('type', None)}, only 'nemo' is supported")
     if model is None:
         raise ValueError("Model is required for Nemo TTS service")
+
+    text_aggregator = SimpleSegmentedTextAggregator(
+        punctuation_marks=config.get("extra_separator", None),
+        ignore_marks=config.get("ignore_marks", None),
+        min_sentence_length=config.get("min_sentence_length", 5),
+        use_legacy_eos_detection=config.get("use_legacy_eos_detection", False),
+    )
 
     if model == "fastpitch-hifigan":
         return NeMoFastPitchHiFiGANTTSService(
@@ -751,6 +766,7 @@ def get_tts_service_from_config(config: DictConfig, text_aggregator: Optional[Si
             speed=config.get("speed", 1.0),
             text_aggregator=text_aggregator,
             think_tokens=config.get("think_tokens", None),
+            sample_rate=24000
         )
     else:
         raise ValueError(f"Invalid model: {model}, only 'fastpitch-hifigan' and 'magpie' are supported")

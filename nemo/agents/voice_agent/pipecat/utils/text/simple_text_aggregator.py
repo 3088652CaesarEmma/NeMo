@@ -145,7 +145,7 @@ class SimpleSegmentedTextAggregator(SimpleTextAggregator):
         self,
         punctuation_marks: str | list[str] = ".,!?;:\n",
         ignore_marks: str | list[str] = "*",
-        min_sentence_length: int = 0,
+        min_sentence_length: int = 5,
         use_legacy_eos_detection: bool = False,
         **kwargs,
     ):
