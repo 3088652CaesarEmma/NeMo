@@ -5,7 +5,7 @@
 
 transport:
   audio_out_10ms_chunks: 4  # use 4 as websocket default, but increasing to a larger number might have less glitches in TTS output
-  record_audio_data: false
+  record_audio_data: true
   audio_log_dir: "./audio_logs"
 
 vad:
