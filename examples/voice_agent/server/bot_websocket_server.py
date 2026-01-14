@@ -217,14 +217,19 @@ async def run_bot_websocket_server(host: str = "0.0.0.0", port: int = 8765):
     llm = get_llm_service_from_config(server_config.llm)
     logger.info("LLM service initialized")
 
-    context = OpenAILLMContext(
-        messages=[
+    messages=[
             {
                 "role": SYSTEM_ROLE,
                 "content": SYSTEM_PROMPT,
             }
-        ],
-    )
+        ]
+    inject_dummy_user_message = server_config.llm.get("inject_dummy_user_message", False)
+    if inject_dummy_user_message:
+        messages.append({
+            "role": "user",
+            "content": "Who are you?",
+        })
+    context = OpenAILLMContext(messages=messages)
 
     if server_config.llm.get("enable_tool_calling", False):
         logger.info("Tools calling for LLM is enabled by config, registering tools...")

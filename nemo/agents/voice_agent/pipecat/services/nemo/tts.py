@@ -19,7 +19,7 @@ from collections.abc import AsyncGenerator
 from datetime import datetime
 from typing import Iterator, List, Optional
 from omegaconf import DictConfig, OmegaConf
-
+import queue
 import numpy as np
 import torch
 from loguru import logger
@@ -557,7 +557,8 @@ class KokoroTTSService(BaseNemoTTSService):
         such as "speak twice as fast" or "speak half as slow" or "speak 1.5 times as fast".
 
         After calling this tool, continue the previous response if it was unfinished and was
-        interrupted by calling this tool, otherwise start a new response.
+        interrupted by calling this tool, otherwise start a new response and ask if the user needs
+        help on anything else.
 
         Args:
             speed_lambda: positive float, the relative change of the speaking speed to the original speed.
@@ -585,7 +586,8 @@ class KokoroTTSService(BaseNemoTTSService):
         Reset the speaking speed to the original speed.
 
         After calling this tool, continue the previous response if it was unfinished and was
-        interrupted by calling this tool, otherwise start a new response.
+        interrupted by calling this tool, otherwise start a new response and ask if the user needs
+        help on anything else.
         """
         self._speed = self._original_speed
         result = {"success": True, "message": "Speaking speed is reset to the original one"}
@@ -597,7 +599,8 @@ class KokoroTTSService(BaseNemoTTSService):
         Speak faster by increasing the speaking speed 15% faster each time this function is called.
 
         After calling this tool, continue the previous response if it was unfinished and was
-        interrupted by calling this tool, otherwise start a new response.
+        interrupted by calling this tool, otherwise start a new response and ask if the user needs
+        help on anything else.
         """
         self._speed_lambda = self._speed_lambda + 0.15
         self._speed = self._speed_lambda * self._speed
@@ -613,7 +616,8 @@ class KokoroTTSService(BaseNemoTTSService):
         Speak slower by decreasing the speaking speed 15% slower each time this function is called.
 
         After calling this tool, continue the previous response if it was unfinished and was
-        interrupted by calling this tool, otherwise start a new response.
+        interrupted by calling this tool, otherwise start a new response and ask if the user needs
+        help on anything else.
         """
         self._speed_lambda = self._speed_lambda - 0.15
         if self._speed_lambda < 0.1:
@@ -638,7 +642,8 @@ class KokoroTTSService(BaseNemoTTSService):
         This tool should be called only when the user specifies the accent and/or gender explicitly.
 
         After calling this tool, continue the previous response if it was unfinished and was
-        interrupted by calling this tool, otherwise start a new response.
+        interrupted by calling this tool, otherwise start a new response and ask if the user needs
+        help on anything else.
 
         Args:
             accent: Accent for the TTS model. Must be one of 'American English', 'British English'
@@ -682,7 +687,8 @@ class KokoroTTSService(BaseNemoTTSService):
         Reset the accent and voice to the original ones.
 
         After calling this tool, continue the previous response if it was unfinished and was
-        interrupted by calling this tool, otherwise start a new response.
+        interrupted by calling this tool, otherwise start a new response and ask if the user needs
+        help on anything else.
         """
         await params.llm.push_frame(LLMTextFrame("Of course."))
 
