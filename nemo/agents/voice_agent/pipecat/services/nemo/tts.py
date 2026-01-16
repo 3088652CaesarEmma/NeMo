@@ -546,7 +546,7 @@ class KokoroTTSService(BaseNemoTTSService, ToolCallingMixin):
 
         After calling this tool, continue the previous response if it was unfinished and was
         interrupted by calling this tool, otherwise start a new response and ask if the user needs
-        help on anything else. Avoid repeating the same message as the previous response.
+        help on anything else. Avoid repeating the same message in previous responses.
 
         Args:
             speed_lambda: positive float, the relative change of the speaking speed to the original speed.
@@ -575,7 +575,7 @@ class KokoroTTSService(BaseNemoTTSService, ToolCallingMixin):
 
         After calling this tool, continue the previous response if it was unfinished and was
         interrupted by calling this tool, otherwise start a new response and ask if the user needs
-        help on anything else. Avoid repeating the same message as the previous response.
+        help on anything else. Avoid repeating the same message in previous responses.
         """
         self._speed = self._original_speed
         result = {"success": True, "message": "Speaking speed is reset to the original one"}
@@ -588,7 +588,7 @@ class KokoroTTSService(BaseNemoTTSService, ToolCallingMixin):
 
         After calling this tool, continue the previous response if it was unfinished and was
         interrupted by calling this tool, otherwise start a new response and ask if the user needs
-        help on anything else. Avoid repeating the same message as the previous response.
+        help on anything else. Avoid repeating the same message in previous responses.
         """
         self._speed_lambda = self._speed_lambda + 0.15
         self._speed = self._speed_lambda * self._original_speed
@@ -605,7 +605,7 @@ class KokoroTTSService(BaseNemoTTSService, ToolCallingMixin):
 
         After calling this tool, continue the previous response if it was unfinished and was
         interrupted by calling this tool, otherwise start a new response and ask if the user needs
-        help on anything else. Avoid repeating the same message as the previous response.
+        help on anything else. Avoid repeating the same message in previous responses.
         """
         self._speed_lambda = self._speed_lambda - 0.15
         if self._speed_lambda < 0.1:
@@ -631,7 +631,7 @@ class KokoroTTSService(BaseNemoTTSService, ToolCallingMixin):
 
         After calling this tool, continue the previous response if it was unfinished and was
         interrupted by calling this tool, otherwise start a new response and ask if the user needs
-        help on anything else. Avoid repeating the same message as the previous response.
+        help on anything else. Avoid repeating the same message in previous responses.
 
         Args:
             accent: Accent for the TTS model. Must be one of 'American English', 'British English'
@@ -676,7 +676,7 @@ class KokoroTTSService(BaseNemoTTSService, ToolCallingMixin):
 
         After calling this tool, continue the previous response if it was unfinished and was
         interrupted by calling this tool, otherwise start a new response and ask if the user needs
-        help on anything else. Avoid repeating the same message as the previous response.
+        help on anything else. Avoid repeating the same message in previous responses.
         """
         await params.llm.push_frame(LLMTextFrame("Of course."))
 
