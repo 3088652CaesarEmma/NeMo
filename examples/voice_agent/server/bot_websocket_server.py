@@ -21,6 +21,7 @@ import sys
 from datetime import datetime
 
 from loguru import logger
+from omegaconf import OmegaConf
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import EndTaskFrame
 from pipecat.pipeline.pipeline import Pipeline
@@ -35,13 +36,12 @@ from nemo.agents.voice_agent.pipecat.services.nemo.audio_logger import AudioLogg
 from nemo.agents.voice_agent.pipecat.services.nemo.diar import NemoDiarService
 from nemo.agents.voice_agent.pipecat.services.nemo.llm import get_llm_service_from_config
 from nemo.agents.voice_agent.pipecat.services.nemo.stt import ASR_EOU_MODELS, NemoSTTService
-from nemo.agents.voice_agent.pipecat.services.nemo.tts import KokoroTTSService, NeMoFastPitchHiFiGANTTSService
+from nemo.agents.voice_agent.pipecat.services.nemo.tts import get_tts_service_from_config
 from nemo.agents.voice_agent.pipecat.services.nemo.turn_taking import NeMoTurnTakingService
 from nemo.agents.voice_agent.pipecat.transports.network.websocket_server import (
     WebsocketServerParams,
     WebsocketServerTransport,
 )
-from nemo.agents.voice_agent.pipecat.utils.text.simple_text_aggregator import SimpleSegmentedTextAggregator
 from nemo.agents.voice_agent.pipecat.utils.tool_calling.basic_tools import tool_get_city_weather
 from nemo.agents.voice_agent.pipecat.utils.tool_calling.mixins import register_direct_tools_to_llm
 from nemo.agents.voice_agent.utils.config_manager import ConfigManager
@@ -70,7 +70,7 @@ config_manager = ConfigManager(
 )
 server_config = config_manager.get_server_config()
 
-logger.info(f"Server config: {server_config}")
+logger.info(f"Server config: {OmegaConf.to_container(server_config, resolve=True)}")
 
 # Access configuration parameters from ConfigManager
 SAMPLE_RATE = config_manager.SAMPLE_RATE
@@ -103,11 +103,6 @@ TURN_TAKING_BOT_STOP_DELAY = config_manager.TURN_TAKING_BOT_STOP_DELAY
 
 # TTS configuration
 TTS_TYPE = config_manager.server_config.tts.type
-TTS_MAIN_MODEL_ID = config_manager.TTS_MAIN_MODEL_ID
-TTS_SUB_MODEL_ID = config_manager.TTS_SUB_MODEL_ID
-TTS_DEVICE = config_manager.TTS_DEVICE
-TTS_THINK_TOKENS = config_manager.TTS_THINK_TOKENS
-TTS_EXTRA_SEPARATOR = config_manager.TTS_EXTRA_SEPARATOR
 
 
 def signal_handler(signum, frame):
@@ -208,44 +203,36 @@ async def run_bot_websocket_server(host: str = "0.0.0.0", port: int = 8765):
     )
     logger.info("Turn taking service initialized")
 
-    logger.info("Initializing LLM service...")
-
-    llm = get_llm_service_from_config(server_config.llm)
-    logger.info("LLM service initialized")
-
-    text_aggregator = SimpleSegmentedTextAggregator(punctuation_marks=TTS_EXTRA_SEPARATOR)
-
     if TTS_TYPE == "nemo":
-        tts = NeMoFastPitchHiFiGANTTSService(
-            fastpitch_model=TTS_MAIN_MODEL_ID,
-            hifigan_model=TTS_SUB_MODEL_ID,
-            device=TTS_DEVICE,
-            text_aggregator=text_aggregator,
-            think_tokens=TTS_THINK_TOKENS,
-            audio_logger=audio_logger,
-        )
-    elif TTS_TYPE == "kokoro":
-        tts = KokoroTTSService(
-            voice=TTS_SUB_MODEL_ID,
-            device=TTS_DEVICE,
-            speed=config_manager.server_config.tts.speed,
-            text_aggregator=text_aggregator,
-            think_tokens=TTS_THINK_TOKENS,
-            audio_logger=audio_logger,
-        )
+        tts = get_tts_service_from_config(config_manager.server_config.tts, audio_logger)
     else:
         raise ValueError(f"Invalid TTS type: {TTS_TYPE}")
 
     logger.info("TTS service initialized")
 
-    context = OpenAILLMContext(
-        messages=[
+    # Setup logging again to avoid logger from being overwritten during setting up the pipeline components
+    setup_logging()
+
+    # Put LLM in the end of model initialization to reduce the chance of running out of HBM memory
+    logger.info("Initializing LLM service...")
+    llm = get_llm_service_from_config(server_config.llm)
+    logger.info("LLM service initialized")
+
+    messages = [
+        {
+            "role": SYSTEM_ROLE,
+            "content": SYSTEM_PROMPT,
+        }
+    ]
+    inject_dummy_user_message = server_config.llm.get("inject_dummy_user_message", False)
+    if inject_dummy_user_message:
+        messages.append(
             {
-                "role": SYSTEM_ROLE,
-                "content": SYSTEM_PROMPT,
+                "role": "user",
+                "content": "Hello, who are you?",
             }
-        ],
-    )
+        )
+    context = OpenAILLMContext(messages=messages)
 
     if server_config.llm.get("enable_tool_calling", False):
         logger.info("Tools calling for LLM is enabled by config, registering tools...")
@@ -273,7 +260,7 @@ async def run_bot_websocket_server(host: str = "0.0.0.0", port: int = 8765):
             assistant_context_aggregator.reset()
             user_context_aggregator.set_messages(copy.deepcopy(original_messages))
             assistant_context_aggregator.set_messages(copy.deepcopy(original_messages))
-            text_aggregator.reset()
+            tts.reset()
             if diar is not None:
                 diar.reset()
             logger.info("Conversation context reset successfully")
@@ -368,7 +355,7 @@ async def run_bot_websocket_server(host: str = "0.0.0.0", port: int = 8765):
                 if "ConnectionClosedOK" not in str(e) and "1005" not in str(e):
                     logger.warning(f"Error sending EndTaskFrame: {e}")
                 else:
-                    logger.debug(f"Normal connection closure: {e}")
+                    logger.info(f"Normal connection closure: {e}")
 
     @ws_transport.event_handler("on_session_timeout")
     async def on_session_timeout(transport, client):

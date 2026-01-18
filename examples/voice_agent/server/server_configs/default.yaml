@@ -57,3 +57,5 @@ tts:
   model: "hexgrad/Kokoro-82M"
   model_config: "./server_configs/tts_configs/kokoro_82M.yaml"
   device: "cuda"
+  ignore_strings:  # strings/characters to ignore in TTS
+    - "*"
