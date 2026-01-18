@@ -144,7 +144,7 @@ class SimpleSegmentedTextAggregator(SimpleTextAggregator):
     def __init__(
         self,
         punctuation_marks: str | list[str] = ".,!?;:\n",
-        ignore_marks: str | list[str] = "*",
+        ignore_marks: str | list[str] = ["*", "<interruption>"],
         min_sentence_length: int = 5,
         use_legacy_eos_detection: bool = False,
         **kwargs,
@@ -152,7 +152,7 @@ class SimpleSegmentedTextAggregator(SimpleTextAggregator):
         """
         Args:
             punctuation_marks: The punctuation marks to use for sentence detection.
-            ignore_marks: The marks to ignore in the text.
+            ignore_marks: The strings to ignore in the text.
             min_sentence_length: The minimum length of a sentence to be considered.
             use_legacy_eos_detection: Whether to use the legacy EOS detection from pipecat.
             **kwargs: Additional arguments to pass to the SimpleTextAggregator constructor.
