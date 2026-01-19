@@ -291,7 +291,6 @@ class GreedyBatchedLabelLoopingComputerBase(WithOptionalCudaGraphs, ABC):
             prev_batched_state: previous batched decoding state
             multi_biasing_ids: optional tensor [Batch] with ids of fused biasing models
         """
-        self.cuda_graphs_mode = None
         if self.cuda_graphs_mode is not None and x.device.type == "cuda":
             # disable CUDA graphs if Mixed Precision is used due to incorrect behavior
             with torch.amp.autocast(device_type="cuda", enabled=False):
