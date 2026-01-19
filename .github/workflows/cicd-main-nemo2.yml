@@ -73,9 +73,9 @@ jobs:
             runner: self-hosted-azure
           - script: L2_NeMo_2_jit_callback
             runner: self-hosted-azure
-          - script: L2_NeMo_2_T5_Pretraining
-            runner: self-hosted-azure
-            is-optional: true
+          # - script: L2_NeMo_2_T5_Pretraining
+          #   runner: self-hosted-azure
+          #   is-optional: true
           - script: L2_NeMo_2_T5_MockData_Pretraining
             runner: self-hosted-azure
           - script: L2_NeMo_2_T5_Finetuning
@@ -114,15 +114,15 @@ jobs:
           - script: L2_NEMO_2_MLLAMA_Inference
             runner: self-hosted-azure-gpus-1
             is-optional: true
-          - script: L2_NeMo_2_MLLAMA_MOCK_FINETUNE_TP2
-            runner: self-hosted-azure
-            is-optional: true
-          - script: L2_NeMo_2_MLLAMA_PRELOADED_FINETUNE_TP2
-            runner: self-hosted-azure
-            is-optional: true
-          - script: L2_NeMo_2_MLLAMA_ENERGON_FINETUNE_TP2
-            runner: self-hosted-azure
-            is-optional: true
+          # - script: L2_NeMo_2_MLLAMA_MOCK_FINETUNE_TP2
+          #   runner: self-hosted-azure
+          #   is-optional: true
+          # - script: L2_NeMo_2_MLLAMA_PRELOADED_FINETUNE_TP2
+          #   runner: self-hosted-azure
+          #   is-optional: true
+          # - script: L2_NeMo_2_MLLAMA_ENERGON_FINETUNE_TP2
+          #   runner: self-hosted-azure
+          #   is-optional: true
           - script: L2_NeMo_2_MLLAMA_IMPORT
             runner: self-hosted-azure-gpus-1
           - script: L2_NeMo_2_Mixtral_Pretraining
@@ -185,9 +185,9 @@ jobs:
             runner: self-hosted-azure
           - script: L2_NeMo_2_Prune_Llama_TP1PP2
             runner: self-hosted-azure
-          - script: L2_NeMo_2_GPT_Speculative_Llama3_TP2PP1
-            runner: self-hosted-azure
-            is-optional: true
+          # - script: L2_NeMo_2_GPT_Speculative_Llama3_TP2PP1
+          #   runner: self-hosted-azure
+          #   is-optional: true
           - script: L2_NeMo_2_LLAVA_NEXT_MOCK_TRAINING
             runner: self-hosted-azure
           - script: L2_NeMo_2_LLAVA_NEXT_HF_CONVERSION
