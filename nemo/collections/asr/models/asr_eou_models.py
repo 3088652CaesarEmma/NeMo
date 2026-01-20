@@ -2029,6 +2029,7 @@ class EncDecDualRNNTBPEEOUModel(EncDecRNNTBPEEOUModel):
         wer_num_eou = torch.stack(wer_num_eou_list).sum() if wer_num_eou_list else 0
         wer_denom_eou = torch.stack(wer_denom_eou_list).sum() if wer_denom_eou_list else 0
 
+        tensorboard_logs = {}
         tensorboard_logs[f'{mode}_wer_asr'] = float(wer_num_asr) / wer_denom_asr if wer_denom_asr > 0 else 0
         tensorboard_logs[f'{mode}_wer_eou'] = float(wer_num_eou) / wer_denom_eou if wer_denom_eou > 0 else 0
         tensorboard_logs = {**loss_log, **tensorboard_logs}
