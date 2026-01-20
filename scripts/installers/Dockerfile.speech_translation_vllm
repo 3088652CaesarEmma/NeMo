@@ -14,7 +14,7 @@
 
 # This Dockerfile installs the necessary dependencies for streaming speech translation with vLLM.
 
-ARG BASE_IMAGE=pytorch/pytorch:2.9.0-cuda12.8-cudnn9-runtime
+ARG BASE_IMAGE=nvcr.io/nvidia/pytorch:25.12-py3
 
 FROM ${BASE_IMAGE}
 
@@ -27,6 +27,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && \
   apt-get upgrade -y && \
   apt-get install -y \
+  build-essential \
+  cmake \
   libtool libltdl-dev \
   libsndfile1 sox \
   libfreetype6 \

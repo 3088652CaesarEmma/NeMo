@@ -242,21 +242,24 @@ class ASREOUModelMixin:
         return metrics
 
     def _aggregate_eou_metrics(self, outputs: List[dict], mode: str, is_ctc: bool = False):
-        if f'{mode}_eou_metrics' not in outputs[0] and not is_ctc:
-            return {}
-        if f'{mode}_eou_metrics_ctc' not in outputs[0] and is_ctc:
-            return {}
-
         # Aggregate EOU/EOB metrics
-        eou_metrics = []  # type: List[EOUResult]
-        eob_metrics = []  # type: List[EOUResult]
+        eou_metrics: List[EOUResult] = []
+        eob_metrics: List[EOUResult] = []
         for x in outputs:
             if is_ctc:
-                eou_metrics.extend(x[f'{mode}_eou_metrics_ctc'])
-                eob_metrics.extend(x[f'{mode}_eob_metrics_ctc'])
+                if f'{mode}_eou_metrics_ctc' in x:
+                    eou_metrics.extend(x[f'{mode}_eou_metrics_ctc'])
+                if f'{mode}_eob_metrics_ctc' in x:
+                    eob_metrics.extend(x[f'{mode}_eob_metrics_ctc'])
             else:
-                eou_metrics.extend(x[f'{mode}_eou_metrics'])
-                eob_metrics.extend(x[f'{mode}_eob_metrics'])
+                if f'{mode}_eou_metrics' in x:
+                    eou_metrics.extend(x[f'{mode}_eou_metrics'])
+                if f'{mode}_eob_metrics' in x:
+                    eob_metrics.extend(x[f'{mode}_eob_metrics'])
+
+        if len(eou_metrics) == 0 or len(eob_metrics) == 0:
+            return {}
+
         num_eou_utterances = sum([x.num_utterances for x in eou_metrics])
         eou_latency = flatten_nested_list([x.latency for x in eou_metrics])
         eou_early_cutoff = flatten_nested_list([x.early_cutoff for x in eou_metrics])
@@ -1821,7 +1824,7 @@ class EncDecDualRNNTBPEEOUModel(EncDecRNNTBPEEOUModel):
 
         if has_eou_audios:
             eou_tensorboard_logs = self.eou_validation_pass(
-                encoded_eou_signals, encoded_eou_lengths, eou_text_tokens, eou_text_token_lengths
+                batch, encoded_eou_signals, encoded_eou_lengths, eou_text_tokens, eou_text_token_lengths
             )
 
         tensorboard_logs = {**asr_tensorboard_logs, **eou_tensorboard_logs}
@@ -1997,8 +2000,12 @@ class EncDecDualRNNTBPEEOUModel(EncDecRNNTBPEEOUModel):
 
         # Aggregate WER metrics
         if self.compute_eval_loss:
-            loss_mean_asr = torch.stack([x[f'{mode}_loss_asr'] for x in outputs]).mean()
-            loss_mean_eou = torch.stack([x[f'{mode}_loss_eou'] for x in outputs]).mean()
+            asr_loss_list = [x.get(f'{mode}_loss_asr', None) for x in outputs]
+            eou_loss_list = [x.get(f'{mode}_loss_eou', None) for x in outputs]
+            asr_loss_list = [loss for loss in asr_loss_list if loss is not None]
+            eou_loss_list = [loss for loss in eou_loss_list if loss is not None]
+            loss_mean_asr = torch.stack(asr_loss_list).mean() if asr_loss_list else 0
+            loss_mean_eou = torch.stack(eou_loss_list).mean() if eou_loss_list else 0
             loss_mean = self.asr_loss_weight * loss_mean_asr + self.eou_loss_weight * loss_mean_eou
             loss_log = {
                 f'{mode}_loss_asr': loss_mean_asr,
@@ -2008,14 +2015,22 @@ class EncDecDualRNNTBPEEOUModel(EncDecRNNTBPEEOUModel):
         else:
             loss_log = {}
 
-        wer_num_asr = torch.stack([x[f'{mode}_wer_num_asr'] for x in outputs]).sum()
-        wer_denom_asr = torch.stack([x[f'{mode}_wer_denom_asr'] for x in outputs]).sum()
-        wer_num_eou = torch.stack([x[f'{mode}_wer_num_eou'] for x in outputs]).sum()
-        wer_denom_eou = torch.stack([x[f'{mode}_wer_denom_eou'] for x in outputs]).sum()
+        wer_num_asr_list = [x.get(f'{mode}_wer_num_asr', None) for x in outputs]
+        wer_num_asr_list = [wer_num for wer_num in wer_num_asr_list if wer_num is not None]
+        wer_denom_asr_list = [x.get(f'{mode}_wer_denom_asr', None) for x in outputs]
+        wer_denom_asr_list = [wer_denom for wer_denom in wer_denom_asr_list if wer_denom is not None]
+        wer_num_asr = torch.stack(wer_num_asr_list).sum() if wer_num_asr_list else 0
+        wer_denom_asr = torch.stack(wer_denom_asr_list).sum() if wer_denom_asr_list else 0
 
-        tensorboard_logs[f'{mode}_wer_asr'] = wer_num_asr.float() / wer_denom_asr
-        tensorboard_logs[f'{mode}_wer_eou'] = wer_num_eou.float() / wer_denom_eou
+        wer_num_eou_list = [x.get(f'{mode}_wer_num_eou', None) for x in outputs]
+        wer_num_eou_list = [wer_num for wer_num in wer_num_eou_list if wer_num is not None]
+        wer_denom_eou_list = [x.get(f'{mode}_wer_denom_eou', None) for x in outputs]
+        wer_denom_eou_list = [wer_denom for wer_denom in wer_denom_eou_list if wer_denom is not None]
+        wer_num_eou = torch.stack(wer_num_eou_list).sum() if wer_num_eou_list else 0
+        wer_denom_eou = torch.stack(wer_denom_eou_list).sum() if wer_denom_eou_list else 0
 
+        tensorboard_logs[f'{mode}_wer_asr'] = float(wer_num_asr) / wer_denom_asr if wer_denom_asr > 0 else 0
+        tensorboard_logs[f'{mode}_wer_eou'] = float(wer_num_eou) / wer_denom_eou if wer_denom_eou > 0 else 0
         tensorboard_logs = {**loss_log, **tensorboard_logs}
 
         if self.cfg.get('calculate_eou_metrics', True):
