@@ -491,6 +491,7 @@ class KokoroTTSService(BaseNemoTTSService):
         device: str = "cuda",
         sample_rate: int = 24000,
         speed: float = 1.0,
+        download_all: bool = True,
         **kwargs,
     ):
         self._lang_code = lang_code
@@ -502,6 +503,8 @@ class KokoroTTSService(BaseNemoTTSService):
         self._gender = 'female' if voice[1] == 'f' else 'male'
         self._original_gender = self._gender
         self._original_lang_code = self._lang_code
+        if download_all:
+            self._download_all_models(lang_code=["a", "b"])
         super().__init__(model=model, device=device, sample_rate=sample_rate, **kwargs)
         self.setup_tool_calling()
 
@@ -520,6 +523,15 @@ class KokoroTTSService(BaseNemoTTSService):
         logger.info(f"Loading Kokoro TTS model with model={self._model_name}, lang_code={lang_code}, voice={voice}")
         pipeline = KPipeline(lang_code=lang_code, device=self._device, repo_id=self._model_name)
         return pipeline
+
+    def _download_all_models(self, lang_code: List[str] = ['a', 'b']):
+        """Download all models for Kokoro TTS service."""
+        logger.info(f"Downloading all models for Kokoro TTS service with lang_code={lang_code}")
+        from kokoro import KPipeline
+
+        for lang in lang_code:
+            _ = KPipeline(lang_code=lang, device=self._device, repo_id=self._model_name)
+        torch.cuda.empty_cache()
 
     def _generate_audio(self, text: str) -> Iterator[np.ndarray]:
         """Generate audio using the Kokoro pipeline.
