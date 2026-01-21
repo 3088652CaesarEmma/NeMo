@@ -166,7 +166,7 @@ class LabelLoopingState:
             init_length=self.max_time * max_symbols,
             device=self.device,
             float_dtype=float_dtype,
-            is_with_durations=include_duration,
+            with_durations=include_duration,
         )
         if preserve_alignments or preserve_frame_confidence:
             self.alignments = rnnt_utils.BatchedAlignments(
@@ -294,7 +294,7 @@ class GreedyBatchedTDTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBase
         self.full_graph = None
         self.separate_graphs = None
 
-    def _get_frame_confidence(self, logits: torch.Tensor, num_durations: int) -> Optional[torch.Tensor]:
+    def _get_step_confidence(self, logits: torch.Tensor, num_durations: int) -> Optional[torch.Tensor]:
         float_dtype = logits.dtype
         return (
             torch.stack(
@@ -349,7 +349,7 @@ class GreedyBatchedTDTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBase
             init_length=max_time * self.max_symbols if self.max_symbols is not None else max_time,
             device=device,
             float_dtype=float_dtype,
-            is_with_durations=self.include_duration,
+            with_durations=self.include_duration,
         )
         # init alignments if necessary
         use_alignments = self.preserve_alignments or self.preserve_frame_confidence
@@ -454,7 +454,7 @@ class GreedyBatchedTDTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBase
                     time_indices=time_indices_current_labels,
                     logits=logits if self.preserve_alignments else None,
                     labels=labels if self.preserve_alignments else None,
-                    confidence=self._get_frame_confidence(logits=logits, num_durations=num_durations),
+                    confidence=self._get_step_confidence(logits=logits, num_durations=num_durations),
                 )
 
             # advance_mask is a mask for current batch for searching non-blank labels;
@@ -505,7 +505,7 @@ class GreedyBatchedTDTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBase
                         time_indices=time_indices_current_labels,
                         logits=logits if self.preserve_alignments else None,
                         labels=more_labels if self.preserve_alignments else None,
-                        confidence=self._get_frame_confidence(logits=logits, num_durations=num_durations),
+                        confidence=self._get_step_confidence(logits=logits, num_durations=num_durations),
                     )
 
                 blank_mask = labels == self._blank_index
@@ -842,7 +842,7 @@ class GreedyBatchedTDTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBase
         # to avoid any manipulations with allocated memory outside the decoder
         return (
             self.state.batched_hyps.clone(),
-            self.state.alignments.clone() if self.preserve_alignments else None,
+            self.state.alignments.clone() if self.state.alignments is not None else None,
             decoding_state,
         )
 
@@ -1201,9 +1201,7 @@ class GreedyBatchedTDTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBase
                 time_indices=self.state.time_indices_current_labels,
                 logits=logits if self.preserve_alignments else None,
                 labels=self.state.labels if self.preserve_alignments else None,
-                confidence=self._get_frame_confidence(
-                    logits=logits, num_durations=self.state.model_durations.shape[0]
-                ),
+                confidence=self._get_step_confidence(logits=logits, num_durations=self.state.model_durations.shape[0]),
             )
 
         # advance_mask is a mask for current batch for searching non-blank labels;
@@ -1266,9 +1264,7 @@ class GreedyBatchedTDTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBase
                 time_indices=self.state.time_indices_current_labels,
                 logits=logits if self.preserve_alignments else None,
                 labels=more_labels if self.preserve_alignments else None,
-                confidence=self._get_frame_confidence(
-                    logits=logits, num_durations=self.state.model_durations.shape[0]
-                ),
+                confidence=self._get_step_confidence(logits=logits, num_durations=self.state.model_durations.shape[0]),
             )
 
         # blank_mask = self.labels == self._blank_index
