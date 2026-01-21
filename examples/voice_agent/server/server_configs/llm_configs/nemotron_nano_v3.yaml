@@ -39,6 +39,7 @@ generation_kwargs:
 ##############################
 api_key: "EMPTY"
 base_url: "http://vllm-server:8000/v1"  
+# base_url: "http://localhost:8000/v1"  
 # Set `start_vllm_on_init` to automatically start vllm server if it's not manually started yet
 start_vllm_on_init: false
 # Specifying vllm_server_params with the parameters you want to pass to the vllm server command `vllm serve $model $vllm_server_params`
