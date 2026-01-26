@@ -480,6 +480,8 @@ class KokoroTTSService(BaseNemoTTSService):
         voice: Voice to use (default: 'af_heart')
         device: Device to run on (default: 'cuda')
         sample_rate: Audio sample rate in Hz (default: 24000 for Kokoro)
+        download_all: Download all models for different languages (default: True)
+        cache_models: Cache models on GPU for faster switching between languages (default: True)
         **kwargs: Additional arguments passed to BaseNemoTTSService
     """
 
@@ -492,6 +494,7 @@ class KokoroTTSService(BaseNemoTTSService):
         sample_rate: int = 24000,
         speed: float = 1.0,
         download_all: bool = True,
+        cache_models: bool = True,
         **kwargs,
     ):
         self._lang_code = lang_code
@@ -504,7 +507,9 @@ class KokoroTTSService(BaseNemoTTSService):
         self._original_gender = self._gender
         self._original_lang_code = self._lang_code
         if download_all:
-            self._download_all_models(lang_code=["a", "b"])
+            self._model_maps = self._download_all_models(
+                lang_code=["a", "b"], device=device, repo_id=model, cache_models=True
+            )
         super().__init__(model=model, device=device, sample_rate=sample_rate, **kwargs)
         self.setup_tool_calling()
 
@@ -514,24 +519,35 @@ class KokoroTTSService(BaseNemoTTSService):
             from kokoro import KPipeline
         except ImportError:
             raise ImportError(
-                "kokoro package is required for KokoroTTSService. " "Install it with: pip install kokoro>=0.9.2"
+                "kokoro package is required for KokoroTTSService. Install it with: `pip install kokoro>=0.9.2`"
             )
         if lang_code is None:
             lang_code = self._lang_code
         if voice is None:
             voice = self._voice
         logger.info(f"Loading Kokoro TTS model with model={self._model_name}, lang_code={lang_code}, voice={voice}")
-        pipeline = KPipeline(lang_code=lang_code, device=self._device, repo_id=self._model_name)
+        if lang_code in self._model_maps:
+            pipeline = self._model_maps[lang_code]
+        else:
+            pipeline = KPipeline(lang_code=lang_code, device=self._device, repo_id=self._model_name)
+            self._model_maps[lang_code] = pipeline
         return pipeline
 
-    def _download_all_models(self, lang_code: List[str] = ['a', 'b']):
+    def _download_all_models(
+        self, lang_code: List[str] = ['a', 'b'], device="cuda", repo_id="hexgrad/Kokoro-82M", cache=True
+    ):
         """Download all models for Kokoro TTS service."""
         logger.info(f"Downloading all models for Kokoro TTS service with lang_code={lang_code}")
         from kokoro import KPipeline
 
+        model_maps = {}
+
         for lang in lang_code:
-            _ = KPipeline(lang_code=lang, device=self._device, repo_id=self._model_name)
+            pipeline = KPipeline(lang_code=lang, device=device, repo_id=repo_id)
+            if cache:
+                model_maps[lang] = pipeline
         torch.cuda.empty_cache()
+        return model_maps
 
     def _generate_audio(self, text: str) -> Iterator[np.ndarray]:
         """Generate audio using the Kokoro pipeline.
