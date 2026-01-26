@@ -224,7 +224,7 @@ class GreedyBatchedRNNTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBas
             blank_index: index of blank symbol
             max_symbols_per_step: max symbols to emit on each step (to avoid infinite looping)
             preserve_alignments: if alignments are needed
-            preserve_step_confidence: if frame confidence is needed
+            preserve_step_confidence: if step confidence is needed
             confidence_method_cfg: config for the confidence
             fusion_models: list of fusion models (ngram_lm_model and boosting_tree_model)
             fusion_models_alpha: list of fusion model weights (ngram_lm_alpha and boosting_tree_alpha)
@@ -279,11 +279,9 @@ class GreedyBatchedRNNTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBas
 
     def _get_step_confidence(self, logits: torch.Tensor) -> Optional[torch.Tensor]:
         float_dtype = logits.dtype
-        return (
-            self._get_confidence_tensor(F.log_softmax(logits, dim=-1)).to(dtype=float_dtype)
-            if (self.preserve_step_confidence_with_blank or self.preserve_step_confidence_no_blank)
-            else None
-        )
+        if (not self.preserve_step_confidence_with_blank) and (not self.preserve_step_confidence_no_blank):
+            return None
+        return self._get_confidence_tensor(F.log_softmax(logits, dim=-1)).to(dtype=float_dtype)
 
     def torch_impl(
         self,
@@ -321,12 +319,11 @@ class GreedyBatchedRNNTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBas
             with_step_confidence=self.preserve_step_confidence_no_blank,
         )
         # init alignments if necessary
-        # always use alignments variable - for torch.jit adaptation, but keep it as minimal as possible
         if self.use_alignments:
             alignments = rnnt_utils.BatchedAlignments(
                 batch_size=batch_size,
                 logits_dim=self.joint.num_classes_with_blank,
-                init_length=max_time * 2,
+                init_length=max_time * 2,  # blank for each timestep + text tokens
                 device=device,
                 float_dtype=float_dtype,
                 store_alignments=self.preserve_logits,
@@ -466,7 +463,7 @@ class GreedyBatchedRNNTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBas
                         active_mask=advance_mask,
                         time_indices=time_indices_current_labels,
                         logits=logits if self.preserve_logits else None,
-                        labels=labels,
+                        labels=more_labels,
                         confidence=(
                             self._get_step_confidence(logits=logits)
                             if self.preserve_step_confidence_with_blank

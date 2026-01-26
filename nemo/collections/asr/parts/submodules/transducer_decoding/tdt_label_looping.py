@@ -216,7 +216,8 @@ class GreedyBatchedTDTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBase
         durations: list[int] | ListConfig[int],
         max_symbols_per_step: Optional[int] = None,
         preserve_alignments=False,
-        preserve_frame_confidence=False,
+        preserve_step_confidence=False,
+        exclude_blank_from_confidence=False,
         include_duration: bool = False,
         include_duration_confidence: bool = False,
         confidence_method_cfg: Optional[DictConfig] = None,
@@ -234,7 +235,7 @@ class GreedyBatchedTDTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBase
             durations: list of TDT durations, e.g., [0, 1, 2, 4, 8]
             max_symbols_per_step: max symbols to emit on each step (to avoid infinite looping)
             preserve_alignments: if alignments are needed
-            preserve_frame_confidence: if frame confidence is needed
+            preserve_step_confidence: if step confidence is needed
             include_duration: if predicted token durations are needed to be added to the Hypothesis object
             include_duration_confidence: if duration confidence is needed to be added to the frame confidence
             confidence_method_cfg: config for the confidence
@@ -249,9 +250,10 @@ class GreedyBatchedTDTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBase
         self.durations = torch.tensor(list(durations), device="cpu").to(torch.long)
         self._blank_index = blank_index
         self.max_symbols = max_symbols_per_step
-        self.preserve_alignments = preserve_alignments
-        self.preserve_frame_confidence = preserve_frame_confidence
-        self.preserve_alignments = preserve_alignments or preserve_frame_confidence
+        self.preserve_logits = preserve_alignments
+        self.preserve_step_confidence_with_blank = preserve_step_confidence and not exclude_blank_from_confidence
+        self.preserve_step_confidence_no_blank = preserve_step_confidence and exclude_blank_from_confidence
+        self.use_alignments = self.preserve_logits or self.preserve_step_confidence_with_blank
         self.include_duration = include_duration
         self.include_duration_confidence = include_duration_confidence
         self._SOS = self._blank_index
@@ -295,8 +297,10 @@ class GreedyBatchedTDTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBase
 
     def _get_step_confidence(self, logits: torch.Tensor, num_durations: int) -> Optional[torch.Tensor]:
         float_dtype = logits.dtype
-        return (
-            torch.stack(
+        if (not self.preserve_step_confidence_with_blank) and (not self.preserve_step_confidence_no_blank):
+            return None
+        if self.include_duration_confidence:
+            return torch.stack(
                 (
                     self._get_confidence_tensor(F.log_softmax(logits[:, :-num_durations], dim=-1)).to(
                         dtype=float_dtype
@@ -307,13 +311,7 @@ class GreedyBatchedTDTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBase
                 ),
                 dim=-1,
             )
-            if self.include_duration_confidence
-            else (
-                self._get_confidence_tensor(F.log_softmax(logits[:, :-num_durations], dim=-1)).to(dtype=float_dtype)
-                if self.preserve_frame_confidence
-                else None
-            )
-        )
+        return self._get_confidence_tensor(F.log_softmax(logits[:, :-num_durations], dim=-1)).to(dtype=float_dtype)
 
     def torch_impl(
         self,
@@ -334,7 +332,7 @@ class GreedyBatchedTDTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBase
         batch_size, max_time, _unused = encoder_output.shape
         device = encoder_output.device
         self._move_fusion_models_to_device(device=device)
-        if self.biasing_multi_model is not None and multi_biasing_ids is None:
+        if self.per_stream_biasing_enabled and multi_biasing_ids is None:
             multi_biasing_ids = torch.full([batch_size], fill_value=-1, dtype=torch.long, device=device)
 
         # do not recalculate joint projection, project only once
@@ -349,20 +347,23 @@ class GreedyBatchedTDTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBase
             device=device,
             float_dtype=float_dtype,
             with_durations=self.include_duration,
-        )
-        # init alignments if necessary
-        use_alignments = self.preserve_alignments or self.preserve_frame_confidence
-        # always use alignments variable - for torch.jit adaptation, but keep it as minimal as possible
-        alignments = rnnt_utils.BatchedAlignments(
-            batch_size=batch_size,
-            logits_dim=self.joint.num_classes_with_blank,
-            init_length=max_time * 2 if use_alignments else 1,  # blank for each timestep + text tokens
-            device=device,
-            float_dtype=float_dtype,
-            store_alignments=self.preserve_alignments,
-            store_frame_confidence=self.preserve_frame_confidence,
+            with_step_confidence=self.preserve_step_confidence_no_blank,
             with_duration_confidence=self.include_duration_confidence,
         )
+        # init alignments if necessary
+        if self.use_alignments:
+            alignments = rnnt_utils.BatchedAlignments(
+                batch_size=batch_size,
+                logits_dim=self.joint.num_classes_with_blank,
+                init_length=max_time * 2,  # blank for each timestep + text tokens
+                device=device,
+                float_dtype=float_dtype,
+                store_alignments=self.preserve_logits,
+                store_frame_confidence=self.preserve_step_confidence_with_blank,
+                with_duration_confidence=self.include_duration_confidence,
+            )
+        else:
+            alignments = None
 
         # durations
         model_durations = self.durations.to(device, non_blocking=True)
@@ -423,7 +424,7 @@ class GreedyBatchedTDTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBase
             scores, labels = logits[:, :-num_durations].max(dim=-1)
 
             if self.has_fusion_models():
-                fusion_scores_combined, fusion_states_candidates_list = self.advance_fusion_models(
+                fusion_scores_list, fusion_states_candidates_list = self.advance_fusion_models(
                     fusion_states_list=fusion_states_list,
                     multi_biasing_ids=multi_biasing_ids,
                     float_dtype=float_dtype,
@@ -440,19 +441,28 @@ class GreedyBatchedTDTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBase
             jump_durations_indices = logits[:, -num_durations:].argmax(dim=-1)
             durations = model_durations[jump_durations_indices]
 
+            if self.preserve_step_confidence_no_blank:
+                non_blank_step_logits = logits.clone()  # [B, V]
+            else:
+                non_blank_step_logits = None
+
             # search for non-blank labels using joint, advancing time indices for blank labels
             # checking max_symbols is not needed, since we already forced advancing time indices for such cases
             blank_mask = labels == self._blank_index
             # for blank labels force duration >= 1
             durations.masked_fill_(torch.logical_and(durations == 0, blank_mask), 1)
             time_indices_current_labels.copy_(time_indices)
-            if use_alignments:
+            if self.use_alignments:
                 alignments.add_results_masked_(
                     active_mask=active_mask,
                     time_indices=time_indices_current_labels,
-                    logits=logits if self.preserve_alignments else None,
-                    labels=labels if self.preserve_alignments else None,
-                    confidence=self._get_step_confidence(logits=logits, num_durations=num_durations),
+                    logits=logits if self.preserve_logits else None,
+                    labels=labels,
+                    confidence=(
+                        self._get_step_confidence(logits=logits, num_durations=num_durations)
+                        if self.preserve_step_confidence_with_blank
+                        else None
+                    ),
                 )
 
             # advance_mask is a mask for current batch for searching non-blank labels;
@@ -487,6 +497,10 @@ class GreedyBatchedTDTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBase
                     # preserve "blank" / "non-blank" category
                     torch.where(more_labels == self._blank_index, more_labels, more_labels_w_fusion, out=more_labels)
 
+                if self.preserve_step_confidence_no_blank:
+                    # replace logits with current step logits
+                    non_blank_step_logits = torch.where(advance_mask[:, None], logits, non_blank_step_logits)
+
                 # same as: labels[advance_mask] = more_labels[advance_mask], but non-blocking
                 torch.where(advance_mask, more_labels, labels, out=labels)
                 # same as: scores[advance_mask] = more_scores[advance_mask], but non-blocking
@@ -494,13 +508,17 @@ class GreedyBatchedTDTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBase
                 jump_durations_indices = logits[:, -num_durations:].argmax(dim=-1)
                 durations = model_durations[jump_durations_indices]
 
-                if use_alignments:
+                if self.use_alignments:
                     alignments.add_results_masked_(
                         active_mask=advance_mask,
                         time_indices=time_indices_current_labels,
-                        logits=logits if self.preserve_alignments else None,
-                        labels=more_labels if self.preserve_alignments else None,
-                        confidence=self._get_step_confidence(logits=logits, num_durations=num_durations),
+                        logits=logits if self.preserve_logits else None,
+                        labels=more_labels,
+                        confidence=(
+                            self._get_step_confidence(logits=logits, num_durations=num_durations)
+                            if self.preserve_step_confidence_with_blank
+                            else None
+                        ),
                     )
 
                 blank_mask = labels == self._blank_index
@@ -516,7 +534,12 @@ class GreedyBatchedTDTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBase
             # For RNN-T, if we found a non-blank label, the utterance is active (need to find blank to stop decoding)
             # For TDT, we could find a non-blank label, add duration, and the utterance may become inactive
             found_labels_mask = torch.logical_and(active_mask_prev, labels != self._blank_index)
-            # store hypotheses
+
+            # stage 2: store hypotheses
+            if self.preserve_step_confidence_no_blank:
+                step_confidence = self._get_step_confidence(logits=non_blank_step_logits, num_durations=num_durations)
+            else:
+                step_confidence = None
             if self.max_symbols is not None:
                 # pre-allocated memory, no need for checks
                 batched_hyps.add_results_masked_no_checks_(
@@ -524,6 +547,7 @@ class GreedyBatchedTDTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBase
                     labels=labels,
                     time_indices=time_indices_current_labels,
                     scores=scores,
+                    confidence=step_confidence,
                     token_durations=durations if self.include_duration else None,
                 )
             else:
@@ -533,6 +557,7 @@ class GreedyBatchedTDTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBase
                     labels=labels,
                     time_indices=time_indices_current_labels,
                     scores=scores,
+                    confidence=step_confidence,
                     token_durations=durations if self.include_duration else None,
                 )
 
@@ -588,7 +613,7 @@ class GreedyBatchedTDTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBase
         # fix timestamps for iterative decoding
         if prev_batched_state is not None:
             batched_hyps.timestamps += prev_batched_state.decoded_lengths.unsqueeze(1)
-            if use_alignments:
+            if self.use_alignments:
                 alignments.timestamps += prev_batched_state.decoded_lengths.unsqueeze(1)
         # NB: last labels can not exist (nothing decoded on this step).
         # return the last labels from the previous state in this case
@@ -609,9 +634,7 @@ class GreedyBatchedTDTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBase
             fusion_states_list=fusion_states_list,
             time_jumps=time_indices - encoder_output_length,
         )
-        if use_alignments:
-            return batched_hyps, alignments, decoding_state
-        return batched_hyps, None, decoding_state
+        return batched_hyps, alignments, decoding_state
 
     def _get_decoding_state_item_after_sos(self, device: torch.device | str) -> LabelLoopingStateItem:
         """Get decoding state item after <SOS> symbol, used for initialization from empty hypotheses."""
@@ -769,7 +792,7 @@ class GreedyBatchedTDTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBase
         self.state.encoder_output_length[: encoder_output_length.shape[0]].copy_(encoder_output_length)
         # set length to zero for elements outside the current batch
         self.state.encoder_output_length[current_batch_size:].fill_(0)
-        if self.biasing_multi_model is not None:
+        if self.per_stream_biasing_enabled:
             if multi_biasing_ids is None:
                 multi_biasing_ids = torch.full(
                     [encoder_output_length.shape[0]], fill_value=-1, dtype=torch.long, device=device
