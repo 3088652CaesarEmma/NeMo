@@ -135,7 +135,7 @@ dependencies:
     - fasteners==0.20
     - fastrlock==0.8.3
     - fiddle==0.3.0
-    - filelock==3.19.1
+    - filelock==3.20.3
     - flashinfer-python==0.5.3
     - flask==3.1.2
     - flask-restful==0.3.10
@@ -309,7 +309,7 @@ dependencies:
     - pfzy==0.3.4
     - phonemizer-fork==3.3.2
     - pillow==11.3.0
-    - pipecat-ai==0.0.93
+    - pipecat-ai==0.0.98
     - platformdirs==4.4.0
     - pluggy==1.6.0
     - pooch==1.8.2

@@ -13,10 +13,11 @@
 # limitations under the License.
 
 import re
-from typing import Optional
+from typing import AsyncIterator, Optional
 
 from loguru import logger
 from pipecat.utils.string import match_endofsentence
+from pipecat.utils.text.base_text_aggregator import Aggregation, AggregationType
 from pipecat.utils.text.simple_text_aggregator import SimpleTextAggregator
 
 
@@ -201,7 +202,7 @@ class SimpleSegmentedTextAggregator(SimpleTextAggregator):
                 return idx + 1 + offset
         return None
 
-    async def aggregate(self, text: str) -> Optional[str]:
+    async def aggregate(self, text: str) -> AsyncIterator[Aggregation]:
         """Aggregate the input text and return the first complete sentence in the text.
 
         Args:
@@ -234,5 +235,4 @@ class SimpleSegmentedTextAggregator(SimpleTextAggregator):
         if result:
             for ignore_mark in self._ignore_marks:
                 result = result.replace(ignore_mark, "")
-
-        return result
+            yield Aggregation(text=result, type=AggregationType.SENTENCE)
