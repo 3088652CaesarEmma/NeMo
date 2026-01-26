@@ -610,6 +610,7 @@ class GreedyBatchedRNNTInfer(_GreedyRNNTInfer, WithOptionalCudaGraphs):
         max_symbols_per_step: Optional[int] = None,
         preserve_alignments: bool = False,
         preserve_frame_confidence: bool = False,
+        exclude_blank_from_confidence: bool = False,
         confidence_method_cfg: Optional[DictConfig] = None,
         loop_labels: bool = True,
         use_cuda_graph_decoder: bool = True,
@@ -629,6 +630,7 @@ class GreedyBatchedRNNTInfer(_GreedyRNNTInfer, WithOptionalCudaGraphs):
 
         self.use_cuda_graph_decoder = use_cuda_graph_decoder
         self.loop_labels = loop_labels
+        self.exclude_blank_from_confidence = exclude_blank_from_confidence
 
         # Depending on availability of `blank_as_pad` support
         # switch between more efficient batch decoding technique
@@ -643,7 +645,8 @@ class GreedyBatchedRNNTInfer(_GreedyRNNTInfer, WithOptionalCudaGraphs):
                     blank_index=self._blank_index,
                     max_symbols_per_step=self.max_symbols,
                     preserve_alignments=preserve_alignments,
-                    preserve_frame_confidence=preserve_frame_confidence,
+                    preserve_step_confidence=preserve_frame_confidence,
+                    exclude_blank_from_confidence=self.exclude_blank_from_confidence,
                     confidence_method_cfg=confidence_method_cfg,
                     allow_cuda_graphs=self.use_cuda_graph_decoder,
                     fusion_models=fusion_models,

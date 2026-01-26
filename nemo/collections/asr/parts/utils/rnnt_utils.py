@@ -111,6 +111,7 @@ class Hypothesis:
     token_duration: Optional[torch.Tensor] = None
     last_frame: Optional[int] = None
     biasing_cfg: BiasingRequestItemConfig | None = None
+    non_blank_step_confidence_precomputed: list[float] | None = None
 
     @property
     def non_blank_frame_confidence(self) -> List[float]:
@@ -119,6 +120,9 @@ class Hypothesis:
         Returns:
             List with confidence scores. The length of the list is the same as `timestamp`.
         """
+        if self.non_blank_step_confidence_precomputed is not None:
+            return self.non_blank_step_confidence_precomputed
+
         non_blank_frame_confidence = []
         # self.timestamp can be a dict for RNNT
         timestamp = self.timestamp['timestep'] if isinstance(self.timestamp, dict) else self.timestamp
@@ -827,21 +831,24 @@ def batched_hyps_to_hypotheses(
     num_hyps = batched_hyps.scores.shape[0] if batch_size is None else batch_size
     # NB: clone is not necessary anymore, since CUDA graph decoder always returns an independent copy
     scores = batched_hyps.scores.cpu()
-    current_lengths = batched_hyps.current_lengths.cpu()
+    current_lengths = batched_hyps.current_lengths.cpu().tolist()
     transcript = batched_hyps.transcript.cpu()
     timestamps = batched_hyps.timestamps.cpu()
+    token_durations = batched_hyps.token_durations.cpu() if batched_hyps.with_durations else None
+    step_confidence = batched_hyps.step_confidence.cpu() if batched_hyps.with_step_confidence else None
     hypotheses = [
         Hypothesis(
             score=scores[i].item(),
             y_sequence=transcript[i, : current_lengths[i]],
-            timestamp=timestamps[i, : batched_hyps.current_lengths[i]],
+            timestamp=timestamps[i, : current_lengths[i]],
             token_duration=(
-                batched_hyps.token_durations[i, : batched_hyps.current_lengths[i]]
-                if batched_hyps.with_durations
-                else torch.empty(0)
+                token_durations[i, : current_lengths[i]] if batched_hyps.with_durations else torch.empty(0)
             ),
             alignments=None,
             dec_state=None,
+            non_blank_step_confidence_precomputed=(
+                step_confidence[i, : current_lengths[i]].tolist() if step_confidence is not None else None
+            ),
         )
         for i in range(num_hyps)
     ]
