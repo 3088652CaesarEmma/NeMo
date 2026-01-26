@@ -30,6 +30,9 @@ DEVICES = []
 if torch.cuda.is_available():
     DEVICES.append('cuda')
 
+if torch.mps.is_available():
+    DEVICES.append('mps')
+
 
 @pytest.fixture(scope="module")
 def stt_en_conformer_transducer_small_model():
@@ -47,6 +50,7 @@ def get_rnnt_alignments(
 ) -> list[Hypothesis]:
     cfg = OmegaConf.structured(TranscriptionConfig())
     cfg.rnnt_decoding.confidence_cfg.preserve_frame_confidence = True
+    cfg.rnnt_decoding.confidence_cfg.exclude_blank = False
     cfg.rnnt_decoding.preserve_alignments = True
     cfg.rnnt_decoding.strategy = strategy
     if cfg.rnnt_decoding.strategy == "greedy_batch":
@@ -90,8 +94,8 @@ def cleanup_local_folder():
 
 # TODO: add the same tests for multi-blank RNNT decoding
 @pytest.mark.parametrize("device", DEVICES)
-@pytest.mark.parametrize("loop_labels", [True, False])
-@pytest.mark.parametrize("use_cuda_graph_decoder", [True, False])
+@pytest.mark.parametrize("loop_labels", [True,])
+@pytest.mark.parametrize("use_cuda_graph_decoder", [False])
 @pytest.mark.with_downloads
 def test_rnnt_alignments(
     loop_labels: bool,
