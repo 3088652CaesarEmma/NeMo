@@ -508,7 +508,7 @@ class KokoroTTSService(BaseNemoTTSService):
         self._original_lang_code = self._lang_code
         if download_all:
             self._model_maps = self._download_all_models(
-                lang_code=["a", "b"], device=device, repo_id=model, cache_models=True
+                lang_code=["a", "b"], device=device, repo_id=model, cache_models=cache_models
             )
         super().__init__(model=model, device=device, sample_rate=sample_rate, **kwargs)
         self.setup_tool_calling()
@@ -534,7 +534,7 @@ class KokoroTTSService(BaseNemoTTSService):
         return pipeline
 
     def _download_all_models(
-        self, lang_code: List[str] = ['a', 'b'], device="cuda", repo_id="hexgrad/Kokoro-82M", cache=True
+        self, lang_code: List[str] = ['a', 'b'], device="cuda", repo_id="hexgrad/Kokoro-82M", cache_models=True
     ):
         """Download all models for Kokoro TTS service."""
         logger.info(f"Downloading all models for Kokoro TTS service with lang_code={lang_code}")
@@ -544,7 +544,7 @@ class KokoroTTSService(BaseNemoTTSService):
 
         for lang in lang_code:
             pipeline = KPipeline(lang_code=lang, device=device, repo_id=repo_id)
-            if cache:
+            if cache_models:
                 model_maps[lang] = pipeline
         torch.cuda.empty_cache()
         return model_maps
@@ -858,4 +858,4 @@ def get_tts_service_from_config(config: DictConfig, audio_logger: Optional[Audio
             audio_logger=audio_logger,
         )
     else:
-        raise ValueError(f"Invalid model: {model}, only 'fastpitch-hifigan' and 'magpie' are supported")
+        raise ValueError(f"Invalid model: {model}, only 'fastpitch-hifigan', 'magpie' and 'kokoro' are supported")
