@@ -34,12 +34,15 @@ As of now, we only support English input and output, but more languages will be 
 
 
 ## 💡 Upcoming Next
+- Better tool calling support for LLMs.
+- Better inference latency for Magpie TTS model.
+- Evaluation tools and benchmarks for voice agents.
 - Accuracy and robustness ASR model improvements.
-- Better TTS with more natural voice (e.g., [Magpie-TTS](https://build.nvidia.com/nvidia/magpie-tts-multilingual)).
 - Combine ASR and speaker diarization model to handle overlapping speech.
 
 
 ## 📅 Latest Updates
+- 2026-01-26: Added support for [NVIDIA-Nemotron-3-Nano-30B-A3B-BF16](https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16) LLM model, and support for [magpie_tts_multilingual_357m](https://huggingface.co/nvidia/magpie_tts_multilingual_357m) TTS model.
 - 2025-12-31: Added examples for [tool calling](#tool-calling), such as changing the speaking speed, switching between male/female voices and British/American accents, and getting the current weather of a city. Diarization model is updated to [nvidia/diar_streaming_sortformer_4spk-v2.1](https://huggingface.co/nvidia/diar_streaming_sortformer_4spk-v2.1) with improved performance.
 - 2025-11-14: Added support for joint ASR and EOU detection with [Parakeet-realtime-eou-120m](https://huggingface.co/nvidia/parakeet_realtime_eou_120m-v1) model.
 - 2025-10-10: Added support for [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) TTS model.
@@ -139,7 +142,13 @@ Most LLMs from HuggingFace are supported. A few examples are:
     - Please use `server/server_configs/llm_configs/nemotron_nano_v2.yaml` as the server config.
     - Tool calling is enabled for this model.
 - [nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16](https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16)
-    - Please use `server/server_configs/llm_configs/nemotron_nano_v3.yaml` as the server config. It needs more than 60GB VRAM to host the model, thus the config by default is set to use tensor parallelism of 2. Expect additional 5GB for kv-cache and other compnents in the voice agent.
+    - Please use `server/server_configs/llm_configs/nemotron_nano_v3.yaml` as the server config. It needs more than 60GB VRAM to host the model, thus the config by default is set to use tensor parallelism of 2. Expect additional 5GB for kv-cache and other compnents in the voice agent. To better monitor the vllm status, `start_vllm_on_init` is set to `false`, so that you can manually start the vllm server in another terminal via: 
+    ```bash
+        vllm serve nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 \
+        --trust-remote-code --max-num-seqs 1 --gpu-memory-utilization 0.85 --max-model-len 8192 \
+        --tensor-parallel-size 2 --enable-auto-tool-choice --tool-call-parser qwen3_coder --enable-prefix-caching \
+        --reasoning-parser-plugin server/parsers/nano_v3_reasoning_parser.py --reasoning-parser nano_v3
+    ```
     - If you have a GPU with FP8 support, the VRAM requirement is reduced to about 30GB. You can swtich to [nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-FP8](https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-FP8) by modifying the llm config accordingly.
     - Tool calling is enabled for this model.
 - [Qwen/Qwen2.5-7B-Instruct](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct)
@@ -201,7 +210,8 @@ Here are the supported TTS models:
     - Please use `server/server_configs/tts_configs/kokoro_82M.yaml` as the server config.
 - [FastPitch-HiFiGAN](https://huggingface.co/nvidia/tts_en_fastpitch) is an NVIDIA-NeMo TTS model. It only supports English output. 
     - Please use `server/server_configs/tts_configs/nemo_fastpitch-hifigan.yaml` as the server config.
-
+- [magpie_tts_multilingual_357m](https://huggingface.co/nvidia/magpie_tts_multilingual_357m) is a multilingual TTS model.
+    - Please use `server/server_configs/tts_configs/magpie_tts_multilingual_357m.yaml` as the server config.
 We will support more TTS models in the future.
 
 
