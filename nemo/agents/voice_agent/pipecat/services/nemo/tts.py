@@ -759,6 +759,8 @@ class MagpieTTSService(BaseNemoTTSService):
         device: str = "cuda",
         **kwargs,
     ):
+        if speaker not in self.SPEAKER_MAP:
+            raise ValueError(f"Invalid speaker: {speaker}, must be one of {list(self.SPEAKER_MAP.keys())}")
         self._language = language
         self._current_speaker = speaker
         self._apply_TN = apply_TN
