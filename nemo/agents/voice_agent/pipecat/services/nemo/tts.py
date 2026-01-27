@@ -502,8 +502,18 @@ class KokoroTTSService(BaseNemoTTSService):
         self._gender = 'female' if voice[1] == 'f' else 'male'
         self._original_gender = self._gender
         self._original_lang_code = self._lang_code
+        self._all_models = self._download_all_models(lang_codes=['a','b'], device=device, repo_id=model, cache=True)
         super().__init__(model=model, device=device, sample_rate=sample_rate, **kwargs)
         self.setup_tool_calling()
+    
+    def _download_all_models(self, lang_codes:List, device, repo_id, cache = True):
+        all_models = {}
+        from kokoro import KPipeline
+        for lang in lang_codes:
+            model = KPipeline(lang_code=lang, device=device, repo_id=repo_id)
+            if cache:
+                all_models[lang] = model
+        return all_models
 
     def _setup_model(self, lang_code: Optional[str] = None, voice: Optional[str] = None):
         """Initialize the Kokoro pipeline."""
@@ -515,10 +525,13 @@ class KokoroTTSService(BaseNemoTTSService):
             )
         if lang_code is None:
             lang_code = self._lang_code
+            
         if voice is None:
             voice = self._voice
         logger.info(f"Loading Kokoro TTS model with model={self._model_name}, lang_code={lang_code}, voice={voice}")
-        pipeline = KPipeline(lang_code=lang_code, device=self._device, repo_id=self._model_name)
+        pipeline = self._all_models.get(lang_code, None)
+        if pipeline is None:
+            pipeline = KPipeline(lang_code=lang_code, device=self._device, repo_id=self._model_name)
         return pipeline
 
     def _generate_audio(self, text: str) -> Iterator[np.ndarray]:
@@ -645,7 +658,7 @@ class KokoroTTSService(BaseNemoTTSService):
             gender: gender of the assistant's voice. Must be one of 'male', 'female',
                     or 'current' for keeping the current gender.
         """
-        await params.llm.push_frame(LLMTextFrame("Just a moment."))
+        await params.llm.push_frame(LLMTextFrame("Sure thing."))
 
         lang_code = "a" if accent == "American English" else "b" if accent == "British English" else "current"
         new_lang_code = self._lang_code
