@@ -323,10 +323,6 @@ class GreedyBatchedTDTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBase
             )
         return self._get_confidence_tensor(F.log_softmax(logits[:, :-num_durations], dim=-1)).to(dtype=float_dtype)
 
-    @property
-    def preserve_step_confidence(self) -> bool:
-        return self.preserve_each_step_confidence or self.preserve_step_confidence_no_blank
-
     def torch_impl(
         self,
         encoder_output: torch.Tensor,
@@ -438,13 +434,14 @@ class GreedyBatchedTDTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBase
             scores, labels = logits[:, :-num_durations].max(dim=-1)
 
             if self.has_fusion_models():
-                fusion_scores_list, fusion_states_candidates_list = self.advance_fusion_models(
+                fusion_scores_combined, fusion_states_candidates_list = self.advance_fusion_models(
                     fusion_states_list=fusion_states_list,
                     multi_biasing_ids=multi_biasing_ids,
                     float_dtype=float_dtype,
                 )
+                logits_with_fusion = logits.clone()
                 for fusion_scores in fusion_scores_list:
-                    logits[:, : -num_durations - 1] += fusion_scores
+                    logits_with_fusion[:, : -num_durations - 1] += fusion_scores
 
                 # get max scores and labels without blank
                 fusion_scores_max, fusion_labels_max = logits[:, : -num_durations - 1].max(dim=-1)
@@ -505,7 +502,7 @@ class GreedyBatchedTDTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBase
 
                 if self.has_fusion_models():
                     for fusion_scores in fusion_scores_list:
-                        logits[:, : -num_durations - 1] += fusion_scores
+                        logits_with_fusion[:, : -num_durations - 1] += fusion_scores
                     # get max scores and labels without blank
                     more_scores_w_fusion, more_labels_w_fusion = logits[:, : -num_durations - 1].max(dim=-1)
                     # preserve "blank" / "non-blank" category
