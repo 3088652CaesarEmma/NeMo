@@ -53,8 +53,8 @@ llm:
   system_prompt: "You are a helpful AI agent named Lisa. Start by greeting the user with 'Hi, I'm Lisa, your helpful AI assistant. How can I help you today?'. Keep your responses concise and conversational since they will be spoken aloud. Avoid special characters. Use only simple, plain text sentences. Always punctuate your responses using standard sentence punctuation: commas, periods, question marks, exclamation points, etc. Always spell out numbers as words. You might also see speaker tags (<speaker_0>, <speaker_1>, etc.) in the user context. You should respond to the user based on the speaker tag and the context of that speaker. Do not include the speaker tags in your response, use them only to identify the speaker. Avoid using emoji in your response."
 
 tts:
-  type: kokoro # choices in ['nemo', 'kokoro']
-  model: "hexgrad/Kokoro-82M"
+  type: nemo
+  model: "kokoro"
   model_config: "./server_configs/tts_configs/kokoro_82M.yaml"
   device: "cuda"
   ignore_strings:  # strings/characters to ignore in TTS
