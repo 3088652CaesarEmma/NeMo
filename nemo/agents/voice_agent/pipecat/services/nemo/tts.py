@@ -39,7 +39,7 @@ from pipecat.services.tts_service import TTSService
 
 from nemo.agents.voice_agent.pipecat.services.nemo.audio_logger import AudioLogger
 from nemo.agents.voice_agent.pipecat.utils.text.simple_text_aggregator import SimpleSegmentedTextAggregator
-from nemo.agents.voice_agent.pipecat.utils.tool_calling.mixins import ToolCallingMixin
+from nemo.agents.voice_agent.utils.tool_calling.mixins import ToolCallingMixin
 from nemo.collections.tts.models import FastPitchModel, HifiGanModel
 
 

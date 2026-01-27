@@ -48,9 +48,9 @@ from nemo.agents.voice_agent.pipecat.transports.network.websocket_server import 
     WebsocketServerParams,
     WebsocketServerTransport,
 )
-from nemo.agents.voice_agent.pipecat.utils.tool_calling.basic_tools import tool_get_city_weather
-from nemo.agents.voice_agent.pipecat.utils.tool_calling.mixins import register_direct_tools_to_llm
 from nemo.agents.voice_agent.utils.config_manager import ConfigManager
+from nemo.agents.voice_agent.utils.tool_calling.basic_tools import tool_get_city_weather
+from nemo.agents.voice_agent.utils.tool_calling.mixins import register_direct_tools_to_llm
 
 # Load environment variables
 load_dotenv(override=True)
