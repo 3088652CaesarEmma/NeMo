@@ -1664,7 +1664,7 @@ class EncDecDualRNNTBPEEOUModel(EncDecRNNTBPEEOUModel):
                     predictions=encoded,
                     predictions_lengths=encoded_len,
                     targets=text_tokens,
-                    targets_lengths=target_length,
+                    targets_lengths=text_token_lengths,
                 )
                 _, scores, words = self.wer.compute()
                 self.wer.reset()
@@ -1683,7 +1683,7 @@ class EncDecDualRNNTBPEEOUModel(EncDecRNNTBPEEOUModel):
                 decoder_outputs=decoder,
                 encoder_lengths=encoded_len,
                 transcripts=text_tokens,
-                transcript_lengths=target_length,
+                transcript_lengths=text_token_lengths,
                 compute_wer=compute_wer,
             )
 
@@ -1734,7 +1734,7 @@ class EncDecDualRNNTBPEEOUModel(EncDecRNNTBPEEOUModel):
                     predictions=encoded,
                     predictions_lengths=encoded_len,
                     targets=text_tokens,
-                    targets_lengths=target_length,
+                    targets_lengths=text_token_lengths,
                 )
                 _, scores, words = self.eou_wer.compute()
                 self.eou_wer.reset()
@@ -1753,7 +1753,7 @@ class EncDecDualRNNTBPEEOUModel(EncDecRNNTBPEEOUModel):
                 decoder_outputs=decoder,
                 encoder_lengths=encoded_len,
                 transcripts=text_tokens,
-                transcript_lengths=target_length,
+                transcript_lengths=text_token_lengths,
                 compute_wer=compute_wer,
             )
 
