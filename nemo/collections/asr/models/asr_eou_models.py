@@ -2032,6 +2032,11 @@ class EncDecDualRNNTBPEEOUModel(EncDecRNNTBPEEOUModel):
         tensorboard_logs = {}
         tensorboard_logs[f'{mode}_wer_asr'] = float(wer_num_asr) / wer_denom_asr if wer_denom_asr > 0 else 0
         tensorboard_logs[f'{mode}_wer_eou'] = float(wer_num_eou) / wer_denom_eou if wer_denom_eou > 0 else 0
+        tensorboard_logs[f'{mode}_wer'] = (
+            float(wer_num_asr + wer_num_eou) / (wer_denom_asr + wer_denom_eou)
+            if wer_denom_asr + wer_denom_eou > 0
+            else 0
+        )
         tensorboard_logs = {**loss_log, **tensorboard_logs}
 
         if self.cfg.get('calculate_eou_metrics', True):
