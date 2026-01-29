@@ -64,6 +64,7 @@ from nemo.collections.asr.models import EncDecHybridRNNTCTCModel, EncDecRNNTMode
 from nemo.collections.asr.parts.submodules.rnnt_decoding import RNNTDecodingConfig
 from nemo.collections.asr.parts.submodules.rnnt_maes_batched_computer import ModifiedAESBatchedRNNTComputer
 from nemo.collections.asr.parts.submodules.rnnt_malsd_batched_computer import ModifiedALSDBatchedRNNTComputer
+from nemo.collections.asr.parts.submodules.tdt_malsd_batched_computer import ModifiedALSDBatchedTDTComputer
 from nemo.collections.asr.parts.submodules.transducer_decoding.label_looping_base import (
     GreedyBatchedLabelLoopingComputerBase,
 )
@@ -263,7 +264,12 @@ def main(cfg: TranscriptionConfig) -> TranscriptionConfig:
         decoding_computer: GreedyBatchedLabelLoopingComputerBase = asr_model.decoding.decoding.decoding_computer
     elif cfg.decoding.strategy == "malsd_batch":
         # Beam search strategies use _decoding_computer (private attribute)
-        decoding_computer: ModifiedALSDBatchedRNNTComputer = asr_model.decoding.decoding._decoding_computer
+        is_tdt = True
+        print(f"is_tdt: {is_tdt}")
+        if is_tdt:
+            decoding_computer: ModifiedALSDBatchedTDTComputer = asr_model.decoding.decoding._decoding_computer
+        else:
+            decoding_computer: ModifiedALSDBatchedRNNTComputer = asr_model.decoding.decoding._decoding_computer
     elif cfg.decoding.strategy == "maes_batch":
         # MAES beam search returns BatchedBeamHyps
         decoding_computer: ModifiedAESBatchedRNNTComputer = asr_model.decoding.decoding._decoding_computer
@@ -343,9 +349,14 @@ def main(cfg: TranscriptionConfig) -> TranscriptionConfig:
             )
             rest_audio_lengths = audio_batch_lengths.clone()
 
+            # print(f"decoding_computer: {type(decoding_computer)}")
             # For MALSD: batched_hyps is stored in state and reused (no merge needed)
             # For greedy: fresh BatchedHyps created each chunk, needs merging
-            is_beam_search = isinstance(decoding_computer, ModifiedALSDBatchedRNNTComputer) or isinstance(decoding_computer, ModifiedAESBatchedRNNTComputer)
+            is_beam_search = (
+                isinstance(decoding_computer, ModifiedALSDBatchedRNNTComputer) or \
+                isinstance(decoding_computer, ModifiedAESBatchedRNNTComputer) or \
+                isinstance(decoding_computer, ModifiedALSDBatchedTDTComputer)
+            )
 
             # ============================================================================
             # ENCODER PROCESSING MODES:
@@ -368,7 +379,7 @@ def main(cfg: TranscriptionConfig) -> TranscriptionConfig:
             # MODE 1: FULL ENCODER PASS (for testing consistency with non-streaming)
             # TO ENABLE: Uncomment this section and comment out MODE 2 sections below
             # ============================================================================
-            # # TESTING: Run encoder once on full audio (not chunked)
+            # TESTING: Run encoder once on full audio (not chunked)
             # full_encoder_output, full_encoder_output_len = asr_model(
             #     input_signal=audio_batch,
             #     input_signal_length=audio_batch_lengths,

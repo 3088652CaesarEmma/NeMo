@@ -328,7 +328,6 @@ class GreedyBatchedRNNTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBas
             state = prev_batched_state.predictor_states
             fusion_states_list = prev_batched_state.fusion_states_list
 
-        # import pdb; pdb.set_trace()
         # loop while there are active utterances
         while active_mask.any():
             # import pdb; pdb.set_trace()
