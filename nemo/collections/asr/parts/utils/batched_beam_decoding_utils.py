@@ -199,6 +199,78 @@ class BatchedBeamHyps:
             self.next_timestamp.fill_(0)
             self.last_timestamp_lasts.fill_(0)
 
+    def copy_from_(self, other: "BatchedBeamHyps"):
+        """
+        Copy state from another BatchedBeamHyps object (in-place).
+        Used for streaming/chunked decoding to restore state from previous chunk.
+        
+        Args:
+            other: Source BatchedBeamHyps to copy from
+        """
+        batch_size = min(self.batch_size, other.batch_size)
+        beam_size = min(self.beam_size, other.beam_size)
+        max_length = min(self._max_length, other._max_length)
+        
+        self.current_lengths_nb[:batch_size, :beam_size].copy_(
+            other.current_lengths_nb[:batch_size, :beam_size]
+        )
+        self.current_lengths_wb[:batch_size, :beam_size].copy_(
+            other.current_lengths_wb[:batch_size, :beam_size]
+        )
+        self.transcript_wb[:batch_size, :beam_size, :max_length].copy_(
+            other.transcript_wb[:batch_size, :beam_size, :max_length]
+        )
+        self.transcript_wb_prev_ptr[:batch_size, :beam_size, :max_length].copy_(
+            other.transcript_wb_prev_ptr[:batch_size, :beam_size, :max_length]
+        )
+        self.scores[:batch_size, :beam_size].copy_(
+            other.scores[:batch_size, :beam_size]
+        )
+        self.last_label[:batch_size, :beam_size].copy_(
+            other.last_label[:batch_size, :beam_size]
+        )
+        self.transcript_hash[:batch_size, :beam_size].copy_(
+            other.transcript_hash[:batch_size, :beam_size]
+        )
+        
+        if self.store_prefix_hashes and other.store_prefix_hashes:
+            self.transcript_prefix_hash[:batch_size, :beam_size].copy_(
+                other.transcript_prefix_hash[:batch_size, :beam_size]
+            )
+        
+        self.timestamps[:batch_size, :beam_size, :max_length].copy_(
+            other.timestamps[:batch_size, :beam_size, :max_length]
+        )
+        
+        if self.model_type != ASRModelTypeEnum.CTC:
+            self.next_timestamp[:batch_size, :beam_size].copy_(
+                other.next_timestamp[:batch_size, :beam_size]
+            )
+            self.last_timestamp_lasts[:batch_size, :beam_size].copy_(
+                other.last_timestamp_lasts[:batch_size, :beam_size]
+            )
+
+    def clone(self) -> "BatchedBeamHyps":
+        """
+        Create a deep copy of this BatchedBeamHyps object.
+        Used for streaming/chunked decoding to save state for next chunk.
+        
+        Returns:
+            New BatchedBeamHyps with copied state
+        """
+        new_hyps = BatchedBeamHyps(
+            batch_size=self.batch_size,
+            beam_size=self.beam_size,
+            init_length=self._max_length,
+            blank_index=self.blank_index,
+            device=self.device,
+            float_dtype=self.scores.dtype,
+            store_prefix_hashes=self.store_prefix_hashes,
+            model_type=self.model_type,
+        )
+        new_hyps.copy_from_(self)
+        return new_hyps
+
     def get_last_labels(self, pad_id: int = -1) -> torch.Tensor:
         """
         Get last labels for each hypothesis in the beam.
@@ -385,8 +457,14 @@ class BatchedBeamHyps:
             Note: The method modifies the `self.scores` tensor in place to reflect the recombined hypotheses.
         """
 
+        # print(f"DEBUG: Entering recombine_hyps_. batch_size={self.batch_size}, beam_size={self.beam_size}")
+
         if self.beam_size <= 1:
             return
+
+        # print(f"DEBUG: transcript_hash shape: {self.transcript_hash.shape}")
+        # print(f"DEBUG: last_label shape: {self.last_label.shape}")
+        # print(f"DEBUG: current_lengths_nb shape: {self.current_lengths_nb.shape}")
 
         hyps_equal = (
             (self.transcript_hash[:, :, None] == self.transcript_hash[:, None, :])
@@ -395,14 +473,24 @@ class BatchedBeamHyps:
         )
 
         if self.model_type == ASRModelTypeEnum.TDT:
+            # print(f"DEBUG: TDT model type. next_timestamp shape: {self.next_timestamp.shape}")
             hyps_equal &= self.next_timestamp[:, :, None] == self.next_timestamp[:, None, :]
+
+        # print(f"DEBUG: hyps_equal shape: {hyps_equal.shape}")
+        
+        # print(f"DEBUG: self.scores : {self.scores}")
 
         scores_matrix = torch.where(
             hyps_equal,
             self.scores[:, None, :].expand(self.batch_size, self.beam_size, self.beam_size),
             self.INACTIVE_SCORE_TENSOR,
         )
+        # print(f"DEBUG: scores_matrix : {scores_matrix}")
+        # print(f"DEBUG: scores_matrix shape: {scores_matrix.shape}")
+        # print(f"DEBUG: scores_matrix : {scores_matrix}")
+
         scores_argmax = scores_matrix.argmax(-1, keepdim=False)
+        # print(f"DEBUG: scores_argmax shape: {scores_argmax.shape}, min: {scores_argmax.min()}, max: {scores_argmax.max()}")
         scores_to_keep = (
             torch.arange(self.beam_size, device=scores_argmax.device, dtype=torch.long)[None, :] == scores_argmax
         )
@@ -410,7 +498,14 @@ class BatchedBeamHyps:
             new_scores = torch.max(scores_matrix, dim=-1, keepdim=False).values
         else:
             new_scores = torch.logsumexp(scores_matrix, dim=-1, keepdim=False)
+
+        # print(f"DEBUG: new_scores shape: {new_scores.shape}")
+        # print(f"DEBUG: scores_to_keep shape: {scores_to_keep.shape}")
+        # print(f"DEBUG: self.scores shape: {self.scores.shape}")
+
         torch.where(scores_to_keep, new_scores.to(self.scores.dtype), self.INACTIVE_SCORE_TENSOR, out=self.scores)
+
+        # print("DEBUG: Exiting recombine_hyps_")
 
     def remove_duplicates(self, labels: torch.Tensor, total_logps: torch.Tensor):
         """
@@ -659,7 +754,8 @@ class BatchedBeamHyps:
         4. Updates the internal state of the object, including transcripts, timestamps, scores,
            lengths, labels, and other metadata, based on the sorted order.
         """
-
+        
+        # import pdb; pdb.set_trace()
         # add one for consistency with non-batched decodings, that use SOS.
         normalized_scores = (
             self.scores / (self.current_lengths_nb.to(self.scores.dtype) + 1) if score_norm else self.scores
