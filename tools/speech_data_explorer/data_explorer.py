@@ -25,9 +25,7 @@ import operator
 import os
 import pickle
 import tarfile
-import tempfile
 from collections import defaultdict
-from functools import lru_cache
 from os.path import expanduser
 from pathlib import Path
 from urllib.parse import urlparse
@@ -63,13 +61,13 @@ import os
 from pathlib import Path
 
 
-def parse_s3cfg(config_path='~/.s3cfg', section='pdx'):
+def parse_s3cfg(config_path='~/.s3cfg', section='default'):
     """
     Parse the .s3cfg file and extract configuration values.
 
     Args:
         config_path: Path to the s3cfg file (default: ~/.s3cfg)
-        section: Section of the config file to parse (default: pdx)
+        section: Section of the config file to parse (default: default)
 
     Returns:
         dict: Dictionary containing the parsed configuration
@@ -101,10 +99,16 @@ def parse_s3cfg(config_path='~/.s3cfg', section='pdx'):
         raise ValueError(f"No [{section}] section found in config file")
 
 
-def get_s3_client():
-    """Get or create a boto3 S3 client."""
+def get_s3_client(s3cfg):
+    """Get or create a boto3 S3 client.
+    Args:
+        s3cfg: S3 configuration file
+    Returns:
+        boto3.client: S3 client
+    """
     global _s3_client
-    s3_config = parse_s3cfg('~/.s3cfg', 'pdx')
+    path, section = s3cfg.rsplit('[', 1)
+    s3_config = parse_s3cfg(path, section.rstrip(']'))
     print("s3_config", s3_config)
     if _s3_client is None:
         _s3_client = boto3.client(
@@ -145,14 +149,13 @@ def read_s3_file(s3_path):
 
     Args:
         s3_path: S3 URL to the file
-
     Returns:
         str: File contents
     """
-    s3 = get_s3_client()
+    global _s3_client
     bucket, key = parse_s3_path(s3_path)
     try:
-        response = s3.get_object(Bucket=bucket, Key=key)
+        response = _s3_client.get_object(Bucket=bucket, Key=key)
         return response['Body'].read().decode('utf-8')
     except ClientError as e:
         logging.error(f"Error reading S3 file {s3_path}: {e}")
@@ -168,10 +171,10 @@ def read_s3_file_bytes(s3_path):
     Returns:
         bytes: File contents
     """
-    s3 = get_s3_client()
+    global _s3_client
     bucket, key = parse_s3_path(s3_path)
     try:
-        response = s3.get_object(Bucket=bucket, Key=key)
+        response = _s3_client.get_object(Bucket=bucket, Key=key)
         return response['Body'].read()
     except ClientError as e:
         logging.error(f"Error reading S3 file {s3_path}: {e}")
@@ -188,7 +191,6 @@ def get_audio_from_s3_tar(tar_s3_path, audio_filename):
     Args:
         tar_s3_path: S3 URL to the tar file (e.g., s3://bucket/audio_0.tar)
         audio_filename: Name of the audio file within the tar (e.g., audio1.wav)
-
     Returns:
         bytes: Audio file contents
     """
@@ -344,13 +346,20 @@ def parse_args():
         '-nc',
         nargs=2,
         type=str,
-        help='names of the two fields that will be compared, example: pred_text_contextnet pred_text_conformer. "pred_text_" prefix IS IMPORTANT!',
+        help='Names of the two fields that will be compared, example: pred_text_contextnet pred_text_conformer. "pred_text_" prefix IS IMPORTANT!',
     )
     parser.add_argument(
         '--show_statistics',
         '-shst',
         type=str,
-        help='field name for which you want to see statistics (optional). Example: pred_text_contextnet.',
+        help='Field name for which you want to see statistics (optional). Example: pred_text_contextnet.',
+    )
+    parser.add_argument(
+        '--s3cfg',
+        '-s3c',
+        type=str,
+        default='',
+        help='Path to the s3 credentials file and section. Example: ~/.s3cfg[default]. Set to "" to disable S3 support. Default is "". ',
     )
     args = parser.parse_args()
 
@@ -811,7 +820,6 @@ def load_audio_data(audio_filepath, audio_base_path=None, tar_base_path=None):
         audio_filepath: Path to audio file (local, S3, or filename within tar)
         audio_base_path: Base path for relative audio files
         tar_base_path: S3 path to tar file containing audio (optional)
-
     Returns:
         tuple: (audio_signal, sample_rate)
     """
@@ -832,6 +840,10 @@ def load_audio_data(audio_filepath, audio_base_path=None, tar_base_path=None):
 
 # parse the CLI arguments
 args, comparison_mode = parse_args()
+
+if args.s3cfg:
+    _s3_client = get_s3_client(args.s3cfg)
+
 if args.show_statistics is not None:
     fld_nm = args.show_statistics
 else:
