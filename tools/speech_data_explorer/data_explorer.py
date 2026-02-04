@@ -138,7 +138,7 @@ def is_sharded_path(path):
 
 def expand_sharded_path(path_pattern):
     """Expand a sharded path pattern into a list of individual paths.
-    
+
     Supports patterns like:
         s3://ASR/sharded_manifests/manifest__OP_0..255_CL_.json
     which expands to:
@@ -146,55 +146,55 @@ def expand_sharded_path(path_pattern):
         s3://ASR/sharded_manifests/manifest_1.json
         ...
         s3://ASR/sharded_manifests/manifest_255.json
-    
+
     Args:
         path_pattern: Path string containing _OP_start..end_CL_ pattern
-        
+
     Returns:
         list: List of expanded paths, or single-element list if no pattern found
     """
     import re
-    
+
     pattern = r'_OP_(\d+)\.\.(\d+)_CL_'
     match = re.search(pattern, str(path_pattern))
-    
+
     if not match:
         return [str(path_pattern)]
-    
+
     start = int(match.group(1))
     end = int(match.group(2))
-    
+
     paths = []
     for i in range(start, end + 1):
         expanded_path = re.sub(pattern, str(i), str(path_pattern))
         paths.append(expanded_path)
-    
+
     return paths
 
 
 def get_shard_index_from_path(path_pattern, concrete_path):
     """Get the shard index from a concrete path given the pattern.
-    
+
     Args:
         path_pattern: Pattern like s3://bucket/manifest__OP_0..255_CL_.json
         concrete_path: Concrete path like s3://bucket/manifest_5.json
-        
+
     Returns:
         int: The shard index, or None if pattern doesn't match
     """
     import re
-    
+
     pattern = r'_OP_(\d+)\.\.(\d+)_CL_'
     match = re.search(pattern, str(path_pattern))
-    
+
     if not match:
         return None
-    
+
     # Create a regex pattern to extract the index from the concrete path
     # Replace _OP_start..end_CL_ with a capture group for digits
     extraction_pattern = re.sub(pattern, r'(\\d+)', re.escape(str(path_pattern)))
     extraction_match = re.search(extraction_pattern, str(concrete_path))
-    
+
     if extraction_match:
         return int(extraction_match.group(1))
     return None
@@ -202,19 +202,19 @@ def get_shard_index_from_path(path_pattern, concrete_path):
 
 def get_tar_path_for_shard(tar_pattern, shard_index):
     """Get the tar file path for a specific shard index.
-    
+
     Args:
         tar_pattern: Tar pattern like s3://bucket/audio__OP_0..255_CL_.tar
         shard_index: The shard index to substitute
-        
+
     Returns:
         str: The concrete tar path for this shard
     """
     import re
-    
+
     if tar_pattern is None:
         return None
-    
+
     pattern = r'_OP_\d+\.\.\d+_CL_'
     return re.sub(pattern, str(shard_index), str(tar_pattern))
 
@@ -341,7 +341,7 @@ def load_audio_from_s3(audio_filepath, tar_base_path=None, shard_index=None):
         actual_tar_path = tar_base_path
         if is_sharded_path(tar_base_path) and shard_index is not None:
             actual_tar_path = get_tar_path_for_shard(tar_base_path, shard_index)
-        
+
         # Audio is inside a tar file on S3
         audio_bytes = get_audio_from_s3_tar(actual_tar_path, audio_filepath)
         return io.BytesIO(audio_bytes)
@@ -410,8 +410,8 @@ def parse_args():
     parser.add_argument(
         'manifest',
         help='Path to JSON manifest file. Supports S3 paths (s3://bucket/path) and '
-             'sharded patterns using _OP_start..end_CL_ syntax '
-             '(e.g., s3://ASR/manifests/manifest__OP_0..255_CL_.json)',
+        'sharded patterns using _OP_start..end_CL_ syntax '
+        '(e.g., s3://ASR/manifests/manifest__OP_0..255_CL_.json)',
     )
     parser.add_argument('--vocab', help='optional vocabulary to highlight OOV words')
     parser.add_argument('--port', default='8050', help='serving port for establishing connection')
@@ -435,12 +435,12 @@ def parse_args():
         default=None,
         type=str,
         help='S3 path to tarred audio files (e.g., s3://ASR/tarred/audio_0.tar). '
-             'Supports sharded patterns using _OP_start..end_CL_ syntax '
-             '(e.g., s3://ASR/tarred/audio__OP_0..255_CL_.tar). '
-             'When using sharded manifests, the tar shard index is automatically matched '
-             'to the manifest shard index. '
-             'When specified, audio_filepath values in the manifest are treated as '
-             'filenames within the corresponding tar archive.',
+        'Supports sharded patterns using _OP_start..end_CL_ syntax '
+        '(e.g., s3://ASR/tarred/audio__OP_0..255_CL_.tar). '
+        'When using sharded manifests, the tar shard index is automatically matched '
+        'to the manifest shard index. '
+        'When specified, audio_filepath values in the manifest are treated as '
+        'filenames within the corresponding tar archive.',
     )
     parser.add_argument('--debug', '-d', action='store_true', help='enable debug mode')
 
@@ -549,7 +549,9 @@ def load_data(
                 if estimate_audio:
                     for item in data:
                         shard_index = item.get('_shard_index')
-                        signal, sr = load_audio_data(item['audio_filepath'], audio_base_path, tar_base_path, shard_index)
+                        signal, sr = load_audio_data(
+                            item['audio_filepath'], audio_base_path, tar_base_path, shard_index
+                        )
                         bw = eval_bandwidth(signal, sr)
                         item['freq_bandwidth'] = int(bw)
                         item['level_db'] = 20 * np.log10(np.max(np.abs(signal)))
@@ -595,13 +597,13 @@ def load_data(
 
         sm = difflib.SequenceMatcher()
         metrics_available = False
-        
+
         # Expand sharded manifest paths if pattern is present
         manifest_paths = expand_sharded_path(data_filename)
         is_sharded = len(manifest_paths) > 1
-        
+
         print(f"Loading {len(manifest_paths)} manifest file(s)...")
-        
+
         for manifest_idx, manifest_path in enumerate(manifest_paths):
             # Get shard index from the manifest path
             if is_sharded:
@@ -610,7 +612,7 @@ def load_data(
                     shard_index = manifest_idx
             else:
                 shard_index = None
-            
+
             # Support both local files and S3 paths
             manifest_lines = list(open_manifest_file(manifest_path))
             desc = f"Shard {shard_index}" if shard_index is not None else manifest_path
@@ -944,7 +946,7 @@ def load_audio_data(audio_filepath, audio_base_path=None, tar_base_path=None, sh
         tar_base_path: S3 path to tar file containing audio (optional).
                        Can be a sharded pattern like s3://bucket/audio__OP_0..255_CL_.tar
         shard_index: For sharded tar patterns, the shard index for this audio file
-        
+
     Returns:
         tuple: (audio_signal, sample_rate)
     """
@@ -2158,7 +2160,9 @@ def plot_signal(idx, data):
     figs = make_subplots(rows=2, cols=1, subplot_titles=('Waveform', 'Spectrogram'))
     try:
         shard_index = data[idx[0]].get('_shard_index')
-        audio, fs = load_audio_data(data[idx[0]]['audio_filepath'], args.audio_base_path, args.tar_base_path, shard_index)
+        audio, fs = load_audio_data(
+            data[idx[0]]['audio_filepath'], args.audio_base_path, args.tar_base_path, shard_index
+        )
         if 'offset' in data[idx[0]]:
             audio = audio[
                 int(data[idx[0]]['offset'] * fs) : int((data[idx[0]]['offset'] + data[idx[0]]['duration']) * fs)
@@ -2218,7 +2222,9 @@ def plot_signal(idx, data):
     figs = make_subplots(rows=2, cols=1, subplot_titles=('Waveform', 'Spectrogram'))
     try:
         shard_index = data[idx[0]].get('_shard_index')
-        audio, fs = load_audio_data(data[idx[0]]['audio_filepath'], args.audio_base_path, args.tar_base_path, shard_index)
+        audio, fs = load_audio_data(
+            data[idx[0]]['audio_filepath'], args.audio_base_path, args.tar_base_path, shard_index
+        )
         if 'offset' in data[idx[0]]:
             audio = audio[
                 int(data[idx[0]]['offset'] * fs) : int((data[idx[0]]['offset'] + data[idx[0]]['duration']) * fs)
@@ -2274,7 +2280,9 @@ def update_player(idx, data):
         raise PreventUpdate
     try:
         shard_index = data[idx[0]].get('_shard_index')
-        signal, sr = load_audio_data(data[idx[0]]['audio_filepath'], args.audio_base_path, args.tar_base_path, shard_index)
+        signal, sr = load_audio_data(
+            data[idx[0]]['audio_filepath'], args.audio_base_path, args.tar_base_path, shard_index
+        )
         if 'offset' in data[idx[0]]:
             signal = signal[
                 int(data[idx[0]]['offset'] * sr) : int((data[idx[0]]['offset'] + data[idx[0]]['duration']) * sr)
@@ -2299,7 +2307,9 @@ def update_player(idx, data):
         raise PreventUpdate
     try:
         shard_index = data[idx[0]].get('_shard_index')
-        signal, sr = load_audio_data(data[idx[0]]['audio_filepath'], args.audio_base_path, args.tar_base_path, shard_index)
+        signal, sr = load_audio_data(
+            data[idx[0]]['audio_filepath'], args.audio_base_path, args.tar_base_path, shard_index
+        )
         if 'offset' in data[idx[0]]:
             signal = signal[
                 int(data[idx[0]]['offset'] * sr) : int((data[idx[0]]['offset'] + data[idx[0]]['duration']) * sr)
