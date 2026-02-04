@@ -561,7 +561,7 @@ class KokoroTTSService(BaseNemoTTSService):
         try:
             # Generate audio using Kokoro pipeline
             generator = self._model(text, voice=self._voice, speed=self._speed)
-
+            logger.debug(f"Kokoro generating audio with voice: {self._voice} and speed: {self._speed}")
             # The generator yields tuples of (gs, ps, audio)
             # We only need the audio component
             for i, (gs, ps, audio) in enumerate(generator):
@@ -835,6 +835,7 @@ def get_tts_service_from_config(config: DictConfig, audio_logger: Optional[Audio
     if model is None:
         raise ValueError("Model is required for Nemo TTS service")
 
+    logger.debug(f"Getting TTS service from config: {config}")
     text_aggregator = SimpleSegmentedTextAggregator(
         punctuation_marks=config.get("extra_separator", None),
         ignore_marks=config.get("ignore_strings", None),

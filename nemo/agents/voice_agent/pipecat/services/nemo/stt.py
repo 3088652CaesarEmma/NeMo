@@ -18,6 +18,7 @@ from typing import AsyncGenerator, List, Optional
 
 from loguru import logger
 from pipecat.frames.frames import (
+    AudioRawFrame,
     CancelFrame,
     EndFrame,
     ErrorFrame,
@@ -79,6 +80,7 @@ class NemoSTTService(STTService):
         backend: Optional[str] = "legacy",
         decoder_type: Optional[str] = "rnnt",
         audio_logger: Optional[AudioLogger] = None,
+        ignore_eou_eob: Optional[bool] = False,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -87,10 +89,12 @@ class NemoSTTService(STTService):
         params.buffer_size = params.frame_len_in_secs // params.raw_audio_frame_len_in_secs
         self._params = params
         self._model_name = model
+        self._ignore_eou_eob = ignore_eou_eob
+        self._input_sample_rate = None
         if has_turn_taking is None:
             has_turn_taking = True if model in ASR_EOU_MODELS else False
             logger.info(f"Setting has_turn_taking to `{has_turn_taking}` based on model name: `{model}`")
-        self._has_turn_taking = has_turn_taking
+        self._has_turn_taking = has_turn_taking and not self._ignore_eou_eob
         self._backend = backend
         self._decoder_type = decoder_type
         self._audio_logger = audio_logger
@@ -104,6 +108,7 @@ class NemoSTTService(STTService):
 
         self.audio_buffer = []
         self.user_is_speaking = False
+        self._has_logged_audio_chunk = False
 
     def _load_model(self):
         if self._backend == "legacy":
@@ -113,6 +118,7 @@ class NemoSTTService(STTService):
                 device=self._device,
                 decoder_type=self._decoder_type,
                 frame_len_in_secs=self._params.frame_len_in_secs,
+                ignore_eou_eob=self._ignore_eou_eob,
             )
         else:
             raise ValueError(f"Invalid ASR backend: {self._backend}")
@@ -178,6 +184,19 @@ class NemoSTTService(STTService):
             user_has_finished = False
             transcription = None
             self.audio_buffer.append(audio)
+            if not self._has_logged_audio_chunk:
+                # convert bytes to seconds
+                import numpy as np
+
+                audio_array = np.frombuffer(audio, dtype=np.int16).astype(np.float32) / 32768.0
+                audio_seconds = len(audio_array) / self._sample_rate
+                logger.debug(f"Received audio chunk length: {len(audio)} bytes, seconds: {audio_seconds}")
+                if self._input_sample_rate != self._sample_rate:
+                    logger.warning(
+                        f"Input sample rate {self._input_sample_rate}Hz does not match expected sample rate {self._sample_rate}Hz, resampling audio to {self._sample_rate}Hz"
+                    )
+                self._has_logged_audio_chunk = True
+
             if len(self.audio_buffer) >= self._params.buffer_size:
                 audio = b"".join(self.audio_buffer)
                 self.audio_buffer = []

@@ -12,5 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from nemo.agents.voice_agent.utils.config_manager import ConfigManager
-from nemo.agents.voice_agent.utils.misc import setup_logging
+import sys
+from loguru import logger
+
+
+def setup_logging(log_file: str = "bot_server.log", log_level: str = "DEBUG", rotation: str = "1 day"):
+    # Configure loguru to output to both console and file
+    logger.remove()  # Remove default handler
+    logger.add(
+        sys.stderr,
+        format="<green>{time:YYYY-MM-DD HH:mm:ss.SSSS}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
+        level=log_level,
+    )
+
+    logger.add(log_file, rotation=rotation, level=log_level)

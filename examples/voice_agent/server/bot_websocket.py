@@ -16,7 +16,6 @@
 import asyncio
 import copy
 import os
-import sys
 from datetime import datetime
 from dotenv import load_dotenv
 from loguru import logger
@@ -41,71 +40,74 @@ from nemo.agents.voice_agent.pipecat.transports.network.websocket_server import 
     WebsocketServerParams,
     WebsocketServerTransport,
 )
-from nemo.agents.voice_agent.utils.config_manager import ConfigManager
+from nemo.agents.voice_agent.utils import ConfigManager, setup_logging
 from nemo.agents.voice_agent.utils.tool_calling.basic_tools import tool_get_city_weather
 from nemo.agents.voice_agent.utils.tool_calling.mixins import register_direct_tools_to_llm
 
 
 async def run_bot_websocket_server(
-    server_config_path: str = None,
-    host: str = None,
-    port: int = None,
-    log_level: str = "DEBUG",
-    log_file: str = "bot_server.log",
+    server_base_path: str = os.path.dirname(__file__),
+    server_config_path: str = "server_configs/default.yaml",
+    host: str = "0.0.0.0",
+    port: int = 8765,
     use_fastapi: bool = False,
 ):
     """
     Creates a websocket server that runs indefinitely until manually stopped (Ctrl+C)
     Args:
-        server_config_path: Path to the server configuration file, defaults to the value of the `SERVER_CONFIG_PATH` environment variable
-        host: Host to bind the server to, defaults to the value of the `SERVER_HOST` environment variable
-        port: Port to bind the server to, defaults to the value of the `WEBSOCKET_PORT` environment variable
-        log_level: Log level to use, defaults to `DEBUG`
-        log_file: Log file to write to, defaults to `bot_server.log`
+        server_config_path: Path to the server configuration file, defaults to `server_configs/default.yaml`
+        host: Host to bind the server to, defaults to `0.0.0.0`
+        port: Port to bind the server to, defaults to `8765`
+        use_fastapi: Whether to use the FastAPI server, defaults to `False`
     """
-    # Load environment variables
-    load_dotenv(override=True)
-    if server_config_path is None:
-        server_config_path = os.environ.get("SERVER_CONFIG_PATH", None)
-    if host is None:
-        host = os.getenv("SERVER_HOST", "0.0.0.0")
-    if port is None:
-        if use_fastapi:
-            port = int(os.getenv("FASTAPI_PORT", 8766))
-            logger.info(f"Starting FastAPI server on {host}:{port} with server config path: {server_config_path}")
-            raise NotImplementedError(
-                "FastAPI server is not supported yet"
-            )  # TODO: [heh] add FastAPI transport support
-        else:
-            port = int(os.getenv("WEBSOCKET_PORT", 8765))
-            logger.info(f"Starting websocket server on {host}:{port} with server config path: {server_config_path}")
+    if use_fastapi:
+        logger.info(f"Starting FastAPI server on {host}:{port} with server config path: {server_config_path}")
+        raise NotImplementedError("FastAPI server is not supported yet")  # TODO: [heh] add FastAPI transport support
+    else:
+        logger.info(f"Starting websocket server on {host}:{port} with server config path: {server_config_path}")
 
     logger.info(f"Server configured to run indefinitely with no timeouts, use Ctrl+C to quit.")
 
-    config_manager = ConfigManager(server_base_path=os.path.dirname(__file__), server_config_path=server_config_path)
+    config_manager = ConfigManager(
+        server_base_path=server_base_path,
+        server_config_path=server_config_path,
+    )
     server_config = config_manager.get_server_config()
     logger.info(f"Server config: {OmegaConf.to_container(server_config, resolve=True)}")
+    log_file = server_config.server.get("log_file", "bot_server.log")
+    log_level = server_config.server.get("log_level", "DEBUG")
+    create_new_log = server_config.server.get("create_new_log", False)
 
-    def setup_logging():
-        # Configure loguru to output to both console and file
-        logger.remove()  # Remove default handler
-        logger.add(
-            sys.stderr,
-            format="<green>{time:YYYY-MM-DD HH:mm:ss.SSSS}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
-            level=log_level,
-        )
+    if create_new_log:
+        if os.path.exists(log_file):
+            if server_config.server.get("overwrite_existing_log", False):
+                os.remove(log_file)
+                logger.info(f"Removed existing log file: {log_file}")
+            else:
+                # Rename the existing log file to the current timestamp
+                new_log_file = f"{log_file}.{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                os.rename(log_file, new_log_file)
+                logger.info(f"Renamed existing log file: {log_file} to {new_log_file}")
 
-        logger.add(log_file, rotation="1 day", level=log_level)
-
-    setup_logging()
+    setup_logging(log_file=log_file, log_level=log_level)
 
     # Access configuration parameters from ConfigManager
     SAMPLE_RATE = config_manager.SAMPLE_RATE
     SYSTEM_PROMPT = config_manager.SYSTEM_PROMPT
+    SYSTEM_PROMPT_SUFFIX = config_manager.SYSTEM_PROMPT_SUFFIX
     SYSTEM_ROLE = config_manager.SYSTEM_ROLE
+    TALK_FIRST = server_config.server.get("talk_first", True)
+    if TALK_FIRST:
+        logger.info("Server configured to TALK first")
+    else:
+        logger.info("Server configured to LISTEN first")
 
     # Transport configuration
+    TRANSPORT_AUDIO_IN_SAMPLE_RATE = server_config.transport.get("audio_in_sample_rate", SAMPLE_RATE)
     TRANSPORT_AUDIO_OUT_10MS_CHUNKS = config_manager.TRANSPORT_AUDIO_OUT_10MS_CHUNKS
+    TRANSPORT_AUDIO_OUT_SAMPLE_RATE = server_config.transport.get(
+        "audio_out_sample_rate", None
+    )  # None means use pipecat default
     RECORD_AUDIO_DATA = server_config.transport.get("record_audio_data", False)
     AUDIO_LOG_DIR = server_config.transport.get("audio_log_dir", "./audio_logs")
 
@@ -116,6 +118,7 @@ async def run_bot_websocket_server(
     STT_MODEL = config_manager.STT_MODEL
     STT_DEVICE = config_manager.STT_DEVICE
     stt_params = config_manager.get_stt_params()
+    ignore_eou_eob = server_config.stt.get("ignore_eou_eob", False)
 
     # Diarization configuration
     DIAR_MODEL = config_manager.DIAR_MODEL
@@ -144,7 +147,7 @@ async def run_bot_websocket_server(
         logger.info(f"AudioLogger initialized for session: {session_id} at {AUDIO_LOG_DIR}")
 
     vad_analyzer = SileroVADAnalyzer(
-        sample_rate=SAMPLE_RATE,
+        sample_rate=TRANSPORT_AUDIO_IN_SAMPLE_RATE,
         params=vad_params,
     )
     logger.info("VAD analyzer initialized")
@@ -160,7 +163,8 @@ async def run_bot_websocket_server(
             add_wav_header=False,
             vad_analyzer=vad_analyzer,
             session_timeout=None,  # Disable session timeout
-            audio_in_sample_rate=SAMPLE_RATE,
+            audio_in_sample_rate=TRANSPORT_AUDIO_IN_SAMPLE_RATE,
+            audio_out_sample_rate=TRANSPORT_AUDIO_OUT_SAMPLE_RATE,
             can_create_user_frames=TURN_TAKING_BACKCHANNEL_PHRASES_PATH is None
             or not has_turn_taking,  # if backchannel phrases are disabled, we can use VAD to interrupt the bot immediately
             audio_out_10ms_chunks=TRANSPORT_AUDIO_OUT_10MS_CHUNKS,
@@ -181,6 +185,7 @@ async def run_bot_websocket_server(
         backend="legacy",
         decoder_type="rnnt",
         audio_logger=audio_logger,
+        ignore_eou_eob=ignore_eou_eob,
     )
     logger.info("STT service initialized")
 
@@ -215,7 +220,7 @@ async def run_bot_websocket_server(
     logger.info("TTS service initialized")
 
     # Setup logging again to avoid logger from being overwritten during setting up the pipeline components
-    setup_logging()
+    setup_logging(log_file=log_file, log_level=log_level)
 
     # Put LLM in the end of model initialization to reduce the chance of running out of HBM memory
     logger.info("Initializing LLM service...")
@@ -295,6 +300,10 @@ async def run_bot_websocket_server(
 
             logger.info(f"Updating system prompt to: {new_prompt[:100]}...")
 
+            add_suffix = arguments.get("add_suffix", True)
+            if add_suffix and SYSTEM_PROMPT_SUFFIX:
+                new_prompt = f"{new_prompt}\n{SYSTEM_PROMPT_SUFFIX}"
+
             # Create new messages with updated system prompt
             new_messages = [
                 {
@@ -333,7 +342,13 @@ async def run_bot_websocket_server(
                 "name": "prompt",
                 "type": "string",
                 "required": True,
-            }
+            },
+            {
+                "name": "add_suffix",
+                "type": "bool",
+                "required": False,
+                "default": True,
+            },
         ],
         handler=update_system_prompt_handler,
     )
@@ -360,7 +375,7 @@ async def run_bot_websocket_server(
     task = PipelineTask(
         pipeline,
         params=PipelineParams(
-            allow_interruptions=True,
+            allow_interruptions=server_config.transport.get("allow_interruption", True),
             enable_metrics=False,
             enable_usage_metrics=False,
             send_initial_empty_metrics=True,
@@ -379,17 +394,21 @@ async def run_bot_websocket_server(
     task_running = True
 
     # Setup logging again to avoid logger from being overwritten during setting up the pipeline components
-    setup_logging()
+    setup_logging(log_file=log_file, log_level=log_level)
 
     @rtvi.event_handler("on_client_ready")
     async def on_client_ready(rtvi: RTVIProcessor):
-        logger.info("Pipecat client ready.")
+        logger.info(f"Pipecat client ready with TALK_FIRST set to {TALK_FIRST}.")
         await rtvi.set_bot_ready()
-        # Kick off the conversation.
-        try:
-            await task.queue_frames([user_context_aggregator.get_context_frame()])
-        except Exception as e:
-            logger.error(f"Error queuing context frame: {e}")
+        if TALK_FIRST:
+            # Kick off the conversation.
+            try:
+                logger.info("Kicking off the conversation...")
+                await task.queue_frames([user_context_aggregator.get_context_frame()])
+            except Exception as e:
+                logger.error(f"Error queuing context frame: {e}")
+        else:
+            logger.info("Pipecat client ready, listening...")
 
     @ws_transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
@@ -424,6 +443,9 @@ async def run_bot_websocket_server(
         # Don't cancel the task - keep server running indefinitely
         logger.info("Session timeout occurred but keeping server running")
         # Note: With session_timeout=None, this handler should never be called
+        if audio_logger:
+            audio_logger.finalize_session()
+            logger.info("Audio logger session finalized")
 
     logger.info("Starting pipeline runner...")
 
@@ -445,4 +467,11 @@ async def run_bot_websocket_server(
 
 
 if __name__ == "__main__":
-    asyncio.run(run_bot_websocket_server())
+    load_dotenv(override=True)
+    asyncio.run(
+        run_bot_websocket_server(
+            server_config_path=os.getenv("SERVER_CONFIG_PATH", "server_configs/default.yaml"),
+            host=os.getenv("SERVER_HOST", "0.0.0.0"),
+            port=int(os.getenv("WEBSOCKET_PORT", 8765)),
+        )
+    )

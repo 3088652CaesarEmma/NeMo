@@ -55,6 +55,7 @@ class NemoStreamingASRService:
         frame_len_in_secs: float = 0.08,
         use_amp: bool = False,
         chunk_size_in_secs: float = 0.08,
+        ignore_eou_eob: bool = False,
     ):
         self.model = model
         self.eou_string = eou_string
@@ -71,6 +72,7 @@ class NemoStreamingASRService:
         self.pad_and_drop_preencoded = False
         self.blank_id = self.get_blank_id()
         self.chunk_size_in_secs = chunk_size_in_secs
+        self.ignore_eou_eob = ignore_eou_eob
 
         assert len(self.att_context_size) == 2, "Att context size must be a list of two integers"
         assert (
@@ -280,6 +282,9 @@ class NemoStreamingASRService:
         eou_prob = None
         eob_prob = None
         current_timestamp = time.time()
+        if self.ignore_eou_eob:
+            text = text.replace(self.eou_string, "").replace(self.eob_string, "")
+
         if self.eou_string in text or self.eob_string in text:
             is_final = True
             if self.eou_string in text:

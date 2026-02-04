@@ -13,7 +13,8 @@ from loguru import logger
 load_dotenv(override=True)
 SERVER_HOST = os.getenv("SERVER_HOST", "0.0.0.0")
 WEBSOCKET_PORT = int(os.getenv("WEBSOCKET_PORT", 8765))
-FASTAPI_PORT = int(os.getenv("FASTAPI_PORT", 8766))
+FASTAPI_PORT = int(os.getenv("FASTAPI_PORT", 7860))
+SERVER_CONFIG_PATH = os.getenv("SERVER_CONFIG_PATH", None)  # None means use default ./server_configs/default.yaml
 
 
 @asynccontextmanager
@@ -63,7 +64,14 @@ async def main():
     tasks = []
     try:
         # Start websocket server
-        tasks.append(run_bot_websocket_server(host=SERVER_HOST, port=WEBSOCKET_PORT))
+        tasks.append(
+            run_bot_websocket_server(
+                server_config_path=SERVER_CONFIG_PATH,
+                host=SERVER_HOST,
+                port=WEBSOCKET_PORT,
+                use_fastapi=False,
+            )
+        )
 
         # Start FastAPI server
         config = uvicorn.Config(app, host=SERVER_HOST, port=FASTAPI_PORT)

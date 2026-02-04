@@ -3,8 +3,14 @@
 # STT, LLM and TTS models have standalone configs in the folder "server/server_configs/{stt,llm,tts}_configs".
 # Specify the type and an a model identifier to automatically configure the model.
 
+server:
+  log_file: "bot_server.log"
+  log_level: "DEBUG"
+  use_model_registry: true
+  talk_first: true  
+
 transport:
-  audio_out_10ms_chunks: 10  # use 4 as websocket default, but increasing to a larger number might have less glitches in TTS output
+  audio_out_10ms_chunks: 4  # use 4 as websocket default, but increasing to a larger number might have less glitches in TTS output
   record_audio_data: false
   audio_log_dir: "./audio_logs"
 
@@ -59,3 +65,4 @@ tts:
   device: "cuda"
   ignore_strings:  # strings/characters to ignore in TTS
     - "*"
+    - "<unk>"

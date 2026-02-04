@@ -19,6 +19,7 @@ from typing import List, Optional, Union
 
 import yaml
 from loguru import logger
+from omegaconf import ListConfig
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
@@ -92,10 +93,11 @@ class NeMoTurnTakingService(FrameProcessor):
             if not isinstance(backchannel_phrases, list):
                 raise ValueError(f"Backchannel phrases must be a list, got {type(backchannel_phrases)}")
             logger.info(f"Loaded {len(backchannel_phrases)} backchannel phrases from file: {backchannel_phrases}")
-        elif isinstance(backchannel_phrases, list):
+        elif isinstance(backchannel_phrases, (list, ListConfig)):
+            backchannel_phrases = list(backchannel_phrases)
             logger.info(f"Using backchannel phrases from list: {backchannel_phrases}")
         else:
-            raise ValueError(f"Invalid backchannel phrases: {backchannel_phrases}")
+            raise ValueError(f"Invalid backchannel phrases of type {type(backchannel_phrases)}: {backchannel_phrases}")
         return backchannel_phrases
 
     def clean_text(self, text: str) -> str:

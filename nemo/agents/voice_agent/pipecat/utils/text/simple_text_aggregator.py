@@ -167,11 +167,19 @@ class SimpleSegmentedTextAggregator(SimpleTextAggregator):
             punctuation_marks = (
                 [c for c in punctuation_marks] if isinstance(punctuation_marks, str) else punctuation_marks
             )
+            punctuation_marks = list(set(punctuation_marks))
             if "." in punctuation_marks:
                 punctuation_marks.remove(".")
             # put period at the end of the list to ensure it's the last punctuation mark to be matched
             punctuation_marks += ["."]
+            if "," in punctuation_marks:
+                punctuation_marks.remove(",")
+            # put comma at the end of the list to ensure it's the last punctuation mark to be matched
+            punctuation_marks += [","]
             self._punctuation_marks = punctuation_marks
+        logger.debug(
+            f"text aggregator initialized with punctuation marks: {self._punctuation_marks} and ignore strings: {self._ignore_marks}"
+        )
 
     def _find_segment_end(self, text: str) -> Optional[int]:
         """find the end of text segment.
@@ -234,5 +242,7 @@ class SimpleSegmentedTextAggregator(SimpleTextAggregator):
 
         if result:
             for ignore_mark in self._ignore_marks:
+                if ignore_mark in result:
+                    logger.debug(f"Ignoring string: `{ignore_mark}` in result: `{result}`")
                 result = result.replace(ignore_mark, "")
             yield Aggregation(text=result, type=AggregationType.SENTENCE)

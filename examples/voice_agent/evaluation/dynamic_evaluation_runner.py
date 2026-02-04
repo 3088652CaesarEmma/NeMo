@@ -28,38 +28,50 @@ from pathlib import Path
 
 from loguru import logger
 from rtvi_evaluation_bridge import RTVIEvaluationBridge
+from nemo.agents.voice_agent.utils import setup_logging
 
 
 async def run_dynamic_evaluation(
-    evaluator_url: str,
-    target_url: str,
+    user_url: str,
+    agent_url: str,
     output_dir: str,
     scenarios: list[dict],
     duration_per_scenario: int = 60,
     pause_between_scenarios: int = 5,
     record_audio: bool = True,
-    output_sample_rate: int = 16000,
+    user_output_sample_rate: int = 24000,
+    agent_output_sample_rate: int = 24000,
+    user_input_sample_rate: int = 16000,
+    agent_input_sample_rate: int = 16000,
+    output_sample_rate: int = 24000,
 ):
     """
     Run evaluation with dynamic scenario switching and latency measurement.
 
     Args:
-        evaluator_url: WebSocket URL of evaluator agent
-        target_url: WebSocket URL of target agent
+        user_url: WebSocket URL of user (simulated user)
+        agent_url: WebSocket URL of agent being tested
         output_dir: Output directory for results
         scenarios: List of scenarios, each with:
             - name: Scenario name
-            - evaluator_prompt: Evaluator system prompt
-            - target_prompt: Optional target system prompt
+            - user_prompt: User system prompt
+            - agent_prompt: Optional agent system prompt
             - duration: Optional duration override
         duration_per_scenario: Default duration per scenario (seconds)
         pause_between_scenarios: Seconds to pause between scenarios
         record_audio: Whether to record audio (default: True)
-        output_sample_rate: Output sample rate for audio (default: 16000)
+        user_output_sample_rate: User TTS output sample rate (default: 24000)
+        agent_output_sample_rate: Agent TTS output sample rate (default: 24000)
+        user_input_sample_rate: User STT input sample rate (default: 16000)
+        agent_input_sample_rate: Agent STT input sample rate (default: 16000)
+        output_sample_rate: Output sample rate for recorded audio (default: 24000)
     """
 
     os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    log_file = os.path.join(output_dir, f"eval_log_{timestamp}.txt")
+    setup_logging(log_file=log_file)
 
     # Create audio directory if recording
     if record_audio:
@@ -67,10 +79,14 @@ async def run_dynamic_evaluation(
         os.makedirs(audio_dir, exist_ok=True)
 
     bridge = RTVIEvaluationBridge(
-        evaluator_url=evaluator_url,
-        target_url=target_url,
-        log_file=os.path.join(output_dir, f"conversation_{timestamp}.log"),
+        user_url=user_url,
+        agent_url=agent_url,
+        log_file=None,  # Will be set per scenario
         audio_file=None,  # Will be set per scenario
+        user_output_sample_rate=user_output_sample_rate,
+        agent_output_sample_rate=agent_output_sample_rate,
+        user_input_sample_rate=user_input_sample_rate,
+        agent_input_sample_rate=agent_input_sample_rate,
         output_sample_rate=output_sample_rate,
     )
 
@@ -94,23 +110,31 @@ async def run_dynamic_evaluation(
         bridge.metrics.audio_start_timestamp = None
         bridge.metrics.current_segment_start = None
 
+        # Initialize log file for this scenario
+        log_file = os.path.join(output_dir, f"conversation_{timestamp}_{idx+1:02d}_{scenario['name']}.log")
+        bridge.init_log_file(log_file)
+        logger.info(f"Logging to: {log_file}")
+
         # Set audio file for this scenario
         if record_audio:
             scenario_name_safe = scenario['name'].replace(' ', '_').replace('/', '_')
             audio_file = os.path.join(audio_dir, f"{timestamp}_{idx+1:02d}_{scenario_name_safe}.wav")
-            bridge.audio_file = audio_file
+            bridge.audio_file = audio_file  # Set on bridge so monitoring can record audio
             logger.info(f"Recording audio to: {audio_file}")
         else:
+            audio_file = None
             bridge.audio_file = None
 
-        # Update prompts (auto_reset=True will reset after updating)
-        await bridge.update_evaluator_prompt(scenario["evaluator_prompt"], auto_reset=False)  # Handler already resets
+        # Update prompts (handler will automatically reset)
+        await bridge.update_user_prompt(scenario["user_prompt"], auto_reset=False)
 
-        if "target_prompt" in scenario:
-            await bridge.update_target_prompt(scenario["target_prompt"], auto_reset=False)  # Handler already resets
-        elif idx > 0:
-            # Reset target to clear history from previous scenario
-            await bridge._send_reset_action(bridge.target_ws, "target")
+        if "agent_prompt" in scenario:
+            # Note: update_system_prompt handler in bot_websocket.py automatically resets,
+            # so we don't need explicit reset calls here
+            await bridge.update_agent_prompt(scenario["agent_prompt"], auto_reset=False)
+        else:
+            # reset agent cache
+            await bridge.reset_agent()
 
         # Wait for agents to stabilize after reset
         logger.info("Waiting for agents to stabilize after prompt update...")
@@ -123,6 +147,10 @@ async def run_dynamic_evaluation(
         scenario_start = datetime.now()
         await bridge.route_audio(duration=duration)
         scenario_end = datetime.now()
+
+        # Save audio and segLST for this scenario before resetting buffers
+        if audio_file:
+            bridge.save_audio_and_seglst(audio_file=audio_file)
 
         # Collect metrics for this scenario
         metrics = bridge.get_metrics()
@@ -158,13 +186,13 @@ async def run_dynamic_evaluation(
     # Save CSV with latency details
     latency_csv_file = os.path.join(output_dir, f"latencies_{timestamp}.csv")
     with open(latency_csv_file, "w") as f:
-        f.write("Scenario,Evaluator_Transcript,Target_Transcript,Latency_ms\n")
+        f.write("Scenario,User_Transcript,Agent_Transcript,Latency_ms\n")
         for result in all_results:
             scenario_name = result["scenario_name"]
             for latency in result["latencies"]:
-                eval_text = latency["evaluator_transcript"].replace('"', '""')
-                target_text = latency["target_transcript"].replace('"', '""')
-                f.write(f'"{scenario_name}","{eval_text}","{target_text}",{latency["latency_ms"]:.1f}\n')
+                user_text = latency["user_transcript"].replace('"', '""')
+                agent_text = latency["agent_transcript"].replace('"', '""')
+                f.write(f'"{scenario_name}","{user_text}","{agent_text}",{latency["latency_ms"]:.1f}\n')
 
     # Save summary
     summary_file = os.path.join(output_dir, f"summary_{timestamp}.txt")
@@ -222,7 +250,7 @@ async def run_dynamic_evaluation(
     logger.info(f"Conversation log: {bridge.log_file}")
     if record_audio:
         logger.info(f"Audio files saved to: {audio_dir}/")
-        logger.info(f"  Format: Stereo WAV (evaluator=left, target=right)")
+        logger.info(f"  Format: Stereo WAV (user=left, agent=right)")
         logger.info(f"  Sample rate: {output_sample_rate} Hz")
         logger.info(f"  segLST files: {audio_dir}/*.seglst")
     logger.info(f"\nTotal: {len(scenarios)} scenarios, {total_turns} turns, {total_duration:.1f}s")
@@ -238,40 +266,40 @@ def main():
 Examples:
   # Run with default scenarios
   python dynamic_evaluation_runner.py \\
-      --evaluator-url ws://localhost:8765 \\
-      --target-url ws://localhost:8766
+      --user-url ws://localhost:8765 \\
+      --agent-url ws://localhost:8766
 
   # Run with custom scenarios file
   python dynamic_evaluation_runner.py \\
-      --evaluator-url ws://localhost:8765 \\
-      --target-url ws://localhost:8766 \\
+      --user-url ws://localhost:8765 \\
+      --agent-url ws://localhost:8766 \\
       --scenarios-file scenarios/customer_service.json \\
       --output-dir ./results/cs_eval
 
   # Run with custom duration
   python dynamic_evaluation_runner.py \\
-      --evaluator-url ws://localhost:8765 \\
-      --target-url ws://localhost:8766 \\
+      --user-url ws://localhost:8765 \\
+      --agent-url ws://localhost:8766 \\
       --duration 120 \\
       --pause 10
         """,
     )
     parser.add_argument(
-        "--evaluator-url",
+        "--user-url",
         default="ws://localhost:8765",
-        help="WebSocket URL of evaluator agent (default: ws://localhost:8765)",
+        help="WebSocket URL of user (simulated user) (default: ws://localhost:8765)",
     )
     parser.add_argument(
-        "--target-url",
+        "--agent-url",
         default="ws://localhost:8766",
-        help="WebSocket URL of target agent (default: ws://localhost:8766)",
+        help="WebSocket URL of agent being tested (default: ws://localhost:8766)",
     )
     parser.add_argument(
         "--output-dir", default="./eval_results", help="Output directory for results (default: ./eval_results)"
     )
     parser.add_argument("--scenarios-file", help="JSON file with scenarios (see scenarios/ directory for examples)")
     parser.add_argument(
-        "--duration", type=int, default=60, help="Default duration per scenario in seconds (default: 60)"
+        "--duration", type=int, default=120, help="Default duration per scenario in seconds (default: 120)"
     )
     parser.add_argument("--pause", type=int, default=5, help="Pause between scenarios in seconds (default: 5)")
     parser.add_argument(
@@ -287,25 +315,23 @@ Examples:
     scenarios = [
         {
             "name": "Friendly Conversation",
-            "evaluator_prompt": """You are a friendly user testing a voice assistant.
-Ask casual questions and engage in pleasant conversation.
-Start by greeting the assistant and asking about its capabilities.""",
-            "duration": 60,
+            "user_prompt": """You are a friendly human user named Bob, and you are testing a voice assistant. Start by saying that "Hi I'm Bob", then ask the following questions one by one: 1. What is your name? 2. What's the captital of the United States?""",
+            "duration": 90,
         },
-        {
-            "name": "Challenging Questions",
-            "evaluator_prompt": """You are testing a voice assistant with difficult questions.
-Ask complex, multi-part questions and test edge cases.
-Start with a challenging question about a technical topic.""",
-            "duration": 60,
-        },
-        {
-            "name": "Rapid Interaction",
-            "evaluator_prompt": """You are testing how well the assistant handles quick back-and-forth.
-Ask short questions and wait for answers. Keep responses brief.
-Start with a simple question and build from there.""",
-            "duration": 60,
-        },
+        #         {
+        #             "name": "Challenging Questions",
+        #             "user_prompt": """You are a human user. You are testing a voice assistant with difficult questions.
+        # Ask complex, multi-part questions and test edge cases.
+        # Start with a challenging question about a technical topic.""",
+        #             "duration": 60,
+        #         },
+        #         {
+        #             "name": "Rapid Interaction",
+        #             "user_prompt": """You are a human user. You are testing how well the assistant handles quick back-and-forth.
+        # Ask short questions and wait for answers. Keep responses brief.
+        # Start with a simple question and build from there.""",
+        #             "duration": 60,
+        #         },
     ]
 
     # Load scenarios from file if provided
@@ -325,8 +351,8 @@ Start with a simple question and build from there.""",
     try:
         asyncio.run(
             run_dynamic_evaluation(
-                evaluator_url=args.evaluator_url,
-                target_url=args.target_url,
+                user_url=args.user_url,
+                agent_url=args.agent_url,
                 output_dir=args.output_dir,
                 scenarios=scenarios,
                 duration_per_scenario=args.duration,
