@@ -1459,7 +1459,9 @@ class RTVIEvaluationBridge:
         if frame is None:
             return
 
-        logger.debug(f"[USER MONITOR] Frame type: {type(frame).__name__}, has audio: {hasattr(frame, 'audio')}")
+        logger.debug(
+            f"[USER MONITOR] Frame type: {type(frame).__name__}, has audio: {hasattr(frame, 'audio')}, frame: {frame}"
+        )
 
         # Handle audio frames
         if hasattr(frame, 'audio') and frame.audio:
@@ -1476,7 +1478,7 @@ class RTVIEvaluationBridge:
                 # Save raw audio data
                 self.metrics.user_audio_chunks.append(frame.audio)
                 logger.debug(
-                    f"[USER AUDIO] Received user audio chunk: {len(frame.audio)} bytes (total chunks: {len(self.metrics.user_audio_chunks)})"
+                    f"[USER AUDIO] Received user audio chunk: {len(frame.audio)} bytes of {len(frame.audio) / 2 / self.user_output_sample_rate:.4f} seconds"
                 )
 
             return
@@ -1499,7 +1501,7 @@ class RTVIEvaluationBridge:
                 if text:
                     # Accumulate text segments (they arrive incrementally)
                     self.metrics.user_current_transcript += text
-                    logger.debug(f"[USER SEGMENT] {text}")
+                    logger.debug(f"[USER SEGMENT]: {text}")
             # Track when user bot stops speaking (finalize turn)
             elif message_type == RTVI_BOT_STOPPED_SPEAKING:
                 self.metrics.user_last_audio_time = timestamp
@@ -1510,7 +1512,7 @@ class RTVIEvaluationBridge:
                 if self.metrics.user_current_transcript:
                     complete_text = self.metrics.user_current_transcript.strip()
                     self.metrics.last_user_transcript = complete_text
-                    logger.info(f"[USER] {complete_text}")
+                    logger.info(f"[USER] Finalized Text: {complete_text}")
 
                     turn_data = {
                         "timestamp": datetime.now().isoformat(),
@@ -1554,7 +1556,9 @@ class RTVIEvaluationBridge:
             return
 
         # Debug: log frame type
-        logger.debug(f"[AGENT MONITOR] Frame type: {type(frame).__name__}, has audio: {hasattr(frame, 'audio')}")
+        logger.debug(
+            f"[AGENT MONITOR] Frame type: {type(frame).__name__}, has audio: {hasattr(frame, 'audio')}, frame: {frame}"
+        )
 
         # Handle audio frames - this is the response!
         if hasattr(frame, 'audio') and frame.audio:

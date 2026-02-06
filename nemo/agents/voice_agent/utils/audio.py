@@ -14,7 +14,6 @@
 
 import asyncio
 import time
-from queue import Queue
 
 import numpy as np
 import soxr
