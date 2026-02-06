@@ -319,9 +319,12 @@ Examples:
         {
             "name": "Friendly Conversation",
             "user_prompt": """You are a friendly human user named Bob, and you are testing a voice assistant. 
-            Start by saying that "Hi I'm Bob", then ask the following questions one by one: 
-            1. What is your name? 
-            2. What's the capital of the United States?""",
+            Start by saying that "Hi I'm Bob", then ask the following questions one by one, wait for response before asking the next question: 
+            1. Tell me a joke about a cat. 
+            2. What's the capital of the United States?
+            3. How many legs does a spider have?
+            4. What's the color of the sky?
+            """,
             "duration": 90,
         },
         #         {

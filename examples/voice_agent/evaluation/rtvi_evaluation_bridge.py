@@ -95,6 +95,9 @@ class EvaluationMetrics:
     user_current_transcript: str = ""
     agent_current_transcript: str = ""
 
+    # Track if agent bot is currently speaking
+    agent_bot_is_speaking: bool = False
+
     # Audio recording (for stereo WAV output)
     user_audio_chunks: List[bytes] = field(default_factory=list)
     agent_audio_chunks: List[bytes] = field(default_factory=list)
@@ -461,6 +464,7 @@ class RTVIEvaluationBridge:
         # Clear accumulated transcript segments
         self.metrics.user_current_transcript = ""
         self.metrics.agent_current_transcript = ""
+        self.metrics.agent_bot_is_speaking = False
 
         logger.info("Both agents reset complete")
 
@@ -1618,6 +1622,28 @@ class RTVIEvaluationBridge:
 
         # Track when agent bot starts speaking
         if message_type == RTVI_BOT_STARTED_SPEAKING:
+            # If we have an accumulated transcript from a previous response, finalize it now
+            if self.metrics.agent_current_transcript and not self.metrics.agent_bot_is_speaking:
+                complete_text = self.metrics.agent_current_transcript.strip()
+                logger.info(f"[AGENT] (auto-finalized on new start) {complete_text}")
+
+                turn_data = {
+                    "timestamp": datetime.now().isoformat(),
+                    "role": "agent",
+                    "text": complete_text,
+                }
+                self.metrics.turns.append(turn_data)
+
+                if self.log_file:
+                    with open(self.log_file, "a") as f:
+                        f.write(f"[{datetime.now().strftime('%H:%M:%S.%f')[:-3]}] AGENT: {complete_text}\n")
+
+                # Clear accumulated text
+                self.metrics.agent_current_transcript = ""
+
+            # Mark that agent is now speaking
+            self.metrics.agent_bot_is_speaking = True
+
             if self.metrics.waiting_for_agent_response and self.metrics.user_last_audio_time:
                 latency_ms = (timestamp - self.metrics.user_last_audio_time) * 1000
                 logger.debug(f"[TIMING] Agent started speaking at {timestamp:.3f} (latency: {latency_ms:.1f}ms)")
@@ -1635,6 +1661,9 @@ class RTVIEvaluationBridge:
         # Track when agent bot stops speaking (finalize turn)
         elif message_type == RTVI_BOT_STOPPED_SPEAKING:
             logger.debug(f"[TIMING] Agent stopped speaking at {timestamp:.3f}")
+
+            # Mark that agent stopped speaking
+            self.metrics.agent_bot_is_speaking = False
 
             # Finalize the turn with accumulated transcript
             if self.metrics.agent_current_transcript:
