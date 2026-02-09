@@ -185,4 +185,4 @@ slurm*.out
 # voice agent
 node_modules/
 .vite/
-bot_server.*
+bot_server.*docs/source/asr/speaker_diarization/images/aosc_3spk_example.gif
