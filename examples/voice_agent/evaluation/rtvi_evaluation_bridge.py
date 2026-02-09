@@ -46,7 +46,7 @@ from pipecat.processors.frameworks.rtvi import (
 from pipecat.serializers.protobuf import MessageFrame, ProtobufFrameSerializer
 
 # Import AudioStream for buffering and resampling
-from nemo.agents.voice_agent.utils.audio import AudioStream
+from nemo.agents.voice_agent.utils.audio import AudioStream, NoiseConfig
 
 # RTVI message type constants - automatically adapts to pipecat changes
 RTVI_BOT_STOPPED_SPEAKING = RTVIBotStoppedSpeakingMessage().type
@@ -212,7 +212,7 @@ class RTVIEvaluationBridge:
         seglst_start_offset_seconds: float = -0.1,
         seglst_end_offset_seconds: float = -0.35,
         turn_end_silence_threshold: float = 0.35,
-        noise_files: Optional[Union[str, List[str]]] = None,
+        noise_config: Optional[NoiseConfig] = None,
     ):
         self.user_url = user_url
         self.agent_url = agent_url
@@ -243,6 +243,9 @@ class RTVIEvaluationBridge:
             seglst_start_offset_seconds  # Default additional offset for segLST timestamps
         )
         self.seglst_end_offset_seconds = seglst_end_offset_seconds  # Default additional offset for segLST timestamps
+
+        # Noise configuration for user channel
+        self.noise_config = noise_config
 
         self.user_ws = None
         self.agent_ws = None
@@ -296,6 +299,7 @@ class RTVIEvaluationBridge:
 
     def init_log_file(self, log_file: Optional[str] = None, session_name: Optional[str] = None):
         """Initialize the log file"""
+        logger.info(f"Initializing log file: {log_file}, session name: {session_name}")
         if log_file:
             self.log_file = log_file
             output_dir = Path(log_file).parent
@@ -317,6 +321,16 @@ class RTVIEvaluationBridge:
             logger.error(f"Error initializing log file: {e}")
             return False
         return True
+
+    def set_noise_config(self, noise_config: Optional[Union[NoiseConfig, dict]] = None):
+        """Set the noise configuration"""
+        logger.info(f"Setting noise configuration: {noise_config}")
+        if noise_config is not None:
+            if isinstance(noise_config, dict):
+                noise_config = NoiseConfig(**noise_config)
+            self.noise_config = noise_config
+        else:
+            self.noise_config = None
 
     def _get_relative_time(self, timestamp: float) -> float:
         """
@@ -1072,6 +1086,10 @@ class RTVIEvaluationBridge:
         except websockets.exceptions.ConnectionClosed as e:
             logger.info(f"[{direction}] WebSocket closed: {e}")
         except Exception as e:
+            # print traceback
+            import traceback
+
+            traceback.print_exc()
             logger.error(f"[{direction}] Send error: {e}", exc_info=True)
 
     def user_websocket_thread(self, duration: int):
@@ -1173,6 +1191,7 @@ class RTVIEvaluationBridge:
                         output_sample_rate=self.agent_input_sample_rate,
                         stream_resampler=False,
                         tag="USER→AGENT",
+                        noise_config=self.noise_config,
                     )
 
                     # Send kickoff message after a delay

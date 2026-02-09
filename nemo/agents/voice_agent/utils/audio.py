@@ -14,6 +14,7 @@
 
 import asyncio
 import time
+from dataclasses import dataclass
 from typing import List, Optional, Tuple, Union
 
 import librosa
@@ -22,6 +23,22 @@ import soxr
 from loguru import logger
 
 STREAM_TIMEOUT_SECS = 0.2
+
+
+def audio_bytes_to_float32(audio_bytes: bytes) -> np.ndarray:
+    """
+    Convert PCM-16 audio bytes to float32 numpy array, clamped to -1.0 to 1.0.
+    """
+    audio_float32 = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+    return np.clip(audio_float32, -1.0, 1.0)
+
+
+def audio_float32_to_bytes(audio_float32: np.ndarray) -> bytes:
+    """
+    Convert float32 numpy array to PCM-16 audio bytes.
+    """
+    audio_float32 = np.clip(audio_float32, -1.0, 1.0)
+    return (audio_float32 * 32767.0).astype(np.int16).tobytes()
 
 
 class NoiseGenerator:
@@ -124,7 +141,7 @@ class NoiseGenerator:
         Get the next noise audio segment of chunk size chunk_size_in_seconds, and return the chunk as Int16 bytes.
         """
         noise_chunk = self.get_noise_chunk(chunk_size_in_seconds)
-        return (noise_chunk * 32767.0).astype(np.int16).tobytes()
+        return audio_float32_to_bytes(noise_chunk)
 
 
 class SOXRAudioResampler:
@@ -209,6 +226,17 @@ class SOXRAudioStreamResampler:
         return result
 
 
+@dataclass
+class NoiseConfig:
+    """
+    A class that configures the noise for the audio stream.
+    """
+
+    noise_files: Union[List[str], str]
+    gain_db: float = 0.0
+    max_noise_duration: Optional[float] = 600.0
+
+
 class AudioStream:
     """
     A class that simulates a realtime audio stream. It caches the input audio chunks
@@ -230,11 +258,7 @@ class AudioStream:
         min_buffer_chunks: int = 5,
         drain_threshold: int = 5,
         min_sustain_chunks: int = 1,
-        noise_files: Union[List[str], str] = None,
-        min_snr_db: float = 0.0,
-        max_snr_db: float = 30.0,
-        max_gain_db: float = 300.0,
-        max_noise_duration: Optional[float] = 600.0,
+        noise_config: Optional[NoiseConfig] = None,
     ):
         self.chunk_size_in_seconds = chunk_size_in_seconds
         self.input_sample_rate = input_sample_rate
@@ -244,16 +268,20 @@ class AudioStream:
         self.tag = tag
         self.min_buffer_chunks = min_buffer_chunks
         self._buffer_ready = False
-        self.noise_files = noise_files
-        self.min_snr_db = min_snr_db
-        self.max_snr_db = max_snr_db
-        self.max_gain_db = max_gain_db
-        if self.noise_files is not None:
+
+        self.noise_config = noise_config
+        if self.noise_config is not None:
+            logger.info(f"[{self.tag}] Using noise configuration: {self.noise_config}")
+            self.gain_db = self.noise_config.gain_db
             self.noise_generator = NoiseGenerator(
-                self.noise_files, self.output_sample_rate, max_duration=max_noise_duration
+                self.noise_config.noise_files,
+                self.output_sample_rate,
+                max_duration=self.noise_config.max_noise_duration,
             )
         else:
+            self.gain_db = None
             self.noise_generator = None
+
         # Initialize the appropriate resampler
         if self.stream_resampler:
             self.resampler = SOXRAudioStreamResampler(input_sample_rate, output_sample_rate, quality="VHQ")
@@ -270,6 +298,7 @@ class AudioStream:
         self.drain_threshold = drain_threshold  # Only reset ready after 5 consecutive underflows (~80ms of silence)
         self.min_sustain_chunks = min_sustain_chunks
         self._next_send_time = 0
+        self._prev_noise_scale = 1.0
 
     async def put(self, audio_chunk: bytes):
         """
@@ -300,76 +329,45 @@ class AudioStream:
 
         return self.resampler.resample(audio_chunk)
 
-    def _augment_with_noise(self, audio_chunk: bytes, noise_chunk: bytes, target_length_bytes: int) -> bytes:
+    def _augment_with_noise(self, audio_chunk: bytes, noise_chunk: Optional[bytes] = None) -> bytes:
         """
         Augment audio with noise based on random SNR sampling.
 
-        This method mixes audio with noise according to a randomly sampled SNR value
-        from the range [min_snr_db, max_snr_db]. The noise is scaled to achieve the
-        target SNR, with a maximum gain limit to prevent excessive amplification.
+        This method mixes audio with noise according to a gain_db.
 
         Args:
             audio_chunk: Original audio bytes (16-bit signed integers)
             noise_chunk: Noise audio bytes (16-bit signed integers)
-            target_length_bytes: Target output length in bytes
 
         Returns:
-            Mixed audio with noise, exactly target_length_bytes long
+            Mixed audio with noise as bytes
         """
-        # Step 1: Prepare arrays
-        audio_samples = len(audio_chunk) // 2  # 16-bit = 2 bytes per sample
-        noise_samples_needed = target_length_bytes // 2
+        if not noise_chunk:
+            return audio_chunk
 
-        # Step 2: Prepare noise (trim or pad to target length)
-        noise_int16 = np.frombuffer(noise_chunk, dtype=np.int16).astype(np.float32)
-        if len(noise_int16) > noise_samples_needed:
-            noise_int16 = noise_int16[:noise_samples_needed]
-        elif len(noise_int16) < noise_samples_needed:
-            # Pad noise with zeros if too short
-            padding = np.zeros(noise_samples_needed - len(noise_int16), dtype=np.float32)
-            noise_int16 = np.concatenate([noise_int16, padding])
+        # Step 1: Convert to float32 arrays
+        audio_float32 = audio_bytes_to_float32(audio_chunk)
+        noise_float32 = audio_bytes_to_float32(noise_chunk)
 
-        # Step 3: Sample random SNR
-        target_snr_db = np.random.uniform(self.min_snr_db, self.max_snr_db)
+        # Step 2: Match noise length to audio length
+        if len(noise_float32) < len(audio_float32):
+            noise_float32 = np.pad(noise_float32, (0, len(audio_float32) - len(noise_float32)), mode='constant')
+        elif len(noise_float32) > len(audio_float32):
+            noise_float32 = noise_float32[: len(audio_float32)]
 
-        # Step 4: Calculate noise scale factor
-        if audio_samples > 0:
-            # We have signal, calculate SNR-based scale
-            audio_int16 = np.frombuffer(audio_chunk, dtype=np.int16).astype(np.float32)
-            signal_power = np.mean(audio_int16**2)
-            noise_power = np.mean(noise_int16**2)
-
-            if noise_power > 0 and signal_power > 0:
-                # SNR_dB = 10 * log10(P_signal / P_noise_target)
-                # P_noise_target = P_signal / 10^(SNR_dB/10)
-                # scale = sqrt(P_noise_target / P_noise_original)
-                target_noise_power = signal_power / (10 ** (target_snr_db / 10))
-                noise_scale = np.sqrt(target_noise_power / noise_power)
-            else:
-                noise_scale = 1.0
+        # Step 3: Apply gain augmentation to noise
+        if self.gain_db is not None:
+            noise_scale = 10 ** (self.gain_db / 20)
         else:
-            # No signal (pure padding), use max gain
-            noise_scale = 10 ** (self.max_gain_db / 20)
+            noise_scale = 1.0
 
-        # Step 5: Apply max gain limit
-        max_scale = 10 ** (self.max_gain_db / 20)
-        noise_scale = min(noise_scale, max_scale)
+        # Step 4: Scale noise and mix with audio
+        scaled_noise_float32 = noise_float32 * noise_scale
+        mixed_float32 = audio_float32 + scaled_noise_float32
 
-        # Step 6: Scale noise
-        scaled_noise = noise_int16 * noise_scale
-
-        # Step 7: Mix audio + noise
-        output = np.zeros(noise_samples_needed, dtype=np.float32)
-        if audio_samples > 0:
-            # Mix signal + noise for overlapping region
-            audio_int16 = np.frombuffer(audio_chunk, dtype=np.int16).astype(np.float32)
-            output[:audio_samples] = audio_int16 + scaled_noise[:audio_samples]
-        # Use only noise for padding region
-        output[audio_samples:] = scaled_noise[audio_samples:]
-
-        # Step 8: Clip to int16 range and convert to bytes
-        output = np.clip(output, -32768, 32767).astype(np.int16)
-        return output.tobytes()
+        # Step 5: Convert back to PCM-16 audio bytes and return
+        mixed_bytes = audio_float32_to_bytes(mixed_float32)
+        return mixed_bytes
 
     def get_output_chunk(self, audio_chunk: bytes, noise_chunk: Optional[bytes] = None) -> bytes:
         """
@@ -385,6 +383,7 @@ class AudioStream:
         Returns:
             Audio chunk padded to output_chunk_bytes
         """
+
         current_length = len(audio_chunk)
         if current_length >= self.output_chunk_bytes:
             # Trim to exact size
@@ -395,8 +394,21 @@ class AudioStream:
             audio_chunk = audio_chunk + (b'\x00' * padding_bytes)
 
         if noise_chunk is not None:
-            # Use noise augmentation
-            return self._augment_with_noise(audio_chunk, noise_chunk, self.output_chunk_bytes)
+            # Pad or trim noise chunk to the same length as audio chunk
+            if len(noise_chunk) < len(audio_chunk):
+                padding_bytes = len(audio_chunk) - len(noise_chunk)
+                logger.debug(f"[{self.tag}] Padding noise chunk with {padding_bytes} bytes")
+                noise_chunk = noise_chunk + (b'\x00' * padding_bytes)
+            elif len(noise_chunk) > len(audio_chunk):
+                noise_chunk = noise_chunk[: len(audio_chunk)]
+                logger.debug(f"[{self.tag}] Trimming noise chunk to {len(audio_chunk)} bytes")
+            # Apply noise augmentation
+            try:
+                audio_chunk = self._augment_with_noise(audio_chunk, noise_chunk)
+                return audio_chunk
+            except Exception as e:
+                logger.error(f"Error augmenting audio with noise: {e}")
+                return audio_chunk
         else:
             return audio_chunk
 
@@ -495,19 +507,21 @@ class AudioStream:
         if self.noise_generator is not None:
             noise_chunk = self.noise_generator.get_noise_chunk_bytes(self.chunk_size_in_seconds)
         else:
-            noise_chunk = b''
+            noise_chunk = None
 
         if not self._buffer_ready:
             logger.debug(
                 f"[{self.tag}] Buffer not ready ({self.current_buffer_size}/{self.min_buffer_chunks} chunks), sending silence"
             )
             # Return the output chunk and a boolean indicating if there's speech in the chunk
-            return self.get_output_chunk(b'', noise_chunk), False
+            silence_chunk = b'\x00' * self.output_chunk_bytes
+            return self.get_output_chunk(silence_chunk, noise_chunk), False
 
         logger.debug(
             f"[{self.tag}] Buffer ready ({self.current_buffer_size}/{self.min_buffer_chunks} chunks), sending audio"
         )
         output_chunk = self.output_buffer
+        has_speech = True
         # If we have more than needed, split it
         if len(output_chunk) > self.output_chunk_bytes:
             output_audio_chunk = output_chunk[: self.output_chunk_bytes]
@@ -523,9 +537,9 @@ class AudioStream:
             if self._buffer_empty_count > self.drain_threshold:
                 self._buffer_ready = False
                 logger.warning(f"[{self.tag}] Buffer drained, resetting (empty count: {self._buffer_empty_count})")
-            logger.debug(f"[{self.tag}] Buffer partial, padding (empty count: {self._buffer_empty_count})")
-            self.output_buffer = b''
-            output_audio_chunk = output_chunk
+            logger.debug(f"[{self.tag}] Buffer partial, returning silence (empty count: {self._buffer_empty_count})")
+            output_audio_chunk = b'\x00' * self.output_chunk_bytes
+            has_speech = False
 
         # Return the output chunk and a boolean indicating if there's speech in the chunk
-        return self.get_output_chunk(output_audio_chunk, noise_chunk), True
+        return self.get_output_chunk(output_audio_chunk, noise_chunk), has_speech
