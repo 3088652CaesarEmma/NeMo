@@ -37,7 +37,7 @@ async def run_dynamic_evaluation(
     output_dir: str,
     scenarios: list[dict],
     duration_per_scenario: int = 60,
-    pause_between_scenarios: int = 2,
+    pause_between_scenarios: float = 0.5,
     user_output_sample_rate: int = 24000,
     agent_output_sample_rate: int = 24000,
     user_input_sample_rate: int = 16000,
@@ -79,22 +79,13 @@ async def run_dynamic_evaluation(
         output_sample_rate=output_sample_rate,
     )
 
-    await bridge.connect()
-
     all_results = []
 
     for idx, scenario in enumerate(scenarios):
-        # Reset bridge before each scenario (except the first) to clear WebSocket buffers
-        logger.info(f"\nResetting bridge before scenario {idx+1}...")
-        await bridge.reset(reconnect_websockets=True)
-        logger.info(f"Pausing {pause_between_scenarios} seconds before scenario {idx+1}...")
-        await asyncio.sleep(pause_between_scenarios)
-
         logger.info(f"\n{'='*80}")
         logger.info(f"Starting Scenario {idx+1}/{len(scenarios)}: {scenario['name']}")
         logger.info(f"Scenario config: {scenario}")
         logger.info(f"{'='*80}\n")
-
         # Create scenario-specific directory
         scenario_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         scenario_name_safe = scenario['name'].replace(' ', '_').replace('/', '_')
@@ -104,39 +95,21 @@ async def run_dynamic_evaluation(
         # Initialize log file for this scenario
         log_file = os.path.join(scenario_dir, "bridge_log.txt")
         setup_logging(log_file=log_file)  # Update logging to write to this file
-
         conversation_log_file = os.path.join(scenario_dir, "conversation_log.txt")
-        bridge.init_log_file(conversation_log_file, session_name=scenario_name_safe)
         logger.info(f"Scenario directory: {scenario_dir}")
         logger.info(f"Logging to: {log_file}")
         logger.info(f"Conversation saved to: {conversation_log_file}")
 
-        # Update prompts (handler will automatically reset)
-        await bridge.update_user_prompt(scenario["user_prompt"], auto_reset=False)
-
-        if "agent_prompt" in scenario:
-            # Note: update_system_prompt handler in bot_websocket.py automatically resets,
-            # so we don't need explicit reset calls here
-            await bridge.update_agent_prompt(scenario["agent_prompt"], auto_reset=False)
-        else:
-            # reset agent cache
-            await bridge.reset_agent()
-
-        if "noise_config" in scenario:
-            bridge.set_noise_config(scenario["noise_config"])
-        else:
-            bridge.set_noise_config(None)
-
-        # Wait for agents to stabilize after reset
-        logger.info("Waiting for agents to stabilize after prompt update...")
-        await asyncio.sleep(3)
+        logger.info(f"\nPreparing for scenario {idx+1}...")
+        await bridge.prepare_for_scenario(scenario, conversation_log_file)
+        await asyncio.sleep(pause_between_scenarios)
 
         # Run scenario
         duration = scenario.get("duration", duration_per_scenario)
         logger.info(f"Running scenario for {duration} seconds...")
 
         scenario_start = datetime.now()
-        await bridge.route_audio(duration=duration)
+        await bridge.run_scenario(duration=duration)
         scenario_end = datetime.now()
 
         # Collect metrics for this scenario
@@ -158,8 +131,6 @@ async def run_dynamic_evaluation(
             logger.info(f"  Mean latency: {latency_stats['mean_ms']:.1f}ms")
             logger.info(f"  Median latency: {latency_stats['median_ms']:.1f}ms")
             logger.info(f"  P95 latency: {latency_stats['p95_ms']:.1f}ms")
-
-    await bridge.disconnect()
 
     # Save detailed results
     results_file = os.path.join(output_dir, f"results_{global_timestamp}.json")
@@ -307,18 +278,18 @@ Examples:
                 "max_noise_duration": 600.0,
             },
         },
-        {
-            "name": "Friendly_Conversation-Clean",
-            "user_prompt": """You are a friendly human user named Bob, and you are testing a voice assistant. 
-            Start by saying that "Hi I'm Bob", then ask the following questions one by one, wait for response before asking the next question: 
-            1. Tell me a joke about a cat. 
-            2. What's the capital of the United States?
-            3. What's the result of 1+1?
-            4. What's the color of the sky?
-            After the agent has answered all the questions, say "Thank you for your answers. Goodbye." and keep responding with empty responses "\n".
-            """,
-            "duration": 90,
-        },
+        # {
+        #     "name": "Friendly_Conversation-Clean",
+        #     "user_prompt": """You are a friendly human user named Bob, and you are testing a voice assistant.
+        #     Start by saying that "Hi I'm Bob", then ask the following questions one by one, wait for response before asking the next question:
+        #     1. Tell me a joke about a cat.
+        #     2. What's the capital of the United States?
+        #     3. What's the result of 1+1?
+        #     4. What's the color of the sky?
+        #     After the agent has answered all the questions, say "Thank you for your answers. Goodbye." and keep responding with empty responses "\n".
+        #     """,
+        #     "duration": 90,
+        # },
         #         {
         #             "name": "Challenging Questions",
         #             "user_prompt": """You are a human user. You are testing a voice assistant with difficult questions.

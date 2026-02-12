@@ -92,6 +92,8 @@ class BaseNemoTTSService(TTSService, ToolCallingMixin):
     def reset(self):
         """Reset the TTS service."""
         self._text_aggregator.reset()
+        self._tts_queue = asyncio.Queue()
+        logger.debug("TTS service reset complete")
 
     def setup_tool_calling(self):
         """

@@ -182,6 +182,8 @@ nemo_experiments/
 
 slurm*.out
 
+onelogger.*
+
 # voice agent
 node_modules/
 .vite/

@@ -35,6 +35,7 @@ from typing import Callable, List, Optional, Tuple, Union
 import numpy as np
 import websockets
 from loguru import logger
+from omegaconf import DictConfig
 from pipecat.frames.frames import OutputAudioRawFrame
 from pipecat.processors.frameworks.rtvi import (
     RTVIBotStartedSpeakingMessage,
@@ -147,6 +148,9 @@ class EvaluationMetrics:
 
     def reset(self):
         """Reset all metrics to prepare for a new scenario"""
+        self.start_time = None
+        self.end_time = None
+
         # Reset latency tracking state
         self.user_last_audio_time = None
         self.agent_last_audio_time = None
@@ -209,7 +213,6 @@ class RTVIEvaluationBridge:
         burst_size_range: Tuple[int, int] = (3, 8),
         burst_delay_ms: int = 0,
         grace_period: float = 5.0,
-        no_audio_timeout: float = 5.0,
         seglst_start_offset_seconds: float = -0.00,
         seglst_end_offset_seconds: float = -0.00,
         turn_end_silence_threshold: float = 0.35,
@@ -231,7 +234,6 @@ class RTVIEvaluationBridge:
             burst_size_range: Range of the burst size
             burst_delay_ms: Delay between the frames in the burst
             grace_period: Grace period after the main duration, used to drain the websocket
-            no_audio_timeout: Timeout for no audio when in grace period
             seglst_start_offset_seconds: Start offset for the segLST, used to adjust the start time of the segLST timestamps
             seglst_end_offset_seconds: End offset for the segLST, used to adjust the end time of the segLST timestamps
             turn_end_silence_threshold: Silence threshold for the turn, used to determine the end-of-turn by continuous silence
@@ -256,7 +258,6 @@ class RTVIEvaluationBridge:
 
         # Grace period and timeout configuration for send loops
         self.grace_period = grace_period  # Extra time to drain audio after main duration
-        self.no_audio_timeout = no_audio_timeout  # Stop if no audio for N seconds during grace period
 
         # Audio-based turn detection configuration
         self.turn_end_silence_threshold = turn_end_silence_threshold  # Continuous silence before ending turn
@@ -316,11 +317,16 @@ class RTVIEvaluationBridge:
         else:
             logger.info(f"Steady mode: sending at constant {self.audio_chunk_in_seconds * 1000:.0f}ms intervals")
 
-        # Initialize log file
-        self.init_log_file(log_file, session_name)
+        # Initialize conversation log file
+        if log_file:
+            self.init_log_file(log_file, session_name)
+        else:
+            logger.warning("No log file provided, conversation log will not be saved")
+
+        self.bridge_ready = False
 
     def init_log_file(self, log_file: Optional[str] = None, session_name: Optional[str] = None):
-        """Initialize the log file"""
+        """Initialize the conversation log file"""
         logger.info(f"Initializing log file: {log_file}, session name: {session_name}")
         if log_file:
             self.log_file = log_file
@@ -353,6 +359,35 @@ class RTVIEvaluationBridge:
             self.noise_config = noise_config
         else:
             self.noise_config = None
+
+    async def prepare_for_scenario(self, scenario: Union[dict, DictConfig], log_file: str):
+        # Initialize log file for this scenario
+        self.init_log_file(log_file, session_name=scenario['name'])
+
+        # Reset bridge before each scenario, and create connection to update the prompts
+        await self.connect()
+
+        # Update prompts (handler will automatically reset)
+        await self.update_user_prompt(scenario["user_prompt"], auto_reset=False)
+
+        if "agent_prompt" in scenario:
+            # Note: update_system_prompt handler in bot_websocket.py automatically resets,
+            # so we don't need explicit reset calls here
+            await self.update_agent_prompt(scenario["agent_prompt"], auto_reset=False)
+        else:
+            # reset agent cache
+            await self.reset_agent()
+
+        if "noise_config" in scenario:
+            self.set_noise_config(scenario["noise_config"])
+        else:
+            self.set_noise_config(None)
+
+        # Disconnect the bridge to clear the WebSocket buffers
+        await self.disconnect(print_stats=False)
+
+        logger.info(f"Finished preparing for scenario: {scenario['name']}")
+        self.bridge_ready = True
 
     def _get_relative_time(self, timestamp: float) -> float:
         """
@@ -603,7 +638,7 @@ class RTVIEvaluationBridge:
         # Send RTVI client-ready handshake to both agents
         await self._send_client_ready(self.user_ws)
         await self._send_client_ready(self.agent_ws)
-
+        await self.reset()
         logger.info("Both agents connected and ready")
 
     async def _send_client_ready(self, ws):
@@ -729,6 +764,10 @@ class RTVIEvaluationBridge:
             ws: WebSocket connection
             agent_name: Name of agent (for logging)
         """
+        if not ws:
+            logger.info(f"[{agent_name.capitalize()}] Websocket is not connected, skipping reset")
+            return
+
         reset_msg = {
             "label": "rtvi-ai",
             "type": "action",
@@ -747,38 +786,18 @@ class RTVIEvaluationBridge:
 
         logger.info(f"{agent_name.capitalize()} reset action sent")
 
-    async def reset(self, reconnect_websockets: bool = True):
+    async def reset(self):
         """
-        Reset both agents' conversation history and optionally reconnect WebSockets.
-
-        Args:
-            reconnect_websockets: If True, disconnect and reconnect WebSockets to clear buffers
-                                  This prevents old audio from previous scenario contaminating the next one
+        Reset metrics and both agents' conversation history
         """
-        logger.info("Resetting both agents...")
-
-        if reconnect_websockets:
-            logger.info("Reconnecting WebSockets to clear message buffers...")
-
-            # Disconnect existing WebSocket connections (without printing stats)
-            await self.disconnect(print_stats=False)
-
-            # Wait for 2 seconds to ensure the WebSocket connections are closed
-            await asyncio.sleep(2.0)
-
-            # Reconnect to both agents
-            await self.connect()
-            logger.info("WebSocket reconnection complete")
-        else:
-            # Just send reset actions without reconnecting
+        logger.info("Resetting metrics and conversation context...")
+        if self.user_ws:
             await self._send_reset_action(self.user_ws, "user")
+        if self.agent_ws:
             await self._send_reset_action(self.agent_ws, "agent")
 
         # Reset all metrics
         self.metrics.reset()
-        self.metrics.start_time = datetime.now()
-
-        logger.info("Both agents reset complete")
 
     async def reset_agent(self):
         """
@@ -901,7 +920,7 @@ class RTVIEvaluationBridge:
                 # Check if we're past the main duration
                 in_grace_period = elapsed > duration
                 if in_grace_period:
-                    logger.debug(f"[{direction}] In grace period, skip monitoring messages")
+                    logger.debug(f"[{direction}] In grace period, skip monitoring message: {frame}")
                     continue
 
                 # Monitor messages
@@ -946,24 +965,12 @@ class RTVIEvaluationBridge:
         target_time = start_time  # Track target time incrementally for numerical stability
 
         try:
-            last_audio_time = loop.time()
-
             while True:
                 current_time = loop.time()
                 elapsed = current_time - start_time
-
-                # Check if we're past the main duration
                 in_grace_period = elapsed > duration
-
-                # Stop conditions:
-                # 1. Exceeded duration + grace period
-                # 2. In grace period and no audio for no_audio_timeout seconds
                 if elapsed > (duration + self.grace_period):
                     logger.info(f"[{direction}] Grace period expired after {elapsed:.1f}s, stopping")
-                    break
-
-                if in_grace_period and (current_time - last_audio_time) > self.no_audio_timeout:
-                    logger.info(f"[{direction}] No audio for {self.no_audio_timeout}s in grace period, stopping")
                     break
 
                 # Empty all available audio from thread-safe queue (non-blocking)
@@ -974,14 +981,13 @@ class RTVIEvaluationBridge:
                         audio_chunk = source_queue.get_nowait()
                         # Put into AudioStream for buffering/resampling
                         await audio_stream.put(audio_chunk)
-                        last_audio_time = current_time
                         chunks_retrieved += 1
                     except queue.Empty:
                         break
 
                 logger.debug(f"[{direction}] Retrieved {chunks_retrieved} chunks from queue")
                 if in_grace_period:
-                    logger.debug(f"[{direction}] In grace period, skip forwarding audio")
+                    logger.debug(f"[{direction}] In grace period, skip forwarding audio: {chunks_retrieved} chunks")
                     continue
 
                 # Burst sending: send N frames rapidly, then pause
@@ -1000,7 +1006,7 @@ class RTVIEvaluationBridge:
                     audio_to_send, has_speech = await audio_stream.get_nowait()
 
                     # Track audio-based segments
-                    self._track_audio_segment(direction, has_speech, audio_to_send, current_time)
+                    self._track_audio_segment(direction, has_speech, audio_to_send, loop.time())
 
                     # Track sent audio
                     sent_chunks_list.append(audio_to_send)
@@ -1220,7 +1226,7 @@ class RTVIEvaluationBridge:
             monitor_func=self._monitor_agent_message,
         )
 
-    async def route_audio(self, duration: int = 300):
+    async def run_scenario(self, duration: int = 300):
         """
         Route audio between agents and monitor conversation.
         Uses separate threads per WebSocket to eliminate asyncio contention.
@@ -1228,7 +1234,10 @@ class RTVIEvaluationBridge:
         Args:
             duration: Duration of the evaluation in seconds
         """
-        logger.info(f"[THREADED BRIDGE] Routing audio for {duration} seconds...")
+        if not self.bridge_ready:
+            raise RuntimeError("[EVAL BRIDGE] Bridge is not ready, please call `bridge.prepare_for_scenario()` first")
+
+        logger.info(f"[EVAL BRIDGE] Running scenario for {duration} seconds...")
         self.metrics.start_time = datetime.now()
 
         # Clear debug accumulation lists for this run (only final sent audio)
@@ -2092,7 +2101,7 @@ class RTVIEvaluationBridge:
 
             traceback.print_exc()
 
-    async def disconnect(self, print_stats: bool = True):
+    async def disconnect(self, print_stats: bool = False):
         """
         Disconnect from both user and agent.
 

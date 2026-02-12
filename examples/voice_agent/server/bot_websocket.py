@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 from loguru import logger
 from omegaconf import OmegaConf
 from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.frames.frames import EndTaskFrame
+from pipecat.frames.frames import EndTaskFrame, LLMRunFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -270,12 +270,14 @@ async def run_bot_websocket_server(
         try:
             if task_running:
                 await task.queue_frames([EndTaskFrame()])
-                await asyncio.sleep(1.0)
             user_context_aggregator.reset()
             assistant_context_aggregator.reset()
             user_context_aggregator.set_messages(copy.deepcopy(original_messages))
             assistant_context_aggregator.set_messages(copy.deepcopy(original_messages))
+            stt.reset()
             tts.reset()
+            if turn_taking is not None:
+                turn_taking.reset()
             if diar is not None:
                 diar.reset()
             logger.info("Conversation context reset successfully")
@@ -301,7 +303,6 @@ async def run_bot_websocket_server(
         try:
             if task_running:
                 await task.queue_frames([EndTaskFrame()])
-                await asyncio.sleep(1.0)
             new_prompt = arguments.get("prompt", "")
             if not new_prompt:
                 logger.error("No prompt provided in update_system_prompt action")
@@ -331,8 +332,11 @@ async def run_bot_websocket_server(
             user_context_aggregator.set_messages(copy.deepcopy(new_messages))
             assistant_context_aggregator.set_messages(copy.deepcopy(new_messages))
 
-            # Reset TTS and diarization states
+            # Reset services
+            stt.reset()
             tts.reset()
+            if turn_taking is not None:
+                turn_taking.reset()
             if diar is not None:
                 diar.reset()
 
@@ -410,7 +414,7 @@ async def run_bot_websocket_server(
             # Kick off the conversation.
             try:
                 logger.info("Kicking off the conversation...")
-                await task.queue_frames([user_context_aggregator.get_context_frame()])
+                await task.queue_frames([LLMRunFrame()])
             except Exception as e:
                 logger.error(f"Error queuing context frame: {e}")
         else:
@@ -436,6 +440,12 @@ async def run_bot_websocket_server(
         if task_running:
             try:
                 await task.queue_frames([EndTaskFrame()])
+                stt.reset()
+                tts.reset()
+                if turn_taking is not None:
+                    turn_taking.reset()
+                if diar is not None:
+                    diar.reset()
             except Exception as e:
                 # Don't log warnings for normal connection closures
                 if "ConnectionClosedOK" not in str(e) and "1005" not in str(e):
@@ -465,16 +475,17 @@ async def run_bot_websocket_server(
         # Run the task until shutdown is requested
         await asyncio.wait_for(runner.run(task), timeout=None)  # No timeout - run indefinitely
     except asyncio.TimeoutError:
+        task_running = False
         logger.info("Pipeline runner timeout (should not happen with no timeout)")
     except Exception as e:
         logger.error(f"Pipeline runner error: {e}")
-        task_running = False
     finally:
         # Finalize audio logger on shutdown
         if audio_logger:
             audio_logger.finalize_session()
             logger.info("Audio logger session finalized on shutdown")
         logger.info("Pipeline runner stopped")
+        task_running = False
 
 
 if __name__ == "__main__":

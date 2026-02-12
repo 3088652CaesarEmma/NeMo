@@ -188,6 +188,11 @@ class NemoSTTService(STTService):
         # Reset the state of the STT service
         self._reset_stt_state()
 
+    def reset(self):
+        """Reset the state of the STT service."""
+        self._reset_stt_state()
+        logger.debug("STT service reset complete")
+
     async def process_audio_frame(self, frame: AudioRawFrame, direction: FrameDirection):
         """Process an audio frame for speech recognition.
 
@@ -269,9 +274,9 @@ class NemoSTTService(STTService):
                 transcription = asr_result.text
                 is_final = asr_result.is_final
                 delay = datetime.now() - last_audio_timestamp
-                logger.debug(
-                    f"ASR inference time: {end_time - start_time} seconds, delay: {delay}, transcription: {transcription}, audio timestamp: {last_audio_timestamp},"
-                )
+                # logger.debug(
+                #     f"ASR inference time: {end_time - start_time} seconds, delay: {delay}, transcription: {transcription}, audio timestamp: {last_audio_timestamp},"
+                # )
 
                 if self._audio_logger is not None:
                     if self._is_vad_active:

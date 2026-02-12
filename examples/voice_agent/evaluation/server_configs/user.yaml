@@ -46,7 +46,8 @@ turn_taking:
 
 llm:
   type: vllm  # choices in ['auto', 'hf', 'vllm'], if `auto`, it will try to use vllm and fall back to hf if vllm not available
-  model: "Qwen/Qwen3-8B"  # model name for HF models, will be used via `AutoModelForCausalLM.from_pretrained()`
+  # model: "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16"  # model name for HF models, will be used via `AutoModelForCausalLM.from_pretrained()`
+  model: "nvidia/NVIDIA-Nemotron-Nano-9B-v2"
   dtype: bfloat16  # torch.dtype for LLM
   device: "cuda"
   enable_reasoning: false  # it's best to turn-off reasoning for lowest latency, setting it to True will use the same config ending with `_think.yaml` instead
@@ -59,9 +60,14 @@ llm:
   ##############################
   ## Common generation config ##
   ##############################
-  temperature: 0.7  # LLM sampling params
-  top_k: 20  # LLM sampling params
-  top_p: 0.8  # LLM sampling params
+  # temperature: 0.7  # LLM sampling params
+  # top_k: 20  # LLM sampling params
+  # top_p: 0.8  # LLM sampling params
+  # min_p: 0.0  # LLM sampling params
+  # max_new_tokens: 256  # max num of output tokens from LLM
+  temperature: 0.6  # LLM sampling params
+  top_k: 20  # LLM sampling params, NO effect for vllm
+  top_p: 0.95  # LLM sampling params
   min_p: 0.0  # LLM sampling params
   max_new_tokens: 256  # max num of output tokens from LLM
   ##############################
@@ -115,12 +121,10 @@ tts:
   sub_model_id: "am_michael" # "af_heart" "af_bella" "am_fenrir" "am_michael"
   speed: 1.25 # Speaking rate
   extra_separator:  # a list of additional punctuations to chunk LLM response into segments for faster TTS output, e.g., ",". Set to `null` to use default behavior 
-    - ','
     - '\n'
     - "."
     - "?"
     - "!"
-    - ";"
   think_tokens: ["<think>", "</think>"]  # specify them to avoid TTS for thinking process, set to `null` to allow thinking out loud
   ignore_strings:  # strings/characters to ignore in TTS
     - "*"

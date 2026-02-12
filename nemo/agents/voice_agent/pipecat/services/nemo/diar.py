@@ -329,6 +329,7 @@ class NemoDiarService(STTService):
         self._audio_buffer = []
         self._vad_user_speaking = False
         self._model.reset_state()
+        logger.debug("Diarization service reset complete")
 
     def _get_dominant_speaker_id(self, spk_pred: np.ndarray):
         spk_pred = (spk_pred > self._params.threshold).astype(int)
