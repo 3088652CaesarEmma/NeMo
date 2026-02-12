@@ -296,24 +296,24 @@ Examples:
 
     # Default scenarios
     scenarios = [
-        {
-            "name": "Friendly_Conversation-Noisy",
-            "user_prompt": """You are a friendly human user named Bob, and you are testing a voice assistant. 
-            Start by saying that "Hi I'm Bob", then ask the following questions one by one, wait for response before asking the next question: 
-            1. Tell me a joke about a cat. 
-            2. What's the capital of the United States?
-            3. What's the result of 1+1?
-            4. What's the color of the sky?
-            After the agent has answered all the questions, say "Thank you for your answers. Goodbye." and keep responding with empty responses "\n".
-            """,
-            "duration": 90,
-            "noise_config": {
-                "noise_files": "/home/heh/github/NeMo-main/examples/voice_agent/evaluation/nemo_experiments/id_494165-FX_Car_Driving.wav",
-                "gain_db": 0.0,
-                "max_noise_duration": 100.0,
-                "random_offset": True,
-            },
-        },
+        # {
+        #     "name": "Friendly_Conversation-Noisy",
+        #     "user_prompt": """You are a friendly human user named Bob, and you are testing a voice assistant.
+        #     Start by saying that "Hi I'm Bob", then ask the following questions one by one, wait for response before asking the next question:
+        #     1. Tell me a joke about a cat.
+        #     2. What's the capital of the United States?
+        #     3. What's the result of 1+1?
+        #     4. What's the color of the sky?
+        #     After the agent has answered all the questions, say "Thank you for your answers. Goodbye." and keep responding with empty responses "\n".
+        #     """,
+        #     "duration": 90,
+        #     "noise_config": {
+        #         "noise_files": "/home/heh/github/NeMo-main/examples/voice_agent/evaluation/nemo_experiments/id_494165-FX_Car_Driving.wav",
+        #         "gain_db": 0.0,
+        #         "max_noise_duration": 100.0,
+        #         "random_offset": True,
+        #     },
+        # },
         {
             "name": "Friendly_Conversation-Clean",
             "user_prompt": """You are a friendly human user named Bob, and you are testing a voice assistant.
