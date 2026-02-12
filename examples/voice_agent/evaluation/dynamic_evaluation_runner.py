@@ -21,53 +21,13 @@ Each scenario can specify different prompts for evaluator and target agents.
 
 import argparse
 import asyncio
-import inspect
 import json
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+
 from evaluation_bridge import VoiceAgentEvaluationBridge
-
-
-class FileLogger:
-    def __init__(self, log_file: Optional[str] = None):
-        self.log_file = log_file
-
-    def _get_caller_location(self) -> str:
-        """Return file:function:line of the caller, skipping frames inside FileLogger."""
-        logger_methods = {"log", "info", "error", "warning", "debug", "__call__", "_get_caller_location"}
-        for frame_info in inspect.stack():
-            if frame_info.function not in logger_methods:
-                path = Path(frame_info.filename).resolve()
-                return f"{path.name}:{frame_info.function}:{frame_info.lineno}"
-        return "unknown"
-
-    def log(self, message: str, include_caller: bool = True):
-        if include_caller:
-            message = f"{self._get_caller_location()} | {message}"
-
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        message = f"{timestamp} | {message}"
-        if self.log_file:
-            with open(self.log_file, "a") as f:
-                f.write(message + "\n")
-        print(message, flush=True)
-
-    def __call__(self, message: str, include_caller: bool = True):
-        self.log(message, include_caller=include_caller)
-
-    def info(self, message: str, include_caller: bool = True):
-        self.log(f"[INFO]: {message}", include_caller=include_caller)
-
-    def error(self, message: str, include_caller: bool = True):
-        self.log(f"[ERROR]: {message}", include_caller=include_caller)
-
-    def warning(self, message: str, include_caller: bool = True):
-        self.log(f"[WARNING]: {message}", include_caller=include_caller)
-
-    def debug(self, message: str, include_caller: bool = True):
-        self.log(f"[DEBUG]: {message}", include_caller=include_caller)
+from nemo.agents.voice_agent.utils import FileLogger
 
 
 async def run_dynamic_evaluation(
@@ -296,24 +256,24 @@ Examples:
 
     # Default scenarios
     scenarios = [
-        # {
-        #     "name": "Friendly_Conversation-Noisy",
-        #     "user_prompt": """You are a friendly human user named Bob, and you are testing a voice assistant.
-        #     Start by saying that "Hi I'm Bob", then ask the following questions one by one, wait for response before asking the next question:
-        #     1. Tell me a joke about a cat.
-        #     2. What's the capital of the United States?
-        #     3. What's the result of 1+1?
-        #     4. What's the color of the sky?
-        #     After the agent has answered all the questions, say "Thank you for your answers. Goodbye." and keep responding with empty responses "\n".
-        #     """,
-        #     "duration": 90,
-        #     "noise_config": {
-        #         "noise_files": "/home/heh/github/NeMo-main/examples/voice_agent/evaluation/nemo_experiments/id_494165-FX_Car_Driving.wav",
-        #         "gain_db": 0.0,
-        #         "max_noise_duration": 100.0,
-        #         "random_offset": True,
-        #     },
-        # },
+        {
+            "name": "Friendly_Conversation-Noisy",
+            "user_prompt": """You are a friendly human user named Bob, and you are testing a voice assistant.
+            Start by saying that "Hi I'm Bob", then ask the following questions one by one, wait for response before asking the next question:
+            1. Tell me a joke about a cat.
+            2. What's the capital of the United States?
+            3. What's the result of 1+1?
+            4. What's the color of the sky?
+            After the agent has answered all the questions, say "Thank you for your answers. Goodbye." and keep responding with empty responses "\n".
+            """,
+            "duration": 90,
+            "noise_config": {
+                "noise_files": "/home/heh/github/NeMo-main/examples/voice_agent/evaluation/nemo_experiments/id_494165-FX_Car_Driving.wav",
+                "gain_db": 0.0,
+                "max_noise_duration": 100.0,
+                "random_offset": True,
+            },
+        },
         {
             "name": "Friendly_Conversation-Clean",
             "user_prompt": """You are a friendly human user named Bob, and you are testing a voice assistant.

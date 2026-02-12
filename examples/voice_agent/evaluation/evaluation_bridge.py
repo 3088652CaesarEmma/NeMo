@@ -78,7 +78,6 @@ class SegmentEntry:
     end_time: float  # End time in seconds
     speaker: str  # "user" or "agent"
     transcript: str  # Text content
-    audio_chunks: List[bytes] = field(default_factory=list)  # Audio data for this segment
 
 
 @dataclass
@@ -103,11 +102,6 @@ class EvaluationMetrics:
     user_current_transcript: str = ""
     agent_current_transcript: str = ""
 
-    # Audio recording (for stereo WAV output)
-    user_audio_chunks: List[bytes] = field(default_factory=list)
-    agent_audio_chunks: List[bytes] = field(default_factory=list)
-    audio_sample_rate: int = 16000  # Default sample rate
-    audio_start_timestamp: Optional[float] = None  # When first audio arrives (for audio file creation)
     thread_start_timestamp: Optional[float] = None  # When routing threads start (for conversation log timing)
 
     # Segment tracking for segLST output
@@ -160,10 +154,6 @@ class EvaluationMetrics:
         self.segments = []
         self.log_entries = []
 
-        # Reset audio buffers
-        self.user_audio_chunks = []
-        self.agent_audio_chunks = []
-        self.audio_start_timestamp = None
         self.thread_start_timestamp = None
         self.current_user_segment = None
         self.current_agent_segment = None
@@ -198,8 +188,8 @@ class VoiceAgentEvaluationBridge:
         burst_size_range: Tuple[int, int] = (3, 8),
         burst_delay_ms: int = 0,
         grace_period: float = 5.0,
-        turn_start_offset_secs: float = -0.25,
-        turn_end_offset_secs: float = -0.35,
+        turn_start_offset_secs: float = -0.0,
+        turn_end_offset_secs: float = -0.3,
         noise_config: Optional[NoiseConfig] = None,
         log_level: str = "DEBUG",
     ):
@@ -232,7 +222,6 @@ class VoiceAgentEvaluationBridge:
         self.output_dir = output_dir
         self.scenario_name = scenario_name
         self.log_file = None
-        self.audio_file = None
         self.seglst_file = None
         self.bridge_audio_file = None
         self.user_output_sample_rate = user_output_sample_rate
@@ -263,7 +252,6 @@ class VoiceAgentEvaluationBridge:
         self.agent_ws = None
 
         self.metrics = EvaluationMetrics()
-        self.metrics.audio_sample_rate = output_sample_rate
 
         # Serializers for protobuf communication
         self.serializer = ProtobufFrameSerializer()
@@ -311,6 +299,7 @@ class VoiceAgentEvaluationBridge:
             self.init_output_dir(output_dir, scenario_name, log_level)
 
         self.bridge_ready = False
+        self.needs_reset = False
 
     def init_output_dir(self, output_dir: str, scenario_name: Optional[str] = None, log_level: str = "DEBUG"):
         """Initialize the output directory and all derived log/audio file paths."""
@@ -319,7 +308,6 @@ class VoiceAgentEvaluationBridge:
         self.scenario_name = scenario_name
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         self.log_file = str(Path(output_dir) / "conversation_log.txt")
-        self.audio_file = str(Path(output_dir) / "concat_audio_segments.wav")
         self.seglst_file = str(Path(output_dir) / "conversation_log.seglst.json")
         self.bridge_audio_file = str(Path(output_dir) / "conversation_log.wav")
 
@@ -350,6 +338,7 @@ class VoiceAgentEvaluationBridge:
 
     async def prepare_for_scenario(self, scenario: Union[dict, DictConfig], output_dir: str, log_level: str = "DEBUG"):
         """Prepare the bridge for a scenario"""
+
         # Initialize output directory for this scenario
         self.init_output_dir(output_dir, scenario_name=scenario['name'], log_level=log_level)
 
@@ -655,33 +644,31 @@ class VoiceAgentEvaluationBridge:
         Reset metrics and both agents' conversation history
         """
         logger.info("Resetting metrics and conversation context...")
-        if self.user_ws:
-            await self._send_reset_action(self.user_ws, "user")
-        if self.agent_ws:
-            await self._send_reset_action(self.agent_ws, "agent")
-
+        await self.reset_user()
+        await self.reset_agent()
         # Reset all metrics
         self.metrics.reset()
+        self.needs_reset = False
 
     async def reset_agent(self):
         """
         Reset agent's conversation history.
         Useful to clear context between evaluation scenarios.
         """
-        logger.info("Resetting agent...")
-        await self._send_reset_action(self.agent_ws, "agent")
-
-        logger.info("Agent reset complete")
+        if self.agent_ws:
+            logger.info("Resetting agent...")
+            await self._send_reset_action(self.agent_ws, "agent")
+            logger.info("Agent reset complete")
 
     async def reset_user(self):
         """
         Reset user's conversation history.
         Useful to clear context between evaluation scenarios.
         """
-        logger.info("Resetting user...")
-        await self._send_reset_action(self.user_ws, "user")
-
-        logger.info("User reset complete")
+        if self.user_ws:
+            logger.info("Resetting user...")
+            await self._send_reset_action(self.user_ws, "user")
+            logger.info("User reset complete")
 
     async def send_text_to_user(self, text: str):
         """
@@ -1096,9 +1083,13 @@ class VoiceAgentEvaluationBridge:
             duration: Duration of the evaluation in seconds
         """
         if not self.bridge_ready:
-            raise RuntimeError("[EVAL BRIDGE] Bridge is not ready, please call `bridge.prepare_for_scenario()` first")
+            raise RuntimeError("[RUN SCENARIO] Bridge is not ready, please call `bridge.prepare_for_scenario()` first")
+        if self.needs_reset:
+            raise RuntimeError(
+                "Bridge needs reset before running a new scenario, please call `bridge.reset()` or `bridge.prepare_for_scenario()` first"
+            )
 
-        logger.info(f"[EVAL BRIDGE] Running scenario for {duration} seconds...")
+        logger.info(f"[RUN SCENARIO] Running scenario for {duration} seconds...")
         self.metrics.start_time = datetime.now()
 
         # Clear debug accumulation lists for this run (only final sent audio)
@@ -1109,10 +1100,6 @@ class VoiceAgentEvaluationBridge:
         self.user_to_agent_queue = queue.Queue()
         self.agent_to_user_queue = queue.Queue()
 
-        logger.info(f"AudioStream configuration:")
-        logger.info(f"  User→Agent: {self.user_output_sample_rate}Hz → {self.agent_input_sample_rate}Hz")
-        logger.info(f"  Agent→User: {self.agent_output_sample_rate}Hz → {self.user_input_sample_rate}Hz")
-
         # Create and start threads
         user_thread = threading.Thread(target=self.user_websocket_thread, args=(duration,), name="UserWebSocketThread")
         agent_thread = threading.Thread(
@@ -1120,7 +1107,7 @@ class VoiceAgentEvaluationBridge:
         )
 
         # Start both threads
-        logger.info("[THREADED BRIDGE] Starting threads...")
+        logger.info("[RUN SCENARIO] Starting threads for user and agent...")
 
         # Set thread start timestamp for conversation log timing (aligns with bridge_audio_log.wav)
         loop = asyncio.get_event_loop()
@@ -1130,12 +1117,12 @@ class VoiceAgentEvaluationBridge:
         agent_thread.start()
 
         # Wait for both threads to complete (in async context)
-        logger.info("[THREADED BRIDGE] Waiting for threads to complete...")
+        logger.info("[RUN SCENARIO] Waiting for threads to complete...")
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, user_thread.join)
         await loop.run_in_executor(None, agent_thread.join)
 
-        logger.info("[THREADED BRIDGE] Both threads completed")
+        logger.info("[RUN SCENARIO] Both user and agent threads completed")
 
         # Finalize any in-progress turns at end of scenario
         loop = asyncio.get_event_loop()
@@ -1144,11 +1131,12 @@ class VoiceAgentEvaluationBridge:
         self._finalize_speaker_turn("agent", timestamp)
 
         # Write conversation log with post-hoc latency calculation
-        self._write_sorted_log_entries()
-
-        # Debug: Save accumulated sent audio chunks for analysis
-        self._save_bridge_audio_log()
-        self._save_audio_and_seglst()
+        self._save_conversation_log()
+        self._save_audio_log()
+        self._save_seglst()
+        logger.info(f"[RUN SCENARIO] Saved audio and logs to: {Path(self.log_file).parent}")
+        self.needs_reset = True
+        self.bridge_ready = False
 
     def _build_conversation_log(self):
         """
@@ -1164,7 +1152,7 @@ class VoiceAgentEvaluationBridge:
         sorted_segments = sorted(self.metrics.segments, key=lambda s: s.start_time)
 
         self.metrics.log_entries = []
-        last_user_seg = None
+        last_user_end = None
 
         for seg in sorted_segments:
             start = seg.start_time + self.turn_start_offset_secs
@@ -1175,18 +1163,18 @@ class VoiceAgentEvaluationBridge:
                 end = seg.end_time
 
             if seg.speaker == "user":
-                last_user_seg = seg
+                last_user_end = end
                 latency_ms = None
             else:  # agent
-                if last_user_seg is not None:
-                    latency_ms = (seg.start_time - last_user_seg.end_time) * 1000
+                if last_user_end is not None:
+                    latency_ms = (start - last_user_end) * 1000
                 else:
                     latency_ms = None
 
             log_entry = self._format_turn_log(seg.speaker, seg.transcript, start, end, latency_ms)
             self.metrics.log_entries.append((start, log_entry))
 
-    def _write_sorted_log_entries(self):
+    def _save_conversation_log(self):
         """Build and write conversation log entries sorted by start time, with computed latencies."""
         if not self.log_file or not self.metrics.segments:
             return
@@ -1203,7 +1191,14 @@ class VoiceAgentEvaluationBridge:
         except Exception as e:
             logger.error(f"[LOG] Error writing sorted log entries: {e}")
 
-    def _save_bridge_audio_log(self):
+    @staticmethod
+    def _resample_audio(audio: np.ndarray, from_rate: int, to_rate: int) -> np.ndarray:
+        """Resample audio array using soxr. Returns int16 array."""
+        if from_rate == to_rate or len(audio) == 0:
+            return audio
+        return soxr.resample(audio, from_rate, to_rate, quality="VHQ").astype(np.int16)
+
+    def _save_audio_log(self):
         """Save final sent audio chunks to disk as stereo WAV for debugging."""
         if not self.bridge_audio_file:
             logger.warning("[DEBUG] No bridge_audio_file to save audio")
@@ -1234,15 +1229,8 @@ class VoiceAgentEvaluationBridge:
         # Resample both channels to output_sample_rate (typically 16kHz)
         target_rate = self.output_sample_rate
 
-        if len(channel0) > 0 and self.agent_input_sample_rate != target_rate:
-            channel0 = soxr.resample(channel0, self.agent_input_sample_rate, target_rate, quality="VHQ").astype(
-                np.int16
-            )
-
-        if len(channel1) > 0 and self.user_input_sample_rate != target_rate:
-            channel1 = soxr.resample(channel1, self.user_input_sample_rate, target_rate, quality="VHQ").astype(
-                np.int16
-            )
+        channel0 = self._resample_audio(channel0, self.agent_input_sample_rate, target_rate)
+        channel1 = self._resample_audio(channel1, self.user_input_sample_rate, target_rate)
 
         # Pad shorter channel with silence to match longer one
         max_length = max(len(channel0), len(channel1))
@@ -1287,13 +1275,6 @@ class VoiceAgentEvaluationBridge:
         # Handle audio frames
         if hasattr(frame, 'audio') and frame.audio:
             self.metrics.user_last_audio_time = timestamp
-
-            if self.audio_file:
-                if self.metrics.audio_start_timestamp is None:
-                    self.metrics.audio_start_timestamp = timestamp
-                self.metrics.user_audio_chunks.append(frame.audio)
-                if self.metrics.current_user_segment is not None:
-                    self.metrics.current_user_segment.audio_chunks.append(frame.audio)
             return
 
         # Handle RTVI protocol messages
@@ -1361,13 +1342,6 @@ class VoiceAgentEvaluationBridge:
                 logger.info(f"[LATENCY] Response latency: {latency_ms:.1f}ms")
 
             self.metrics.agent_last_audio_time = timestamp
-
-            if self.audio_file:
-                if self.metrics.audio_start_timestamp is None:
-                    self.metrics.audio_start_timestamp = timestamp
-                self.metrics.agent_audio_chunks.append(frame.audio)
-                if self.metrics.current_agent_segment is not None:
-                    self.metrics.current_agent_segment.audio_chunks.append(frame.audio)
             return
 
         # Handle RTVI protocol messages
@@ -1406,137 +1380,40 @@ class VoiceAgentEvaluationBridge:
                     {"timestamp": datetime.now().isoformat(), "role": "agent", "text": segment.transcript}
                 )
 
-    def _resample_audio_for_saving(self, audio_chunks: List[bytes], from_rate: int, to_rate: int) -> np.ndarray:
-        """Resample audio chunks from one sample rate to another using soxr."""
-        if not audio_chunks:
-            return np.array([], dtype=np.int16)
-
-        audio_array = np.frombuffer(b''.join(audio_chunks), dtype=np.int16)
-        if from_rate == to_rate:
-            return audio_array
-
-        resampled = soxr.resample(audio_array, from_rate, to_rate, quality="VHQ")
-        return resampled.astype(np.int16)
-
-    def _save_audio_and_seglst(self):
-        """Save stereo audio file and segLST transcript file."""
-
-        if not self.audio_file:
-            logger.warning("[DEBUG] No audio file to save")
+    def _save_seglst(self):
+        """Save segLST transcript file with offset-adjusted timestamps."""
+        if not self.seglst_file or not self.metrics.segments:
             return
 
         try:
-            logger.info(f"Saving audio to {self.audio_file}...")
+            session_id = self.scenario_name or "evaluation"
+            segments_json = []
+            sorted_segments = sorted(self.metrics.segments, key=lambda s: s.start_time)
 
-            segments_to_save = self.metrics.segments
-
-            if not segments_to_save:
-                logger.warning("No segments to save")
-                return
-
-            # Apply turn offsets to get adjusted times (matching seglst/log timestamps)
-            max_end_time = max(seg.end_time + self.turn_end_offset_secs for seg in segments_to_save)
-            max_end_time = max(max_end_time, 0.0)
-            total_samples = int(np.ceil(max_end_time * self.output_sample_rate))
-
-            # Create silent stereo buffer
-            stereo_audio = np.zeros((total_samples, 2), dtype=np.int16)
-
-            # Place each segment's audio at the offset-adjusted timestamp
-            for seg in segments_to_save:
-                if not seg.audio_chunks:
-                    logger.debug(f"Segment has no audio: {seg.speaker} at {seg.start_time:.3f}s")
-                    continue
-
+            for seg in sorted_segments:
                 start = seg.start_time + self.turn_start_offset_secs
                 end = seg.end_time + self.turn_end_offset_secs
                 if end <= start:
                     start = seg.start_time
                     end = seg.end_time
 
-                # Audio chunks are raw TTS output captured in the monitor functions
-                if seg.speaker == "user":
-                    source_sample_rate = self.user_output_sample_rate
-                    channel_idx = 0  # Left channel
-                else:  # agent
-                    source_sample_rate = self.agent_output_sample_rate
-                    channel_idx = 1  # Right channel
-
-                # Resample segment audio to output sample rate
-                segment_audio = self._resample_audio_for_saving(
-                    seg.audio_chunks, source_sample_rate, self.output_sample_rate
-                )
-
-                # Calculate start sample position
-                start_sample = max(0, int(start * self.output_sample_rate))
-
-                # Calculate how many samples to place (don't exceed segment duration)
-                segment_duration_samples = int((end - start) * self.output_sample_rate)
-                samples_to_place = min(len(segment_audio), segment_duration_samples)
-
-                # Ensure we don't write beyond the buffer
-                end_sample = min(start_sample + samples_to_place, total_samples)
-                actual_samples = end_sample - start_sample
-
-                # Place audio in the correct channel at the correct position
-                stereo_audio[start_sample:end_sample, channel_idx] = segment_audio[:actual_samples]
-
-                logger.debug(
-                    f"Placed {seg.speaker} audio: {start_sample}-{end_sample} samples ({actual_samples} samples, {actual_samples / self.output_sample_rate:.3f}s)"
-                )
-
-            # Save as WAV file
-            with wave.open(str(self.audio_file), 'wb') as wav_file:
-                wav_file.setnchannels(2)  # Stereo
-                wav_file.setsampwidth(2)  # 16-bit
-                wav_file.setframerate(self.output_sample_rate)
-                wav_file.writeframes(stereo_audio.tobytes())
-
-            logger.info(f"Audio saved: {self.audio_file}")
-            logger.info(f"  Channels: 2 (user=left, agent=right)")
-            logger.info(f"  Sample rate: {self.output_sample_rate} Hz")
-            logger.info(f"  Duration: {total_samples / self.output_sample_rate:.2f}s")
-
-            # Save segLST file in JSON format
-
-            # Prepare JSON data
-            session_id = self.scenario_name or Path(self.audio_file).stem
-
-            segments_json = []
-            sorted_segments = sorted(segments_to_save, key=lambda s: s.start_time)
-            for seg in sorted_segments:
-                # Apply offsets but ensure end_time remains after start_time
-                start_with_offset = seg.start_time + self.turn_start_offset_secs
-                end_with_offset = seg.end_time + self.turn_end_offset_secs
-
-                # Validate: if offsets cause negative duration, skip offsets for this segment
-                if end_with_offset <= start_with_offset:
-                    logger.warning(
-                        f"[SEGLST] Offsets would create negative duration for {seg.speaker} segment "
-                        f"(original: {seg.start_time:.3f}-{seg.end_time:.3f}), skipping offsets"
-                    )
-                    start_with_offset = seg.start_time
-                    end_with_offset = seg.end_time
-
                 segments_json.append(
                     {
                         "session_id": session_id,
                         "words": seg.transcript,
                         "speaker": seg.speaker,
-                        "start_time": start_with_offset,
-                        "end_time": end_with_offset,
+                        "start_time": start,
+                        "end_time": end,
                     }
                 )
 
-            # Write JSON file
             with open(self.seglst_file, 'w') as f:
                 json.dump(segments_json, f, indent=2)
 
-            logger.info(f"segLST saved: {self.seglst_file}")
-            logger.info(f"  Total segments: {len(segments_to_save)}")
+            logger.info(f"segLST saved: {self.seglst_file} ({len(sorted_segments)} segments)")
 
         except Exception as e:
-            logger.error(f"Error saving audio/segLST: {e}")
+            logger.error(f"Error saving segLST: {e}")
             import traceback
 
             traceback.print_exc()

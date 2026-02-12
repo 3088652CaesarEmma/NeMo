@@ -13,4 +13,4 @@
 # limitations under the License.
 
 from nemo.agents.voice_agent.utils.config_manager import ConfigManager
-from nemo.agents.voice_agent.utils.misc import setup_logging
+from nemo.agents.voice_agent.utils.misc import FileLogger, setup_logging
