@@ -43,10 +43,12 @@ from pipecat.processors.frameworks.rtvi import (
     RTVIBotStoppedSpeakingMessage,
     RTVIBotTranscriptionMessage,
     RTVIBotTTSTextMessage,
+    RTVIServerMessage,
     RTVITextMessageData,
 )
 from pipecat.serializers.protobuf import MessageFrame, ProtobufFrameSerializer
 
+from nemo.agents.voice_agent.evaluation.tools.rtvi_control import FINAL_RESPONSE_END_TAG, FINAL_RESPONSE_START_TAG
 from nemo.agents.voice_agent.utils import setup_logging
 
 # Import AudioStream for buffering and resampling
@@ -57,6 +59,7 @@ RTVI_BOT_STOPPED_SPEAKING = RTVIBotStoppedSpeakingMessage().type
 RTVI_BOT_STARTED_SPEAKING = RTVIBotStartedSpeakingMessage().type
 RTVI_BOT_TRANSCRIPTION = RTVIBotTranscriptionMessage(data=RTVITextMessageData(text="")).type
 RTVI_BOT_TTS_TEXT = RTVIBotTTSTextMessage(data=RTVITextMessageData(text="")).type
+RTVI_BOT_SERVER_MESSAGE = RTVIServerMessage(data=RTVITextMessageData(text="")).type
 
 
 @dataclass
@@ -109,6 +112,9 @@ class EvaluationMetrics:
     current_user_segment: Optional[SegmentEntry] = None
     current_agent_segment: Optional[SegmentEntry] = None
 
+    agent_final_response: str = ""
+    agent_final_response_time: Optional[float] = None
+
     def get_latency_stats(self):
         """Calculate latency statistics"""
         if not self.latencies:
@@ -157,6 +163,9 @@ class EvaluationMetrics:
         self.thread_start_timestamp = None
         self.current_user_segment = None
         self.current_agent_segment = None
+
+        self.agent_final_response = ""
+        self.agent_final_response_time = None
 
 
 class VoiceAgentEvaluationBridge:
@@ -755,7 +764,13 @@ class VoiceAgentEvaluationBridge:
         loop = asyncio.get_event_loop()
         start_time = loop.time()
         try:
-            async for message in ws:
+            while not self.stop_event.is_set():
+                # Use short timeout so we can check stop_event periodically
+                try:
+                    message = await asyncio.wait_for(ws.recv(), timeout=0.5)
+                except asyncio.TimeoutError:
+                    continue
+
                 # Deserialize frame
                 try:
                     frame = await self.serializer.deserialize(message)
@@ -782,6 +797,9 @@ class VoiceAgentEvaluationBridge:
                     # Put raw audio into thread-safe queue
                     queue.put(frame.audio)
                     logger.debug(f"[{direction}] Queued {len(frame.audio)} bytes of audio")
+
+            if self.stop_event.is_set():
+                logger.info(f"[{direction}] Stop event received, exiting receive loop")
 
         except websockets.exceptions.ConnectionClosed as e:
             logger.info(f"[{direction}] Receive WebSocket closed: {e}")
@@ -812,11 +830,10 @@ class VoiceAgentEvaluationBridge:
 
         loop = asyncio.get_event_loop()
         start_time = loop.time()
-        chunk_count = 0
         target_time = start_time  # Track target time incrementally for numerical stability
 
         try:
-            while True:
+            while not self.stop_event.is_set():
                 current_time = loop.time()
                 elapsed = current_time - start_time
                 in_grace_period = elapsed > duration
@@ -866,10 +883,8 @@ class VoiceAgentEvaluationBridge:
                     serialized = await self.serializer.serialize(output_frame)
                     await dest_ws.send(serialized)
 
-                    chunk_count += 1
-
                     logger.debug(
-                        f"[{direction}][{chunk_count}] Sent {len(audio_to_send)} bytes ({idx+1}/{burst_size}, has_speech: {has_speech})"
+                        f"[{direction}] Sent {len(audio_to_send)} bytes ({idx+1}/{burst_size}, has_speech: {has_speech})"
                     )
 
                 # Time-based scheduling: increment target time from previous burst
@@ -879,7 +894,7 @@ class VoiceAgentEvaluationBridge:
                 wait_duration = max(0.001, target_time - current_time)
 
                 if wait_duration < 0.001:
-                    logger.debug(f"[{direction}] Behind schedule by {-wait_duration:.3f}s after {chunk_count} frames")
+                    logger.debug(f"[{direction}] Behind schedule by {-wait_duration:.3f}s")
 
                 if self.use_burst_mode:
                     logger.debug(
@@ -887,7 +902,10 @@ class VoiceAgentEvaluationBridge:
                     )
                 await asyncio.sleep(wait_duration)
 
-            logger.info(f"[{direction}] Send loop finished after {chunk_count} chunks")
+            if self.stop_event.is_set():
+                logger.info(f"[{direction}] Stop event received, exiting send loop")
+            else:
+                logger.info(f"[{direction}] Send loop finished")
 
         except websockets.exceptions.ConnectionClosed as e:
             logger.info(f"[{direction}] WebSocket closed: {e}")
@@ -1092,7 +1110,8 @@ class VoiceAgentEvaluationBridge:
         logger.info(f"[RUN SCENARIO] Running scenario for {duration} seconds...")
         self.metrics.start_time = datetime.now()
 
-        # Clear debug accumulation lists for this run (only final sent audio)
+        # Clear state for this run
+        self.stop_event.clear()
         self.sent_to_agent_chunks = []
         self.sent_to_user_chunks = []
 
@@ -1379,6 +1398,37 @@ class VoiceAgentEvaluationBridge:
                 self.metrics.turns.append(
                     {"timestamp": datetime.now().isoformat(), "role": "agent", "text": segment.transcript}
                 )
+
+        elif message_type == RTVI_BOT_SERVER_MESSAGE:
+            text = data.get("data", {}).get("text", "")
+            if text:
+                logger.info(f"[AGENT SERVER MESSAGE] {text}")
+                if text.startswith(FINAL_RESPONSE_START_TAG) and text.endswith(FINAL_RESPONSE_END_TAG):
+                    final_response = text[len(FINAL_RESPONSE_START_TAG) : -len(FINAL_RESPONSE_END_TAG)]
+                    logger.info(f"[AGENT FINAL RESPONSE] {final_response}")
+                    self.metrics.agent_final_response = final_response
+                    self.metrics.agent_final_response_time = timestamp
+                    self._save_final_response(final_response)
+                    logger.info("[AGENT] Final response received, signaling early stop")
+                    self.stop_event.set()
+
+    def _save_final_response(self, final_response: str):
+        """Save the agent's final response to a JSON file under the output directory."""
+        if not self.output_dir:
+            return
+
+        try:
+            response_obj = json.loads(final_response)
+        except (json.JSONDecodeError, TypeError):
+            response_obj = {"message": final_response}
+
+        output_path = Path(self.output_dir) / "final_agent_response.json"
+        try:
+            with open(output_path, "w") as f:
+                json.dump(response_obj, f, indent=2)
+            logger.info(f"Final agent response saved: {output_path}")
+        except Exception as e:
+            logger.error(f"Error saving final agent response: {e}")
 
     def _save_seglst(self):
         """Save segLST transcript file with offset-adjusted timestamps."""

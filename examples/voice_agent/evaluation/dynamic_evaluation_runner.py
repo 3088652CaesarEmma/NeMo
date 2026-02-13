@@ -256,33 +256,37 @@ Examples:
 
     # Default scenarios
     scenarios = [
-        {
-            "name": "Friendly_Conversation-Noisy",
-            "user_prompt": """You are a friendly human user named Bob, and you are testing a voice assistant.
-            Start by saying that "Hi I'm Bob", then ask the following questions one by one, wait for response before asking the next question:
-            1. Tell me a joke about a cat.
-            2. What's the capital of the United States?
-            3. What's the result of 1+1?
-            4. What's the color of the sky?
-            After the agent has answered all the questions, say "Thank you for your answers. Goodbye." and keep responding with empty responses "\n".
-            """,
-            "duration": 90,
-            "noise_config": {
-                "noise_files": "/home/heh/github/NeMo-main/examples/voice_agent/evaluation/nemo_experiments/id_494165-FX_Car_Driving.wav",
-                "gain_db": 0.0,
-                "max_noise_duration": 100.0,
-                "random_offset": True,
-            },
-        },
+        # {
+        #     "name": "Friendly_Conversation-Noisy",
+        #     "user_prompt": """You are a friendly human user named Bob, and you are testing a voice assistant.
+        #     Start by saying that "Hi I'm Bob", then ask the following questions one by one, wait for response before asking the next question:
+        #     1. Tell me a joke about a cat.
+        #     2. What's the capital of the United States?
+        #     3. What's the result of 1+1?
+        #     4. What's the color of the sky?
+        #     After the agent has answered all the questions, say "Thank you for your answers, goodbye", then keep responding with empty responses "\n" if any following turns.
+        #     """,
+        #     "duration": 90,
+        #     "noise_config": {
+        #         "noise_files": "/home/heh/github/NeMo-main/examples/voice_agent/evaluation/nemo_experiments/id_494165-FX_Car_Driving.wav",
+        #         "gain_db": 0.0,
+        #         "max_noise_duration": 100.0,
+        #         "random_offset": True,
+        #     },
+        # },
         {
             "name": "Friendly_Conversation-Clean",
-            "user_prompt": """You are a friendly human user named Bob, and you are testing a voice assistant.
-            Start by saying that "Hi I'm Bob", then ask the following questions one by one, wait for response before asking the next question:
-            1. Tell me a joke about a cat.
-            2. What's the capital of the United States?
-            3. What's the result of 1+1?
-            4. What's the color of the sky?
-            After the agent has answered all the questions, say "Thank you for your answers. Goodbye." and keep responding with empty responses "\n".
+            "user_prompt": """You are a friendly human user named Bob, and you are testing a voice assistant. You don't help the assistant to do anything, you only ask the question and wait for the response.
+            Start by saying that "Hi I'm Bob", then say the following messages one by one, wait for response before saying the next message. You should strictly follow the content of the messages, don't add any other information.
+            - What is the weather in San Francisco?
+            - Now send scenario summary with the external tool.
+
+            Then ask the assistant to send scenario summary using the external tool.
+            """,
+            "agent_prompt": """You are a helpful AI agent named Lisa. Start by greeting the user with 'Hi, I'm Lisa, your helpful AI assistant. How can I help you today?'.
+            You need to answer the user's question based on your internal knowledge. 
+            
+            When asked to send scenario summary, you must use the `SendScenarioSummaryTool` tool, the input message to that tool should contain all the user questions and your answers one by one. 
             """,
             "duration": 90,
         },
