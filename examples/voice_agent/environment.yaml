@@ -431,7 +431,7 @@ dependencies:
     - urllib3==1.26.20
     - uvicorn==0.37.0
     - uvloop==0.21.0
-    - vllm==0.14.0
+    - vllm==0.15.0
     - wait-for2==0.4.1
     - wandb==0.22.1
     - watchfiles==1.1.0
@@ -445,8 +445,8 @@ dependencies:
     - word2number==1.1
     - wrapt==1.17.3
     - xattr==1.2.0
-    - xformers==0.0.31
-    - xgrammar==0.1.27
+    - xformers>=0.0.31
+    - xgrammar>=0.1.27
     - xxhash==3.6.0
     - yarl==1.20.1
     - zarr==2.18.3
