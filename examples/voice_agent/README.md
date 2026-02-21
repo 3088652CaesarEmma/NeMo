@@ -79,7 +79,7 @@ Second, create a new conda environment with the dependencies:
 conda env create -f environment.yaml
 ```
 
-For DGX Spark, you need to manually install the dependencies, by first creating the conda environment with `conda create -n nemo-voice python=3.12`, then `conda activate nemo-voice` and follow the steps in `install_spark.txt`.
+For DGX Spark, you need to manually install the dependencies by running `bash install_spark.sh`.
 
 Then you can activate the environment via `conda activate nemo-voice`.
 
