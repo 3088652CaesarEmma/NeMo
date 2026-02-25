@@ -318,12 +318,10 @@ class VLLMService(OpenAILLMService, LLMUtilsMixin):
         project="None",
         default_headers: Optional[Mapping[str, str]] = None,
         params: Optional[OpenAILLMService.InputParams] = None,
-        reasoning_budget: int = 0,
         start_vllm_on_init: bool = False,
         vllm_server_params: Optional[str] = None,
         vllm_server_max_wait_time: int = 3600,  # 1 hour max wait time
         vllm_server_check_interval: int = 5,  # check server every 5 seconds
-        enable_reasoning: bool = False,
         **kwargs,
     ):
         self._device = device
@@ -342,14 +340,11 @@ class VLLMService(OpenAILLMService, LLMUtilsMixin):
             params=params,
             **kwargs,
         )
-        self._reasoning_budget = reasoning_budget
         self._vllm_server_params = vllm_server_params
         self._start_vllm_on_init = start_vllm_on_init
-        self._enable_reasoning = enable_reasoning
-        # TODO: handle thinking budget
         logger.info(
             f"VLLMService initialized with model: {model}, api_key: {api_key}, base_url: {base_url},"
-            f"params: {params}, reasoning_budget: {reasoning_budget}"
+            f"params: {params}"
         )
 
     def _start_vllm_server(
@@ -747,7 +742,6 @@ def get_llm_service_from_config(config: DictConfig) -> OpenAILLMService:
             llm_params = OpenAILLMService.InputParams(**llm_params)
         else:
             llm_params = OpenAILLMService.InputParams()
-        llm_reasoning_budget = config.get("reasoning_budget", 0)
         return VLLMService(
             model=llm_model,
             api_key=llm_api_key,
@@ -756,10 +750,8 @@ def get_llm_service_from_config(config: DictConfig) -> OpenAILLMService:
             project=llm_project,
             default_headers=llm_default_headers,
             params=llm_params,
-            reasoning_budget=llm_reasoning_budget,
             start_vllm_on_init=config.get("start_vllm_on_init", False),
             vllm_server_params=vllm_server_params,
-            enable_reasoning=config.get("enable_reasoning", False),
         )
     elif backend == "nvidia":
         llm_model = config.get("model")

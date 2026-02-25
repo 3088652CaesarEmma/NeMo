@@ -58,5 +58,7 @@ vllm_generation_params:
   max_completion_tokens: ${llm.max_new_tokens}  # max number of tokens to generate
   extra:  # additional model specific params can be specified in dict format
     extra_body:
+      vllm_xargs:
+        thinking_budget: 128  # max thinking tokens budget, enforced by ReasoningBudgetLogitsProcessor
       chat_template_kwargs:
         enable_thinking: False  # disable thinking
