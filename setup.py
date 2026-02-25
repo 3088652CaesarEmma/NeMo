@@ -17,7 +17,6 @@
 
 """Setup for pip package."""
 
-import codecs
 import importlib.util
 import os
 import subprocess
@@ -68,7 +67,6 @@ install_requires = req_file("requirements.txt")
 extras_require = {
     # User packages
     'test': req_file("requirements_test.txt"),
-    'run': req_file("requirements_run.txt"),
     # Lightning Collections Packages
     'core': req_file(["requirements_lightning.txt"]),
     'lightning': req_file(["requirements_lightning.txt"]),
@@ -76,8 +74,8 @@ extras_require = {
     # domain packages
     'asr-only': req_file("requirements_asr.txt"),
     'tts': req_file("requirements_tts.txt"),
-    'slu': req_file("requirements_slu.txt"),
     'audio': req_file("requirements_audio.txt"),
+    'optional': req_file("requirements_optional.txt"),
 }
 
 
@@ -117,12 +115,6 @@ extras_require['audio'] = list(
     chain(
         extras_require['audio'],
         extras_require['common'],
-    )
-)
-extras_require['slu'] = list(
-    chain(
-        extras_require['slu'],
-        extras_require['asr'],
     )
 )
 

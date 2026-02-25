@@ -46,7 +46,6 @@ from enum import Enum
 from typing import Optional, Tuple
 
 import librosa
-import matplotlib.pylab as plt
 import numpy as np
 import torch
 from numba import jit, prange
@@ -298,6 +297,8 @@ def log_audio_to_tb(
 
 
 def plot_alignment_to_numpy(alignment, title='', info=None, phoneme_seq=None, vmin=None, vmax=None, attended=None):
+    import matplotlib.pylab as plt
+
     if phoneme_seq:
         fig, ax = plt.subplots(figsize=(15, 10))
     else:
@@ -338,6 +339,8 @@ def plot_alignment_to_numpy_for_speechllm(
     phone_offset=2,
     h_offset=True,
 ):
+    import matplotlib.pylab as plt
+
     alignment = np.clip(alignment, a_min=0, a_max=None)
     fig, ax = plt.subplots(figsize=(8, 6))
     im = ax.imshow(alignment, aspect='auto', origin='lower', interpolation='none', vmin=vmin, vmax=vmax)
@@ -385,6 +388,8 @@ def plot_alignment_to_numpy_for_speechllm(
 
 
 def plot_pitch_to_numpy(pitch, ylim_range=None):
+    import matplotlib.pylab as plt
+
     fig, ax = plt.subplots(figsize=(12, 3))
     plt.plot(pitch)
     if ylim_range is not None:
@@ -400,6 +405,8 @@ def plot_pitch_to_numpy(pitch, ylim_range=None):
 
 
 def plot_multipitch_to_numpy(pitch_gt, pitch_pred, ylim_range=None):
+    import matplotlib.pylab as plt
+
     fig, ax = plt.subplots(figsize=(12, 3))
     plt.plot(pitch_gt, label="Ground truth")
     plt.plot(pitch_pred, label="Predicted")
@@ -417,6 +424,8 @@ def plot_multipitch_to_numpy(pitch_gt, pitch_pred, ylim_range=None):
 
 
 def plot_spectrogram_to_numpy(spectrogram):
+    import matplotlib.pylab as plt
+
     spectrogram = spectrogram.astype(np.float32)
     fig, ax = plt.subplots(figsize=(12, 3))
     im = ax.imshow(spectrogram, aspect="auto", origin="lower", interpolation='none')
@@ -432,6 +441,8 @@ def plot_spectrogram_to_numpy(spectrogram):
 
 
 def create_plot(data, x_axis, y_axis, output_filepath=None):
+    import matplotlib.pylab as plt
+
     fig, ax = plt.subplots(figsize=(12, 3))
     im = ax.imshow(data, aspect="auto", origin="lower", interpolation="none")
     plt.colorbar(im, ax=ax)
@@ -449,6 +460,8 @@ def create_plot(data, x_axis, y_axis, output_filepath=None):
 
 
 def plot_gate_outputs_to_numpy(gate_targets, gate_outputs):
+    import matplotlib.pylab as plt
+
     fig, ax = plt.subplots(figsize=(12, 3))
     ax.scatter(
         range(len(gate_targets)),

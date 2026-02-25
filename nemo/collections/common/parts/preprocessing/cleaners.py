@@ -14,9 +14,9 @@
 
 import re
 
-from text_unidecode import unidecode
 
 from nemo.utils import logging
+from nemo.utils.dependency import assert_optional_dependency_available, import_optional_dependency
 
 NUM_CHECK = re.compile(r'([$]?)(^|\s)(\S*[0-9]\S*)(?=(\s|$)((\S*)(\s|$))?)')
 
@@ -143,12 +143,14 @@ from functools import cache
 
 @cache
 def inflect_engine():
-    import inflect
-
+    inflect = import_optional_dependency("inflect")
     return inflect.engine()
 
 
 def clean_text(string, table, punctuation_to_replace, abbreviation_version=None):
+    assert_optional_dependency_available("text_unidecode")
+    from text_unidecode import unidecode
+
     warn_common_chars(string)
     string = unidecode(string)
     string = string.lower()

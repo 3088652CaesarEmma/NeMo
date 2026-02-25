@@ -26,7 +26,6 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import IPython.display as ipd
 import librosa
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
@@ -1056,6 +1055,8 @@ def plot(
                             frame lengths in preds and labels.
         xticks_step (int): step size for xticks.
     """
+    import matplotlib.pyplot as plt
+
     plt.figure(figsize=[20, 2])
 
     audio, sample_rate = librosa.load(
@@ -1506,6 +1507,8 @@ def plot_sample_from_rttm(
     """
     Plot audio signal and frame-level labels from RTTM file
     """
+    import matplotlib.pyplot as plt
+
     plt.figure(figsize=[20, 2])
 
     audio, sample_rate = librosa.load(path=audio_file, sr=16000, mono=True, offset=offset, duration=max_duration)

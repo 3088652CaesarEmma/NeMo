@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
 import torch
-from jiwer import wer as word_error_rate
+from kaldialign import edit_distance
 from omegaconf import DictConfig
 
 from nemo.collections.asr.parts.k2.classes import GraphIntersectDenseConfig
@@ -624,7 +624,10 @@ class K2WfstDecoder(AbstractWFSTDecoder):
             for lat in lattices:
                 lat.scores = lat.am_scores + lm_weight_act * lat.lm_scores
             hypotheses = self._post_decode(lattices)
-            wer = word_error_rate([" ".join(h[0].words) for h in hypotheses], reference_texts)
+            hyps = [" ".join(h[0].words) for h in hypotheses]
+            total_dist = sum(edit_distance(r.split(), h.split())['total'] for r, h in zip(reference_texts, hyps))
+            total_words = sum(len(r.split()) for r in reference_texts)
+            wer = total_dist / total_words if total_words > 0 else float('inf')
             if wer < best_wer:
                 best_lm_weight, best_wer = lm_weight_act, wer
         self.nbest_size = nbest_size_backup
