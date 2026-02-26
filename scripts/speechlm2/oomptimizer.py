@@ -587,17 +587,21 @@ def _override_streaming_salm_prepare_inputs(self, batch: dict) -> dict:
     delayed_codes = MimiEncoder.apply_delay_pattern(codes, code_lens)
     audio_embeds = self.embed_audio_codes(delayed_codes)
 
-    # Estimate total interleaved sequence length:
-    # audio_frames + ~12 text_tokens/sec + ~10 prompt tokens
+    # Estimate interleaved sequence layout.
+    # Real interleaving: for each audio frame, label is either blank_id (no text
+    # ready) or a text token.  When a text token IS emitted, a feedback text
+    # embedding is inserted (label = blank_id).  So total length =
+    #   prompt_len + audio_frames + num_text_feedback_tokens
+    # and labels = [-100]*prompt + [blank_id|text_id]*audio + [blank_id]*feedback
     B = audio_embeds.shape[0]
     max_T = audio_embeds.shape[1]
     frame_shift = 0.08
     est_text_tokens = int(max_T * frame_shift * 12)  # ~12 tokens/sec for English
     prompt_len = 10
-    total_text = est_text_tokens + prompt_len
 
     # Create fake text embeddings (runs through embed_tokens for accurate profiling)
     vocab_size = self.embed_tokens.num_embeddings
+    total_text = est_text_tokens + prompt_len  # prompt + text feedback tokens
     fake_text_ids = torch.randint(0, vocab_size, (B, total_text), device=device)
     text_embeds = self.embed_tokens(fake_text_ids)
 
@@ -606,9 +610,22 @@ def _override_streaming_salm_prepare_inputs(self, batch: dict) -> dict:
     seq_len = input_embeds.shape[1]
     attention_mask = torch.ones(B, seq_len, dtype=torch.bool, device=device)
 
-    # Labels: -100 for audio frames (ignored), random ids for text (contributes to loss)
-    labels = torch.full((B, seq_len), -100, dtype=torch.long, device=device)
-    labels[:, max_T:] = fake_text_ids
+    # Labels mirror real interleaving:
+    #   prompt positions → -100 (ignored, no gradient)
+    #   audio frame positions → blank_id (most) or text token (when text ready)
+    #   text feedback positions → blank_id
+    # Every position in the interleaved section contributes to loss.
+    blank_id = self.blank_token_id
+    labels = torch.full((B, seq_len), blank_id, dtype=torch.long, device=device)
+    # Prompt: ignored
+    labels[:, :prompt_len] = -100
+    # Scatter some text tokens onto audio frame positions (~12 tokens/sec)
+    # to approximate the real label distribution.
+    for b in range(B):
+        text_positions = torch.linspace(
+            prompt_len, prompt_len + max_T - 1, est_text_tokens, dtype=torch.long,
+        ).to(device)
+        labels[b, text_positions] = fake_text_ids[b, prompt_len:]
 
     return {
         "input_embeds": input_embeds,

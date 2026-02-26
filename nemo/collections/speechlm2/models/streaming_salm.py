@@ -479,7 +479,8 @@ class StreamingSALM(LightningModule, HFHubMixin):
         """
         device = audio.device
 
-        # Encode audio
+        # Encode audio — cast to model dtype (e.g. bf16) for Mimi
+        audio = audio.to(dtype=next(self.mimi.parameters()).dtype)
         codes, code_lens = self.mimi.encode(audio, audio_lens)
         delayed_codes = MimiEncoder.apply_delay_pattern(codes, code_lens)
         audio_embeds = self.embed_audio_codes(delayed_codes)

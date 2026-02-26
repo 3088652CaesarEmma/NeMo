@@ -41,12 +41,11 @@ class StreamingSALMInferenceWrapper:
         device: str = "cuda",
         device_id: int = 0,
         compute_dtype: str = "bfloat16",
-        use_amp: bool = True,
         latency: int = 1,
         context: str | None = None,
+        **kwargs,
     ):
         self.device_str, self.device_id, self.compute_dtype = setup_device(device.strip(), device_id, compute_dtype)
-        self.use_amp = use_amp
         self.device = torch.device(self.device_str)
         self.model = self._load_model(model_name, self.device)
         self.model.to(dtype=self.compute_dtype)
@@ -104,10 +103,8 @@ class StreamingSALMInferenceWrapper:
         Returns:
             codes ``(B, num_codebooks, T_frames)`` and code_lens ``(B,)``.
         """
-        with (
-            torch.amp.autocast(device_type=self.device.type, dtype=self.compute_dtype, enabled=self.use_amp),
-            torch.inference_mode(),
-        ):
+        with torch.inference_mode():
+            audio = audio.to(dtype=self.compute_dtype)
             return self.model.mimi.encode(audio, audio_lens)
 
     # ------------------------------------------------------------------
@@ -121,11 +118,8 @@ class StreamingSALMInferenceWrapper:
         latency: int = 1,
         context: str | None = None,
     ) -> tuple[list[list[int]], StreamingState]:
-        """Thin wrapper around ``model.generate_streaming`` with AMP context."""
-        with (
-            torch.amp.autocast(device_type=self.device.type, dtype=self.compute_dtype, enabled=self.use_amp),
-            torch.inference_mode(),
-        ):
+        """Thin wrapper around ``model.generate_streaming``."""
+        with torch.inference_mode():
             return self.model.generate_streaming(audio_codes, model_state, latency, context)
 
     # ------------------------------------------------------------------
