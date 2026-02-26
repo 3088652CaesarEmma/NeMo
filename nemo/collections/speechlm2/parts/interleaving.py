@@ -16,7 +16,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable
 
 from torch import Tensor
 
@@ -36,17 +35,21 @@ def build_interleaved_sequence(
     latency: int,
     blank_id: int,
     tokenizer,
-    embed_text_fn: Callable[[int], Tensor],
     frame_shift: float,
-) -> tuple[list[Tensor], list[int]]:
+) -> tuple[list[Tensor | None], list[int], list[int]]:
     """
-    Build the interleaved audio+text embedding sequence and labels.
+    Build the interleaved audio+text sequence structure and labels.
+
+    Text positions are marked with ``None`` placeholders in *input_parts* and
+    the corresponding token IDs are collected in *text_token_ids*.  The caller
+    is responsible for embedding all text token IDs in a single batched call
+    and filling the ``None`` slots afterward.
 
     Algorithm:
     - Process audio frames sequentially
     - After each audio frame, check if a text token is "ready" based on alignment + latency
     - When a text token is ready, its label goes at the audio frame position,
-      and the text token embedding is inserted as input (fed back)
+      and a None marker is inserted as input (to be filled with the embedding later)
     - When no text is ready, label = blank
 
     Args:
@@ -55,12 +58,12 @@ def build_interleaved_sequence(
         latency: K value (number of audio frames from word start before emission)
         blank_id: token ID for blank/no-emission
         tokenizer: tokenizer with text_to_ids(text) -> list[int]
-        embed_text_fn: callable(token_id) -> (H,) tensor
         frame_shift: duration of one audio frame in seconds
 
     Returns:
-        input_parts: list of (H,) tensors — audio frames and fed-back text tokens
+        input_parts: list of (H,) tensors at audio positions, None at text positions
         label_parts: list of int token IDs — blank or text token at each position
+        text_token_ids: ordered list of text token IDs (one per None in input_parts)
     """
     T = len(audio_embs)
 
@@ -80,8 +83,9 @@ def build_interleaved_sequence(
     ready_iter = iter(ready_tokens)
     next_ready = next(ready_iter, None)
 
-    input_parts: list[Tensor] = []
+    input_parts: list[Tensor | None] = []
     label_parts: list[int] = []
+    text_token_ids: list[int] = []
 
     for f in range(T):
         # Add audio frame
@@ -92,13 +96,13 @@ def build_interleaved_sequence(
             tok_id = next_ready[1]
             # Label at audio position = text token
             label_parts.append(tok_id)
-            # Feed text token back as input
-            text_emb = embed_text_fn(tok_id)
-            input_parts.append(text_emb)
+            # Placeholder for text embedding — filled by caller
+            input_parts.append(None)
+            text_token_ids.append(tok_id)
             # Label at text position = blank (already emitted)
             label_parts.append(blank_id)
             next_ready = next(ready_iter, None)
         else:
             label_parts.append(blank_id)
 
-    return input_parts, label_parts
+    return input_parts, label_parts, text_token_ids

@@ -238,96 +238,122 @@ class StreamingSALM(LightningModule, HFHubMixin):
         audios_for_mimi = batch["audios"].to(dtype=next(self.mimi.parameters()).dtype)
 
         # 1-2. Audio encoding + delay pattern (audio already at 24 kHz)
-        with torch.no_grad():
-            codes, code_lens = self.mimi.encode(audios_for_mimi, audio_lens)
-        delayed_codes = MimiEncoder.apply_delay_pattern(codes, code_lens)
+        with torch.cuda.nvtx.range("mimi_encode"):
+            with torch.no_grad():
+                codes, code_lens = self.mimi.encode(audios_for_mimi, audio_lens)
+            delayed_codes = MimiEncoder.apply_delay_pattern(codes, code_lens)
 
-        # 3. Audio frame embeddings
-        audio_embeds = self.embed_audio_codes(delayed_codes)
+            # 3. Audio frame embeddings
+            audio_embeds = self.embed_audio_codes(delayed_codes)
 
         # 4. Forced alignment
-        with torch.no_grad():
-            if "audios_16k" in batch:
-                # Fast path: dataloader already resampled to 16 kHz numpy arrays
-                alignments = self.forced_aligner.align_numpy(
-                    batch["audios_16k"],
-                    batch["transcripts"],
+        with torch.cuda.nvtx.range("qfa_align"):
+            with torch.no_grad():
+                if "audios_16k" in batch:
+                    # Fast path: dataloader already resampled to 16 kHz numpy arrays
+                    alignments = self.forced_aligner.align_numpy(
+                        batch["audios_16k"],
+                        batch["transcripts"],
+                    )
+                else:
+                    # Legacy path: resample on GPU + GPU→CPU transfer
+                    alignments = self.forced_aligner.align(
+                        batch["audios"],
+                        audio_lens,
+                        batch["transcripts"],
+                        source_sample_rate=MimiEncoder.SAMPLE_RATE,
+                    )
+
+        # 5-6. Build interleaved sequences per example (batched embedding)
+        with torch.cuda.nvtx.range("interleaving"):
+            frame_shift = self.mimi.token_equivalent_duration
+
+            # --- Phase 1: Build sequences, collect ALL text token IDs ---
+            all_token_ids: list[int] = []  # flat list of ALL token IDs to embed
+            per_sample: list[tuple] = []   # (input_parts, label_parts, num_prompt, num_text)
+
+            for i in range(len(batch["transcripts"])):
+                K = random.randint(self.min_latency, self.max_latency)
+                T = code_lens[i].item()
+                audio_embs_i = audio_embeds[i, :T]
+
+                # Optional context biasing
+                context_text, audio_embs_i, alignment_i, T = maybe_apply_context_biasing(
+                    audio_embs_i,
+                    alignments[i],
+                    batch["transcripts"][i],
+                    T,
+                    self.context_biasing_prob,
+                    frame_shift,
                 )
+
+                # Build text prompt
+                prompt = f"Latency: {K}"
+                if context_text:
+                    prompt += f" Context: >>{context_text}<<"
+                prompt_ids = self.tokenizer.text_to_ids(prompt)
+
+                # Build interleaved audio+text sequence (no embedding yet)
+                input_parts, label_parts, text_token_ids = build_interleaved_sequence(
+                    audio_embs_i,
+                    alignment_i,
+                    K,
+                    self.blank_token_id,
+                    self.tokenizer,
+                    frame_shift,
+                )
+
+                # Accumulate token IDs: prompt first, then interleaved text
+                all_token_ids.extend(prompt_ids)
+                all_token_ids.extend(text_token_ids)
+                per_sample.append((input_parts, label_parts, len(prompt_ids), len(text_token_ids)))
+
+            # --- Phase 2: Single batched embed_tokens call ---
+            if all_token_ids:
+                all_embeds = self.embed_tokens(
+                    torch.tensor(all_token_ids, dtype=torch.long, device=device)
+                )  # (N_total, H) — ONE autograd node
             else:
-                # Legacy path: resample on GPU + GPU→CPU transfer
-                alignments = self.forced_aligner.align(
-                    batch["audios"],
-                    audio_lens,
-                    batch["transcripts"],
-                    source_sample_rate=MimiEncoder.SAMPLE_RATE,
+                all_embeds = torch.empty(0, dtype=audio_embeds.dtype, device=device)
+
+            # --- Phase 3: Distribute embeddings back ---
+            all_input_embeds = []
+            all_labels = []
+            idx = 0
+
+            for input_parts, label_parts, num_prompt, num_text in per_sample:
+                # Extract prompt embeddings
+                prompt_embeds = all_embeds[idx : idx + num_prompt]
+                idx += num_prompt
+
+                # Fill None slots in input_parts with text embeddings
+                text_idx = idx
+                for j, part in enumerate(input_parts):
+                    if part is None:
+                        input_parts[j] = all_embeds[text_idx]
+                        text_idx += 1
+                idx += num_text
+
+                # Concatenate prompt + interleaved
+                interleaved_embeds = torch.stack(input_parts, dim=0)
+                labels = torch.tensor(label_parts, dtype=torch.long, device=device)
+
+                input_embs = torch.cat([prompt_embeds, interleaved_embeds], dim=0)
+                full_labels = torch.cat(
+                    [
+                        torch.full(
+                            (num_prompt,), -100, dtype=torch.long, device=device
+                        ),
+                        labels,
+                    ]
                 )
 
-        # 5-6. Build interleaved sequences per example
-        all_input_embeds = []
-        all_labels = []
+                all_input_embeds.append(input_embs)
+                all_labels.append(full_labels)
 
-        frame_shift = self.mimi.token_equivalent_duration
-
-        def _embed_text_fn(tok_id: int) -> Tensor:
-            return self.embed_tokens(
-                torch.tensor([tok_id], dtype=torch.long, device=device)
-            ).squeeze(0)
-
-        for i in range(len(batch["transcripts"])):
-            K = random.randint(self.min_latency, self.max_latency)
-            T = code_lens[i].item()
-            audio_embs_i = audio_embeds[i, :T]
-
-            # Optional context biasing
-            context_text, audio_embs_i, alignment_i, T = maybe_apply_context_biasing(
-                audio_embs_i,
-                alignments[i],
-                batch["transcripts"][i],
-                T,
-                self.context_biasing_prob,
-                frame_shift,
-            )
-
-            # Build text prompt
-            prompt = f"Latency: {K}"
-            if context_text:
-                prompt += f" Context: >>{context_text}<<"
-            prompt_ids = torch.tensor(
-                self.tokenizer.text_to_ids(prompt), dtype=torch.long, device=device
-            )
-            prompt_embeds = self.embed_tokens(prompt_ids)
-
-            # Build interleaved audio+text sequence
-            input_parts, label_parts = build_interleaved_sequence(
-                audio_embs_i,
-                alignment_i,
-                K,
-                self.blank_token_id,
-                self.tokenizer,
-                _embed_text_fn,
-                frame_shift,
-            )
-
-            # Concatenate prompt + interleaved
-            interleaved_embeds = torch.stack(input_parts, dim=0)
-            labels = torch.tensor(label_parts, dtype=torch.long, device=device)
-
-            input_embs = torch.cat([prompt_embeds, interleaved_embeds], dim=0)
-            full_labels = torch.cat(
-                [
-                    torch.full(
-                        (len(prompt_ids),), -100, dtype=torch.long, device=device
-                    ),
-                    labels,
-                ]
-            )
-
-            all_input_embeds.append(input_embs)
-            all_labels.append(full_labels)
-
-        # 7. Left-pad and stack
-        input_embeds, attention_mask = _left_pad_embeds(all_input_embeds)
-        labels = left_collate_vectors(all_labels, padding_value=-100)
+            # 7. Left-pad and stack
+            input_embeds, attention_mask = _left_pad_embeds(all_input_embeds)
+            labels = left_collate_vectors(all_labels, padding_value=-100)
 
         return {
             "input_embeds": input_embeds,
@@ -342,27 +368,31 @@ class StreamingSALM(LightningModule, HFHubMixin):
         if is_frozen(self.llm):
             self.llm.eval()
 
-        inputs = self.prepare_inputs(batch)
-        forward_outputs = self(
-            inputs["input_embeds"], attention_mask=inputs["attention_mask"]
-        )
+        with torch.cuda.nvtx.range("prepare_inputs"):
+            inputs = self.prepare_inputs(batch)
+
+        with torch.cuda.nvtx.range("llm_forward"):
+            forward_outputs = self(
+                inputs["input_embeds"], attention_mask=inputs["attention_mask"]
+            )
 
         # UNSHIFTED loss — logits[i] predicts labels[i]
-        labels = inputs["labels"]
-        valid_mask = labels != -100
-        num_valid = torch.clamp(valid_mask.long().sum(), min=1)
-        with loss_parallel():
-            loss = (
-                F.cross_entropy(
-                    forward_outputs["logits"].view(
-                        -1, forward_outputs["logits"].size(-1)
-                    ),
-                    labels.view(-1),
-                    reduction="sum",
-                    ignore_index=-100,
+        with torch.cuda.nvtx.range("loss"):
+            labels = inputs["labels"]
+            valid_mask = labels != -100
+            num_valid = torch.clamp(valid_mask.long().sum(), min=1)
+            with loss_parallel():
+                loss = (
+                    F.cross_entropy(
+                        forward_outputs["logits"].view(
+                            -1, forward_outputs["logits"].size(-1)
+                        ),
+                        labels.view(-1),
+                        reduction="sum",
+                        ignore_index=-100,
+                    )
+                    / num_valid
                 )
-                / num_valid
-            )
 
         B, T = inputs["input_embeds"].shape[:2]
         ans = {
@@ -466,152 +496,173 @@ class StreamingSALM(LightningModule, HFHubMixin):
         audio: Tensor,
         audio_lens: Tensor,
         latency: int = 1,
-        context: str | None = None,
+        context: str | list[str] | None = None,
     ) -> list[str]:
         """
-        Full-utterance offline inference.
+        Batched full-utterance offline inference.
+
+        All B samples are processed in parallel through the LLM.  At each
+        decoding step every sample contributes exactly one input token
+        (audio frame, text feedback, flush pad, or a no-op pad for finished
+        samples), keeping the KV cache length uniform across the batch.
 
         Args:
             audio: (B, T_samples) raw audio waveform at 24 kHz.
             audio_lens: (B,) sample counts.
             latency: emission latency K in audio frames.
-            context: optional context biasing text.
+            context: optional context biasing text.  Can be a single string
+                (shared across the batch), a list of B strings (per-sample),
+                or ``None``.
         """
         device = audio.device
+        B = audio.shape[0]
 
-        # Encode audio — cast to model dtype (e.g. bf16) for Mimi
+        # --- Encode audio (batched) ---
         audio = audio.to(dtype=next(self.mimi.parameters()).dtype)
         codes, code_lens = self.mimi.encode(audio, audio_lens)
         delayed_codes = MimiEncoder.apply_delay_pattern(codes, code_lens)
-        audio_embeds = self.embed_audio_codes(delayed_codes)
+        audio_embeds = self.embed_audio_codes(delayed_codes)  # (B, T_max, H)
 
-        results = []
-        for b in range(audio.shape[0]):
-            T = code_lens[b].item()
-            audio_embs = audio_embeds[b, :T]
+        T = [code_lens[b].item() for b in range(B)]
 
-            # Encode prompt
+        # --- Padding audio embedding for flush phase ---
+        pad_codes = torch.full(
+            (1, self.num_codebooks, 1),
+            self.audio_codebook_size,
+            dtype=torch.long,
+            device=device,
+        )
+        pad_embed = self.embed_audio_codes(pad_codes).squeeze(0).squeeze(0)  # (H,)
+
+        # --- Build per-sample prompts ---
+        # Normalise context to a list of B items (None or str each).
+        if context is None or isinstance(context, str):
+            ctx_list: list[str | None] = [context] * B
+        else:
+            assert len(context) == B
+            ctx_list = list(context)
+
+        prompt_id_lists: list[list[int]] = []
+        for ctx in ctx_list:
             prompt = f"Latency: {latency}"
-            if context:
-                prompt += f" Context: >>{context}<<"
-            prompt_ids = torch.tensor(
-                self.tokenizer.text_to_ids(prompt), dtype=torch.long, device=device
-            )
-            prompt_embeds = self.embed_tokens(prompt_ids).unsqueeze(0)
+            if ctx:
+                prompt += f" Context: >>{ctx}<<"
+            prompt_id_lists.append(self.tokenizer.text_to_ids(prompt))
 
-            # Process prompt (with cache enabled)
-            prompt_len = prompt_embeds.shape[1]
-            sink_size = max(self.cache_sink_size, prompt_len)
-            prompt_positions = torch.arange(prompt_len, device=device)
+        prompt_lens = [len(ids) for ids in prompt_id_lists]
+        max_prompt_len = max(prompt_lens)
+
+        # Left-pad prompt token ids so the last (real) token aligns.
+        padded_prompt_ids = torch.zeros(B, max_prompt_len, dtype=torch.long, device=device)
+        attn_mask = torch.zeros(B, max_prompt_len, dtype=torch.long, device=device)
+        for b, ids in enumerate(prompt_id_lists):
+            pad_len = max_prompt_len - len(ids)
+            padded_prompt_ids[b, pad_len:] = torch.tensor(ids, dtype=torch.long, device=device)
+            attn_mask[b, pad_len:] = 1
+
+        prompt_embeds = self.embed_tokens(padded_prompt_ids)  # (B, max_prompt_len, H)
+
+        # Process prompt with attention mask to ignore left-padding.
+        prompt_positions = torch.arange(max_prompt_len, device=device)
+        out = self.llm(
+            inputs_embeds=prompt_embeds,
+            attention_mask=attn_mask,
+            cache_position=prompt_positions,
+            use_cache=True,
+            return_dict=True,
+        )
+        cache = out["past_key_values"]
+        sink_size = max(self.cache_sink_size, max_prompt_len)
+        abs_pos = max_prompt_len
+
+        # Grow attention mask by 1 column at each decode step.
+        # Shape maintained as (B, total_seq_len) to mask left-padding in prompt.
+        # attn_mask is currently (B, max_prompt_len) — it grows as we decode.
+
+        # --- Per-sample decoding state ---
+        audio_ptr = [0] * B                  # next audio frame index
+        flush_count = [0] * B                # flush frames sent so far
+        generated: list[list[int]] = [[] for _ in range(B)]
+        need_text_feedback = [False] * B     # feed predicted text next step
+        pending_text = torch.zeros(B, dtype=torch.long, device=device)
+        done = [False] * B
+
+        # Upper bound: each audio frame can emit at most 1 text token (+ feedback),
+        # plus flush frames with text feedback.
+        max_steps = 2 * (max(T) + latency) + 16
+
+        for _step in range(max_steps):
+            if all(done):
+                break
+
+            # --- Build (B, 1, H) input for this step ---
+            step_embeds = []
+            for b in range(B):
+                if done[b]:
+                    step_embeds.append(pad_embed)
+                elif need_text_feedback[b]:
+                    step_embeds.append(
+                        self.embed_tokens(pending_text[b : b + 1]).squeeze(0)
+                    )
+                    need_text_feedback[b] = False
+                elif audio_ptr[b] < T[b]:
+                    step_embeds.append(audio_embeds[b, audio_ptr[b]])
+                    audio_ptr[b] += 1
+                elif flush_count[b] < latency:
+                    step_embeds.append(pad_embed)
+                    flush_count[b] += 1
+                else:
+                    done[b] = True
+                    step_embeds.append(pad_embed)
+
+            if all(done):
+                break
+
+            # Extend attention mask: all samples attend to this new position.
+            attn_mask = torch.cat(
+                [attn_mask, torch.ones(B, 1, dtype=torch.long, device=device)], dim=1
+            )
+
+            input_embeds = torch.stack(step_embeds).unsqueeze(1)  # (B, 1, H)
+            cur_pos = torch.tensor([abs_pos], device=device)
+
             out = self.llm(
-                inputs_embeds=prompt_embeds,
-                cache_position=prompt_positions,
+                inputs_embeds=input_embeds,
+                attention_mask=attn_mask,
+                past_key_values=cache,
+                cache_position=cur_pos,
                 use_cache=True,
                 return_dict=True,
             )
             cache = out["past_key_values"]
-            abs_pos = prompt_len  # absolute position counter (true token count)
-
-            # Process audio frames one at a time
-            generated_tokens = []
-            for f in range(T):
-                frame_emb = audio_embs[f].unsqueeze(0).unsqueeze(0)
-                cur_pos = torch.tensor([abs_pos], device=device)
-                out = self.llm(
-                    inputs_embeds=frame_emb,
-                    past_key_values=cache,
-                    cache_position=cur_pos,
-                    use_cache=True,
-                    return_dict=True,
-                )
-                cache = out["past_key_values"]
-                abs_pos += 1
-                cache, _ = maybe_evict_cache(
-                    cache,
-                    cache.get_seq_length(),
-                    sink_size,
-                    self.cache_window_size,
+            abs_pos += 1
+            cache, new_cache_len = maybe_evict_cache(
+                cache, cache.get_seq_length(), sink_size, self.cache_window_size
+            )
+            if new_cache_len < abs_pos:
+                # Eviction occurred — cache now has sink_size + window_size
+                # entries.  Trim the attention mask to match: keep the first
+                # sink_size columns and the last window_size columns.
+                attn_mask = torch.cat(
+                    [attn_mask[:, :sink_size], attn_mask[:, -self.cache_window_size:]],
+                    dim=1,
                 )
 
-                pred_logits = out["logits"][:, -1, :]
-                pred_id = pred_logits.argmax(dim=-1).item()
-
+            # --- Decode predictions per sample ---
+            pred_ids = out["logits"][:, -1, :].argmax(dim=-1)  # (B,)
+            for b in range(B):
+                if done[b]:
+                    continue
+                pred_id = pred_ids[b].item()
                 if pred_id != self.blank_token_id and pred_id != self.text_eos_id:
-                    generated_tokens.append(pred_id)
-                    text_emb = self.embed_tokens(
-                        torch.tensor([[pred_id]], device=device)
-                    )
-                    cur_pos = torch.tensor([abs_pos], device=device)
-                    out = self.llm(
-                        inputs_embeds=text_emb,
-                        past_key_values=cache,
-                        cache_position=cur_pos,
-                        use_cache=True,
-                        return_dict=True,
-                    )
-                    cache = out["past_key_values"]
-                    abs_pos += 1
-                    cache, _ = maybe_evict_cache(
-                        cache,
-                        cache.get_seq_length(),
-                        sink_size,
-                        self.cache_window_size,
-                    )
+                    generated[b].append(pred_id)
+                    need_text_feedback[b] = True
+                    pending_text[b] = pred_id
+                elif audio_ptr[b] >= T[b] and not need_text_feedback[b]:
+                    # In flush phase and got blank/EOS → done
+                    done[b] = True
 
-            # Flush: emit remaining tokens delayed by the latency window.
-            # After the audio ends, the model may still have pending text
-            # that was buffered due to the latency-K constraint.
-            for _ in range(latency):
-                pad_codes = torch.full(
-                    (1, self.num_codebooks, 1),
-                    self.audio_codebook_size,
-                    dtype=torch.long,
-                    device=device,
-                )
-                pad_emb = self.embed_audio_codes(pad_codes)
-                cur_pos = torch.tensor([abs_pos], device=device)
-                out = self.llm(
-                    inputs_embeds=pad_emb,
-                    past_key_values=cache,
-                    cache_position=cur_pos,
-                    use_cache=True,
-                    return_dict=True,
-                )
-                cache = out["past_key_values"]
-                abs_pos += 1
-                cache, _ = maybe_evict_cache(
-                    cache,
-                    cache.get_seq_length(),
-                    sink_size,
-                    self.cache_window_size,
-                )
-                pred_id = out["logits"][:, -1, :].argmax(dim=-1).item()
-                if pred_id != self.blank_token_id and pred_id != self.text_eos_id:
-                    generated_tokens.append(pred_id)
-                    text_emb = self.embed_tokens(
-                        torch.tensor([[pred_id]], device=device)
-                    )
-                    cur_pos = torch.tensor([abs_pos], device=device)
-                    out = self.llm(
-                        inputs_embeds=text_emb,
-                        past_key_values=cache,
-                        cache_position=cur_pos,
-                        use_cache=True,
-                        return_dict=True,
-                    )
-                    cache = out["past_key_values"]
-                    abs_pos += 1
-                    cache, _ = maybe_evict_cache(
-                        cache,
-                        cache.get_seq_length(),
-                        sink_size,
-                        self.cache_window_size,
-                    )
-                else:
-                    break  # blank or EOS = nothing more pending
-
-            results.append(self.tokenizer.ids_to_text(generated_tokens))
-        return results
+        return [self.tokenizer.ids_to_text(g) for g in generated]
 
     @torch.no_grad()
     def generate_streaming(

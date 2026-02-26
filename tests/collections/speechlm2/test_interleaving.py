@@ -51,6 +51,14 @@ def mock_embed(token_id, H=4):
     return torch.full((H,), float(token_id))
 
 
+def _fill_none_slots(input_parts, text_token_ids, H=4):
+    """Fill None placeholders in input_parts with mock embeddings."""
+    text_iter = iter(text_token_ids)
+    for j, part in enumerate(input_parts):
+        if part is None:
+            input_parts[j] = mock_embed(next(text_iter), H)
+
+
 @pytest.fixture
 def blank_id():
     return 0
@@ -81,18 +89,18 @@ class TestBuildInterleavedSequence:
         T0_id = ord("x")  # mock tokenizer
         T1_id = ord("y")
 
-        input_parts, label_parts = build_interleaved_sequence(
+        input_parts, label_parts, text_token_ids = build_interleaved_sequence(
             audio_embs=audio_embs,
             alignment=alignment,
             latency=K,
             blank_id=blank_id,
             tokenizer=MockTokenizer(),
-            embed_text_fn=mock_embed,
             frame_shift=frame_shift,
         )
 
-        # Input should be: [A0, A1, T0, A2, A3, T1, A4] = 7 items
+        # Input should be: [A0, A1, None, A2, A3, None, A4] = 7 items
         assert len(input_parts) == 7
+        assert text_token_ids == [T0_id, T1_id]
         # Labels should be: [B, T0, B, B, T1, B, B] = 7 items
         assert label_parts == [blank_id, T0_id, blank_id, blank_id, T1_id, blank_id, blank_id]
 
@@ -114,17 +122,17 @@ class TestBuildInterleavedSequence:
         T0_id = ord("x")
         T1_id = ord("y")
 
-        input_parts, label_parts = build_interleaved_sequence(
+        input_parts, label_parts, text_token_ids = build_interleaved_sequence(
             audio_embs=audio_embs,
             alignment=alignment,
             latency=K,
             blank_id=blank_id,
             tokenizer=MockTokenizer(),
-            embed_text_fn=mock_embed,
             frame_shift=frame_shift,
         )
 
         assert len(input_parts) == 7
+        assert text_token_ids == [T0_id, T1_id]
         assert label_parts == [blank_id, blank_id, blank_id, T0_id, blank_id, T1_id, blank_id]
 
     def test_all_blanks_when_latency_exceeds_frames(self, blank_id, frame_shift):
@@ -135,36 +143,36 @@ class TestBuildInterleavedSequence:
         alignment = [WordAlignment(text="a", start_time=0.0, end_time=0.08)]
         K = 10
 
-        input_parts, label_parts = build_interleaved_sequence(
+        input_parts, label_parts, text_token_ids = build_interleaved_sequence(
             audio_embs=audio_embs,
             alignment=alignment,
             latency=K,
             blank_id=blank_id,
             tokenizer=MockTokenizer(),
-            embed_text_fn=mock_embed,
             frame_shift=frame_shift,
         )
 
         # No text tokens inserted, all labels are blank
         assert len(input_parts) == T  # only audio frames
         assert label_parts == [blank_id] * T
+        assert text_token_ids == []
 
     def test_no_alignment_all_blanks(self, blank_id, frame_shift):
         """Empty alignment -> all blanks, input = audio only."""
         T = 4
         H = 4
         audio_embs = torch.randn(T, H)
-        input_parts, label_parts = build_interleaved_sequence(
+        input_parts, label_parts, text_token_ids = build_interleaved_sequence(
             audio_embs=audio_embs,
             alignment=[],
             latency=1,
             blank_id=blank_id,
             tokenizer=MockTokenizer(),
-            embed_text_fn=mock_embed,
             frame_shift=frame_shift,
         )
         assert len(input_parts) == T
         assert label_parts == [blank_id] * T
+        assert text_token_ids == []
 
     def test_k1_minimum_latency(self, blank_id, frame_shift):
         """K=1: text emitted as early as possible (at the word's start frame)."""
@@ -176,13 +184,12 @@ class TestBuildInterleavedSequence:
         K = 1
         tok_id = ord("a")
 
-        input_parts, label_parts = build_interleaved_sequence(
+        input_parts, label_parts, text_token_ids = build_interleaved_sequence(
             audio_embs=audio_embs,
             alignment=alignment,
             latency=K,
             blank_id=blank_id,
             tokenizer=MockTokenizer(),
-            embed_text_fn=mock_embed,
             frame_shift=frame_shift,
         )
 
@@ -191,6 +198,7 @@ class TestBuildInterleavedSequence:
         assert label_parts[1] == blank_id  # after fed-back text
         # Input should have text token inserted after first audio frame
         assert len(input_parts) == T + 1  # 4 audio + 1 text
+        assert text_token_ids == [tok_id]
 
     def test_multiple_words_correct_ordering(self, blank_id, frame_shift):
         """Multiple words should be emitted in order based on alignment times."""
@@ -204,22 +212,22 @@ class TestBuildInterleavedSequence:
         ]
         K = 2
 
-        input_parts, label_parts = build_interleaved_sequence(
+        input_parts, label_parts, text_token_ids = build_interleaved_sequence(
             audio_embs=audio_embs,
             alignment=alignment,
             latency=K,
             blank_id=blank_id,
             tokenizer=MockTokenizer(),
-            embed_text_fn=mock_embed,
             frame_shift=frame_shift,
         )
 
         # Extract non-blank labels in order
         text_labels = [l for l in label_parts if l != blank_id]
         assert text_labels == [ord("a"), ord("b"), ord("c")]
+        assert text_token_ids == [ord("a"), ord("b"), ord("c")]
 
     def test_fed_back_text_token_in_input(self, blank_id, frame_shift):
-        """When text is predicted, verify it appears in the input sequence."""
+        """When text is predicted, verify the None slot and text_token_ids are correct."""
         T = 3
         H = 4
         audio_embs = torch.randn(T, H)
@@ -227,21 +235,23 @@ class TestBuildInterleavedSequence:
         K = 1
         tok_id = ord("a")
 
-        input_parts, label_parts = build_interleaved_sequence(
+        input_parts, label_parts, text_token_ids = build_interleaved_sequence(
             audio_embs=audio_embs,
             alignment=alignment,
             latency=K,
             blank_id=blank_id,
             tokenizer=MockTokenizer(),
-            embed_text_fn=mock_embed,
             frame_shift=frame_shift,
         )
 
         # input_parts[0] = audio frame 0
-        # input_parts[1] = fed-back text token for "a"
+        # input_parts[1] = None (placeholder for text token "a")
         # input_parts[2] = audio frame 1
-        # ...
-        # Verify the fed-back text embedding matches
+        assert input_parts[1] is None
+        assert text_token_ids == [tok_id]
+
+        # Fill None slots and verify the embedding matches
+        _fill_none_slots(input_parts, text_token_ids, H)
         expected_text_emb = mock_embed(tok_id, H)
         assert torch.allclose(input_parts[1], expected_text_emb)
 
@@ -254,13 +264,12 @@ class TestBuildInterleavedSequence:
         alignment = [WordAlignment(text="abcde", start_time=0.0, end_time=0.24)]
         K = 1
 
-        input_parts, label_parts = build_interleaved_sequence(
+        input_parts, label_parts, text_token_ids = build_interleaved_sequence(
             audio_embs=audio_embs,
             alignment=alignment,
             latency=K,
             blank_id=blank_id,
             tokenizer=MockTokenizer(),
-            embed_text_fn=mock_embed,
             frame_shift=frame_shift,
         )
 
@@ -269,6 +278,7 @@ class TestBuildInterleavedSequence:
         assert len(text_labels) <= T
         # First tokens should be in order
         assert text_labels == [ord("a"), ord("b"), ord("c")]
+        assert text_token_ids == [ord("a"), ord("b"), ord("c")]
 
     def test_input_and_label_length_consistency(self, blank_id, frame_shift):
         """len(input_parts) == len(label_parts) always."""
@@ -276,17 +286,21 @@ class TestBuildInterleavedSequence:
             for K in range(1, 6):
                 audio_embs = torch.randn(T, 4)
                 alignment = [WordAlignment(text="ab", start_time=0.0, end_time=0.16)]
-                input_parts, label_parts = build_interleaved_sequence(
+                input_parts, label_parts, text_token_ids = build_interleaved_sequence(
                     audio_embs=audio_embs,
                     alignment=alignment,
                     latency=K,
                     blank_id=blank_id,
                     tokenizer=MockTokenizer(),
-                    embed_text_fn=mock_embed,
                     frame_shift=frame_shift,
                 )
                 assert len(input_parts) == len(label_parts), (
                     f"Mismatch at T={T}, K={K}: {len(input_parts)} vs {len(label_parts)}"
+                )
+                # Number of None slots should match text_token_ids
+                none_count = sum(1 for p in input_parts if p is None)
+                assert none_count == len(text_token_ids), (
+                    f"None count mismatch at T={T}, K={K}: {none_count} vs {len(text_token_ids)}"
                 )
 
     def test_non_first_words_get_space_prefix(self, blank_id, frame_shift):
@@ -310,13 +324,12 @@ class TestBuildInterleavedSequence:
 
         # SpacePrefixTokenizer uses ord() per char, so " cat" -> [32, 99, 97, 116]
         # while "cat" -> [99, 97, 116]. The space char (ord 32) is the marker.
-        input_parts, label_parts = build_interleaved_sequence(
+        input_parts, label_parts, text_token_ids = build_interleaved_sequence(
             audio_embs=audio_embs,
             alignment=alignment,
             latency=K,
             blank_id=blank_id,
             tokenizer=SpacePrefixTokenizer(),
-            embed_text_fn=mock_embed,
             frame_shift=frame_shift,
         )
 

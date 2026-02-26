@@ -28,6 +28,7 @@ Usage::
         inputs=/data/librispeech/lhotse/librispeech_cuts_lower_test-clean.jsonl.gz \
         context_strategy=oracle \
         latency=5 \
+        batch_size=64 \
         output_manifest=results/eval/ctx_oracle_test-clean.jsonl
 """
 from __future__ import annotations
@@ -64,7 +65,7 @@ class ToAudio(torch.utils.data.Dataset):
 class ContextEvalConfig:
     pretrained_name: str = ""
     inputs: str = ""
-    batch_size: int = 1  # Must be 1 for per-utterance context
+    batch_size: int = 64
     latency: int = 5
     context_strategy: str = "none"  # none, oracle, prefix_N, random_N, adversarial
     output_manifest: Optional[str] = "streaming_salm_context_eval.jsonl"
@@ -129,50 +130,74 @@ def main(cfg: ContextEvalConfig):
 
     # Load all cuts upfront (needed for adversarial context);
     # resample to model's expected sample rate if needed.
-    cuts_list = list(guess_parse_cutset(cfg.inputs))
+    cuts = guess_parse_cutset(cfg.inputs).sort_by_duration()
+    cuts_list = list(cuts)
     if cuts_list and cuts_list[0].sampling_rate != model.sample_rate:
         logging.info(
             f"Resampling cuts from {cuts_list[0].sampling_rate} to {model.sample_rate} Hz"
         )
         cuts_list = [c.resample(model.sample_rate) for c in cuts_list]
-    all_refs = [normalizer(cut.supervisions[0].text) for cut in cuts_list]
+        cuts = CutSet.from_cuts(cuts_list)
+
+    # Build lookup: cut_id -> normalized reference text
+    ref_by_id = {cut.id: normalizer(cut.supervisions[0].text) for cut in cuts_list}
+    all_refs = list(ref_by_id.values())
 
     rng = random.Random(cfg.seed)
+
+    # Pre-generate contexts for all cuts (deterministic order by cut id)
+    context_by_id: dict[str, str | None] = {}
+    for cut in cuts_list:
+        ref_text = ref_by_id[cut.id]
+        context_by_id[cut.id] = _generate_context(cfg.context_strategy, ref_text, all_refs, rng)
+
+    # Batched dataloader
+    dloader = torch.utils.data.DataLoader(
+        dataset=ToAudio(),
+        sampler=lhotse.dataset.DynamicCutSampler(cuts, max_cuts=cfg.batch_size),
+        num_workers=1,
+        batch_size=None,
+    )
 
     refs = []
     hyps = []
     contexts_used = []
+    cut_ids = []
     input_durations = []
     infer_durations = []
 
-    for cut_idx, cut in enumerate(cuts_list):
-        ref_text = all_refs[cut_idx]
-        context = _generate_context(cfg.context_strategy, ref_text, all_refs, rng)
-
-        # Load audio — Cut.load_audio() returns (channels, samples) numpy array
-        audio = cut.load_audio()  # (1, T) numpy
-        audio_tensor = torch.as_tensor(audio, dtype=torch.float32)  # (1, T)
-        audio_lens_tensor = torch.tensor([audio_tensor.shape[-1]])
+    for batch_idx, batch in enumerate(dloader):
+        batch_cuts = batch["cuts"]
+        batch_refs = [ref_by_id[c.id] for c in batch_cuts]
+        batch_contexts = [context_by_id[c.id] for c in batch_cuts]
 
         ts = perf_counter()
-        hyps_raw = model.generate(
-            audio=audio_tensor.to(model.device, non_blocking=True),
-            audio_lens=audio_lens_tensor.to(model.device, non_blocking=True),
+        batch_hyps_raw = model.generate(
+            audio=batch["audios"].to(model.device, non_blocking=True),
+            audio_lens=batch["audio_lens"].to(model.device, non_blocking=True),
             latency=cfg.latency,
-            context=context,
+            context=batch_contexts,
         )
-        infer_time = perf_counter() - ts
+        batch_infer_duration = perf_counter() - ts
 
-        hyp_text = normalizer(hyps_raw[0].strip())
-        refs.append(ref_text)
-        hyps.append(hyp_text)
-        contexts_used.append(context)
-        input_durations.append(cut.duration)
-        infer_durations.append(infer_time)
+        batch_duration = sum(c.duration for c in batch_cuts)
+        batch_hyps = [normalizer(h.strip()) for h in batch_hyps_raw]
 
-        if cfg.verbose and (cut_idx + 1) % 100 == 0:
-            batch_wer, _, _, _, _ = word_error_rate_detail(hyps[-100:], refs[-100:])
-            logging.info(f"Processed {cut_idx + 1}/{len(cuts_list)} (rolling WER: {batch_wer:.2%})")
+        if cfg.verbose:
+            batch_wer, _, nins, ndel, nsub = word_error_rate_detail(batch_hyps, batch_refs)
+            batch_rtfx = batch_duration / batch_infer_duration
+            logging.info(
+                f"Batch {batch_idx}: "
+                f"WER={batch_wer:.2%} [ins={nins:.2%} del={ndel:.2%} sub={nsub:.2%}] "
+                f"RTFx={batch_rtfx:.1f}"
+            )
+
+        refs.extend(batch_refs)
+        hyps.extend(batch_hyps)
+        contexts_used.extend(batch_contexts)
+        cut_ids.extend(c.id for c in batch_cuts)
+        input_durations.append(batch_duration)
+        infer_durations.append(batch_infer_duration)
 
     # Final metrics
     wer, _, nins, ndel, nsub = word_error_rate_detail(hypotheses=hyps, references=refs, use_cer=False)
@@ -184,15 +209,20 @@ def main(cfg: ContextEvalConfig):
     logging.info(f"Utterances: {len(refs)}")
 
     if cfg.output_manifest is not None:
+        # Build a lookup for results by cut id (since batched order may differ from input order)
+        result_by_id = {}
+        for cid, ref, hyp, ctx in zip(cut_ids, refs, hyps, contexts_used):
+            result_by_id[cid] = {"text": ref, "pred_text": hyp, "context": ctx}
         with SequentialJsonlWriter(cfg.output_manifest) as writer:
-            for cut, ref, hyp, ctx in zip(cuts_list, refs, hyps, contexts_used):
+            for cut in cuts_list:
+                res = result_by_id[cut.id]
                 writer.write({
                     "id": cut.id,
                     "duration": cut.duration,
-                    "text": ref,
-                    "pred_text": hyp,
+                    "text": res["text"],
+                    "pred_text": res["pred_text"],
                     "context_strategy": cfg.context_strategy,
-                    "context": ctx,
+                    "context": res["context"],
                 })
         logging.info(f"Wrote {len(hyps)} entries to {cfg.output_manifest}")
 

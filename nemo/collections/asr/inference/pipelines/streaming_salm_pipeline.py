@@ -48,6 +48,7 @@ class StreamingSALMPipeline(BasePipeline):
         asr_model: StreamingSALMInferenceWrapper,
     ):
         self.asr_model = asr_model
+        self.nmt_enabled = False
         self.init_parameters(cfg)
         super().__init__()
 

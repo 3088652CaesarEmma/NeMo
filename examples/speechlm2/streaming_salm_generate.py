@@ -77,7 +77,15 @@ def main(cfg: StreamingSALMEvalConfig):
     model = StreamingSALM.from_pretrained(cfg.pretrained_name)
     model = model.eval().to(getattr(torch, cfg.dtype)).to(cfg.device)
 
-    cuts = guess_parse_cutset(cfg.inputs).sort_by_duration()
+    cuts = guess_parse_cutset(cfg.inputs)
+    # Resample to model's expected sample rate if needed (e.g. 16kHz → 24kHz for Mimi)
+    sample_cut = next(iter(cuts))
+    if sample_cut.sampling_rate != model.sample_rate:
+        logging.info(
+            f"Resampling cuts from {sample_cut.sampling_rate} to {model.sample_rate} Hz"
+        )
+        cuts = CutSet.from_cuts(c.resample(model.sample_rate) for c in cuts)
+    cuts = cuts.sort_by_duration()
     dloader = torch.utils.data.DataLoader(
         dataset=ToAudio(),
         sampler=lhotse.dataset.DynamicCutSampler(cuts, max_cuts=cfg.batch_size),
