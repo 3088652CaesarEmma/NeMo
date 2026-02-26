@@ -124,6 +124,9 @@ class StreamingSALM(LightningModule, HFHubMixin):
         # --- Forced Aligner (frozen, training only, late-initialized) ---
         self.forced_aligner = None
 
+        # --- Delay pattern (disable for non-generative audio use) ---
+        self.use_delay_pattern = self.cfg.get("use_delay_pattern", True)
+
         # --- Latency and context biasing config ---
         self.min_latency = self.cfg.get("min_latency", 1)
         self.max_latency = self.cfg.get("max_latency", 10)
@@ -237,14 +240,15 @@ class StreamingSALM(LightningModule, HFHubMixin):
         # Cast audio to model dtype for Mimi (e.g. bfloat16 when trainer.precision=bf16-true)
         audios_for_mimi = batch["audios"].to(dtype=next(self.mimi.parameters()).dtype)
 
-        # 1-2. Audio encoding + delay pattern (audio already at 24 kHz)
+        # 1-2. Audio encoding + optional delay pattern (audio already at 24 kHz)
         with torch.cuda.nvtx.range("mimi_encode"):
             with torch.no_grad():
                 codes, code_lens = self.mimi.encode(audios_for_mimi, audio_lens)
-            delayed_codes = MimiEncoder.apply_delay_pattern(codes, code_lens)
+            if self.use_delay_pattern:
+                codes = MimiEncoder.apply_delay_pattern(codes, code_lens)
 
             # 3. Audio frame embeddings
-            audio_embeds = self.embed_audio_codes(delayed_codes)
+            audio_embeds = self.embed_audio_codes(codes)
 
         # 4. Forced alignment
         with torch.cuda.nvtx.range("qfa_align"):
@@ -520,8 +524,9 @@ class StreamingSALM(LightningModule, HFHubMixin):
         # --- Encode audio (batched) ---
         audio = audio.to(dtype=next(self.mimi.parameters()).dtype)
         codes, code_lens = self.mimi.encode(audio, audio_lens)
-        delayed_codes = MimiEncoder.apply_delay_pattern(codes, code_lens)
-        audio_embeds = self.embed_audio_codes(delayed_codes)  # (B, T_max, H)
+        if self.use_delay_pattern:
+            codes = MimiEncoder.apply_delay_pattern(codes, code_lens)
+        audio_embeds = self.embed_audio_codes(codes)  # (B, T_max, H)
 
         T = [code_lens[b].item() for b in range(B)]
 
@@ -795,28 +800,33 @@ class StreamingSALM(LightningModule, HFHubMixin):
             "Each stream must maintain its own state; use separate calls per stream."
         )
 
-        # Apply delay pattern with cross-chunk continuity (BUG 5 fix):
-        # Prepend buffered codes from the previous chunk so that codebook k's
-        # delay of k frames is computed relative to the utterance start, not
-        # the chunk start.
-        raw_codes = audio_codes  # (1, K, T_new)
-        if state.raw_code_buffer is not None:
-            combined = torch.cat([state.raw_code_buffer, raw_codes], dim=2)
-            overlap = state.raw_code_buffer.shape[2]
+        if self.use_delay_pattern:
+            # Apply delay pattern with cross-chunk continuity (BUG 5 fix):
+            # Prepend buffered codes from the previous chunk so that codebook k's
+            # delay of k frames is computed relative to the utterance start, not
+            # the chunk start.
+            raw_codes = audio_codes  # (1, K, T_new)
+            if state.raw_code_buffer is not None:
+                combined = torch.cat([state.raw_code_buffer, raw_codes], dim=2)
+                overlap = state.raw_code_buffer.shape[2]
+            else:
+                combined = raw_codes
+                overlap = 0
+
+            combined_lens = torch.full(
+                (1,), combined.shape[2], dtype=torch.long, device=device
+            )
+            delayed = MimiEncoder.apply_delay_pattern(combined, combined_lens)
+            # Only embed the NEW frames (skip the overlap prefix)
+            audio_embeds = self.embed_audio_codes(delayed[:, :, overlap:])
+
+            # Save last (num_codebooks - 1) raw code frames for the next chunk
+            buffer_size = min(self.num_codebooks - 1, raw_codes.shape[2])
+            new_raw_code_buffer = raw_codes[:, :, -buffer_size:] if buffer_size > 0 else None
         else:
-            combined = raw_codes
-            overlap = 0
-
-        combined_lens = torch.full(
-            (1,), combined.shape[2], dtype=torch.long, device=device
-        )
-        delayed = MimiEncoder.apply_delay_pattern(combined, combined_lens)
-        # Only embed the NEW frames (skip the overlap prefix)
-        audio_embeds = self.embed_audio_codes(delayed[:, :, overlap:])
-
-        # Save last (num_codebooks - 1) raw code frames for the next chunk
-        buffer_size = min(self.num_codebooks - 1, raw_codes.shape[2])
-        new_raw_code_buffer = raw_codes[:, :, -buffer_size:] if buffer_size > 0 else None
+            # No delay pattern — embed raw codes directly, no cross-chunk buffer needed.
+            audio_embeds = self.embed_audio_codes(audio_codes)
+            new_raw_code_buffer = None
 
         emitted: list[int] = []
         cache = state.kv_cache

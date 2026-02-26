@@ -584,8 +584,9 @@ def _override_streaming_salm_prepare_inputs(self, batch: dict) -> dict:
     # Run Mimi encode — this IS memory-consuming and must be profiled.
     with torch.no_grad():
         codes, code_lens = self.mimi.encode(audios, audio_lens)
-    delayed_codes = MimiEncoder.apply_delay_pattern(codes, code_lens)
-    audio_embeds = self.embed_audio_codes(delayed_codes)
+    if self.use_delay_pattern:
+        codes = MimiEncoder.apply_delay_pattern(codes, code_lens)
+    audio_embeds = self.embed_audio_codes(codes)
 
     # Estimate interleaved sequence layout.
     # Real interleaving: for each audio frame, label is either blank_id (no text
