@@ -41,6 +41,7 @@ model:
     min_duration: 1.0
     drop_last: true
     skip_missing_manifest_entries: true
+    defer_setup: true
     # batch augmentation
     batch_augmentor:
       _target_: nemo.collections.asr.modules.ssl_modules.MultiSpeakerNoiseAugmentation
@@ -68,6 +69,7 @@ model:
     use_start_end_token: false
     max_duration: 60.0
     min_duration: 1.0
+    defer_setup: true
     # batch augmentation
     batch_augmentor:
       _target_: nemo.collections.asr.modules.ssl_modules.MultiSpeakerNoiseAugmentation
