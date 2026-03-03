@@ -57,6 +57,7 @@ __all__ = [
     'EncDecFrameClassificationModel',
     'EncDecHybridRNNTCTCBPEModel',
     'EncDecHybridRNNTCTCModel',
+    'EncDecHybridRNNTCTCBPEModelWithPrompt',
     'EncDecK2RnntSeqModel',
     'EncDecK2RnntSeqModelBPE',
     'EncDecK2SeqModel',

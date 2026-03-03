@@ -839,8 +839,6 @@ class EncDecDenoiseMaskedTokenPredModel(EncDecMaskedTokenPredModel):
             "inputs": [
                 {"type": NeuralType(("B", "T"), AudioSignal()), "seq_length": "input", "name": "audio"},
                 {"type": NeuralType(("B",), LengthsType()), "seq_length": "input", "name": "audio_len"},
-                {"type": NeuralType(("B", "T"), AudioSignal()), "seq_length": "input", "name": "noise"},
-                {"type": NeuralType(("B",), LengthsType()), "seq_length": "input", "name": "noise_len"},
                 {"type": NeuralType(("B", "T"), AudioSignal()), "seq_length": "input", "name": "noisy_audio"},
                 {"type": NeuralType(("B",), LengthsType()), "seq_length": "input", "name": "noisy_audio_len"},
             ],
@@ -860,6 +858,7 @@ class EncDecDenoiseMaskedTokenPredModel(EncDecMaskedTokenPredModel):
                 dataset=ssl_dataset.LhotseAudioNoiseDataset(
                     noise_manifest=config.get('noise_manifest', None),
                     batch_augmentor_cfg=config.get('batch_augmentor', None),
+                    return_noise=False,
                 ),
             )
 
@@ -867,6 +866,7 @@ class EncDecDenoiseMaskedTokenPredModel(EncDecMaskedTokenPredModel):
             config,
             global_rank=self.global_rank,
             world_size=self.world_size,
+            return_noise=False,
         )
 
         shuffle = config['shuffle']

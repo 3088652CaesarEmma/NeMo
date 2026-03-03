@@ -38,6 +38,15 @@ from nemo.utils import logging
 
 @dataclass
 class AudioNoiseItem:
+    """
+    A single audio noise item.
+    Args:
+        sample_id: the sample id
+        audio: the audio tensor
+        audio_len: the length of the audio
+        noise: the noise tensor
+        noise_len: the length of the noise
+    """
     sample_id: str | None = None
     audio: Union[Tensor, None] = None
     audio_len: Union[Tensor, None] = None
@@ -49,6 +58,15 @@ class AudioNoiseItem:
 
 @dataclass
 class AudioNoiseBatch:
+    """
+    A batch of audio noise items.
+    Args:
+        sample_id: the sample id
+        audio: the audio tensor
+        audio_len: the length of the audio
+        noise: the noise tensor
+        noise_len: the length of the noise
+    """
     sample_id: list | None = None
     audio: Union[Tensor, None] = None
     audio_len: Union[Tensor, None] = None
@@ -95,7 +113,16 @@ def _parse_manifest_item(line: str, manifest_file: str) -> Dict[str, Any]:
     return item
 
 
-def _audio_noise_collate_fn(batch: List[AudioNoiseItem], batch_augmentor: Any = None) -> AudioNoiseBatch:
+def _audio_noise_collate_fn(batch: List[AudioNoiseItem], batch_augmentor: Any = None, return_noise: bool = False) -> AudioNoiseBatch:
+    """
+    Collate a batch of audio noise items into a batch of audio noise batches.
+    Args:
+        batch: the batch of audio noise items
+        batch_augmentor: the batch augmentor
+        return_noise: whether to return the noises
+    Returns:
+        the batch of audio noise batches
+    """
     audios = [x.audio for x in batch]
     audio_lengths = [x.audio_len for x in batch]
     max_audio_len = max(audio_lengths).item()
@@ -127,8 +154,8 @@ def _audio_noise_collate_fn(batch: List[AudioNoiseItem], batch_augmentor: Any = 
     output = AudioNoiseBatch(
         audio=audio_signal,
         audio_len=audio_lengths,
-        noise=noise_signal,
-        noise_len=noise_lengths,
+        noise=noise_signal if return_noise else None,
+        noise_len=noise_lengths if return_noise else None,
     )
 
     if batch_augmentor is not None:
@@ -293,6 +320,7 @@ class AudioNoiseDataset(audio_to_text.AudioToCharDataset):
         batch_augmentor: Any | None = None,
         min_audio_len_secs: float = 1.0,
         pad_audio_mode: str = 'repeat',
+        return_noise: bool = False,
         **kwargs,
     ):
         # add bos_id=0 to avoid empty text token
@@ -302,7 +330,8 @@ class AudioNoiseDataset(audio_to_text.AudioToCharDataset):
         self.noise_data = load_noise_manifest(noise_manifest)
         self.min_audio_len_secs = min_audio_len_secs
         self.pad_audio_mode = pad_audio_mode
-
+        self.return_noise = return_noise
+        
     def __getitem__(self, index) -> AudioNoiseItem:
         sample = self.manifest_processor.collection[index]
         offset = sample.offset
@@ -336,7 +365,7 @@ class AudioNoiseDataset(audio_to_text.AudioToCharDataset):
         return item
 
     def _collate_fn(self, batch: List[AudioNoiseItem]) -> AudioNoiseBatch:
-        return _audio_noise_collate_fn(batch, self.batch_augmentor)
+        return _audio_noise_collate_fn(batch, self.batch_augmentor, self.return_noise)
 
 
 class TarredAudioNoiseDataset(audio_to_text.TarredAudioToCharDataset):
@@ -351,6 +380,7 @@ class TarredAudioNoiseDataset(audio_to_text.TarredAudioToCharDataset):
         batch_augmentor: Any | None = None,
         min_audio_len_secs: float = 1.0,
         pad_audio_mode: str = 'repeat',
+        return_noise: bool = False,
         **kwargs,
     ):
         """
@@ -359,6 +389,7 @@ class TarredAudioNoiseDataset(audio_to_text.TarredAudioToCharDataset):
             batch_augmentor: the batch augmentor
             min_audio_len_secs: the minimum audio length in seconds, audios shorter than this will be padded
             pad_audio_mode: the padding mode for audios shorter than min_audio_len_secs, either 'repeat' or 'zero'
+            return_noise: whether to return the noise in output batch, default is False
             **kwargs: other arguments for TarredAudioToCharDataset
 
         """
@@ -368,7 +399,8 @@ class TarredAudioNoiseDataset(audio_to_text.TarredAudioToCharDataset):
         self.noise_data = load_noise_manifest(noise_manifest)
         self.min_audio_len_secs = min_audio_len_secs
         self.pad_audio_mode = pad_audio_mode
-
+        self.return_noise = return_noise
+        
     def _build_sample(self, tup):
         """Builds the training sample by combining the data from the WebDataset with the manifest info."""
         audio_bytes, audio_filename, offset_id = tup
@@ -425,11 +457,17 @@ class TarredAudioNoiseDataset(audio_to_text.TarredAudioToCharDataset):
         return audio
 
     def _collate_fn(self, batch: List[AudioNoiseItem]) -> AudioNoiseBatch:
-        return _audio_noise_collate_fn(batch, self.batch_augmentor)
+        return _audio_noise_collate_fn(batch, self.batch_augmentor, self.return_noise)
 
 
 class LhotseAudioNoiseDataset(torch.utils.data.Dataset):
-    def __init__(self, noise_manifest: str | None = None, batch_augmentor_cfg: DictConfig = None):
+    def __init__(self, noise_manifest: Optional[Union[str, ListConfig]] = None, batch_augmentor_cfg: DictConfig = None, return_noise: bool = False):
+        """
+        Args:
+            noise_manifest: the noise manifest file or list of noise manifest files
+            batch_augmentor_cfg: the batch augmentor config
+            return_noise: whether to return the noise in output batch, default is False
+        """
         super().__init__()
 
         if batch_augmentor_cfg:
@@ -440,7 +478,8 @@ class LhotseAudioNoiseDataset(torch.utils.data.Dataset):
         self.batch_augmentor = batch_augmentor
         self.noise_data = load_noise_manifest(noise_manifest)
         self.load_audio = AudioSamples(fault_tolerant=True)
-
+        self.return_noise = return_noise
+        
     def __getitem__(self, cuts):
 
         audios, audio_lens, cuts = self.load_audio(cuts)
@@ -466,12 +505,23 @@ class LhotseAudioNoiseDataset(torch.utils.data.Dataset):
             output.noisy_audio = output.audio + output.noise
             output.noisy_audio_len = output.audio_len
 
+        if not self.return_noise:
+            output.noise = None
+            output.noise_len = None
+
         return output
 
 
 def get_audio_noise_dataset(
-    config: Dict[str, Any], augmentor: Any = None, batch_augmentor: Any = None
+    config: DictConfig, augmentor: Any = None, batch_augmentor: Any = None, return_noise: bool = False
 ) -> AudioNoiseDataset:
+    """
+    Args:
+        config: the dataset config
+        augmentor: the audio augmentor
+        batch_augmentor: the batch augmentor
+        return_noise: whether to return the noise in output batch, default is False
+    """
     dataset = AudioNoiseDataset(
         noise_manifest=config.get('noise_manifest', None),
         batch_augmentor=batch_augmentor,
@@ -484,13 +534,23 @@ def get_audio_noise_dataset(
         min_duration=config.get('min_duration', None),
         trim=config.get('trim_silence', False),
         channel_selector=config.get('channel_selector', None),
+        return_noise=return_noise,
     )
     return dataset
 
 
 def get_concat_audio_noise_dataset(
-    config: Dict[str, Any], global_rank: int, world_size: int, augmentor: Any = None, batch_augmentor: Any = None
+    config: DictConfig, global_rank: int, world_size: int, augmentor: Any = None, batch_augmentor: Any = None, return_noise: bool = False
 ) -> ConcatDataset:
+    """
+    Args:
+        config: the dataset config
+        global_rank: the global rank
+        world_size: the global world size
+        augmentor: the audio augmentor
+        batch_augmentor: the batch augmentor
+        return_noise: whether to return the noise in output batch, default is False
+    """
     manifest_filepaths = config['manifest_filepath']
     datasets = []
 
@@ -504,7 +564,7 @@ def get_concat_audio_noise_dataset(
         conf = copy.deepcopy(config)
         conf['manifest_filepath'] = manifest_filepath
 
-        dataset = get_audio_noise_dataset(config=conf, augmentor=augmentor)
+        dataset = get_audio_noise_dataset(config=conf, augmentor=augmentor, batch_augmentor=batch_augmentor, return_noise=return_noise)
         datasets.append(dataset)
 
     dataset = ConcatDataset(
@@ -521,7 +581,17 @@ def get_concat_audio_noise_dataset(
     return dataset
 
 
-def get_tarred_audio_noise_dataset(config, shuffle_n, global_rank, world_size, augmentor, batch_augmentor: Any = None):
+def get_tarred_audio_noise_dataset(config: DictConfig, shuffle_n: int, global_rank: int, world_size: int, augmentor: Any = None, batch_augmentor: Any = None, return_noise: bool = False):
+    """
+    Args:
+        config: the dataset config
+        shuffle_n: the number of samples to look ahead and load to be shuffled
+        global_rank: the global rank
+        world_size: the global world size
+        augmentor: the audio augmentor
+        batch_augmentor: the batch augmentor
+        return_noise: whether to return the noise in output batch, default is False
+    """
     tarred_audio_filepaths = config['tarred_audio_filepaths']
     manifest_filepaths = config['manifest_filepath']
     datasets = []
@@ -568,6 +638,7 @@ def get_tarred_audio_noise_dataset(config, shuffle_n, global_rank, world_size, a
             shard_manifests=is_sharded_manifest,
             global_rank=global_rank,
             world_size=world_size,
+            return_noise=return_noise,
         )
         if bucketing_weights:
             [datasets.append(dataset) for _ in range(bucketing_weights[dataset_idx])]
@@ -578,8 +649,18 @@ def get_tarred_audio_noise_dataset(config, shuffle_n, global_rank, world_size, a
 
 
 def get_concat_tarred_audio_noise_dataset(
-    config, shuffle_n, global_rank, world_size, augmentor, batch_augmentor: Any = None
+    config: DictConfig, shuffle_n: int, global_rank: int, world_size: int, augmentor: Any = None, batch_augmentor: Any = None, return_noise: bool = False
 ):
+    """
+    Args:
+        config: the dataset config
+        shuffle_n: the number of samples to look ahead and load to be shuffled
+        global_rank: the global rank
+        world_size: the global world size
+        augmentor: the audio augmentor
+        batch_augmentor: the batch augmentor
+        return_noise: whether to return the noise in output batch, default is False
+    """
     tarred_audio_filepaths = config['tarred_audio_filepaths']
     manifest_filepaths = config['manifest_filepath']
     datasets = []
@@ -596,6 +677,7 @@ def get_concat_tarred_audio_noise_dataset(
             world_size=world_size,
             augmentor=augmentor,
             batch_augmentor=batch_augmentor,
+            return_noise=return_noise,
         )
         datasets.append(dataset)
 
@@ -614,10 +696,18 @@ def get_concat_tarred_audio_noise_dataset(
 
 
 def get_audio_noise_dataset_from_config(
-    config,
+    config: DictConfig,
     global_rank: int,
     world_size: int,
+    return_noise: bool = False,
 ):
+    """
+    Args:
+        config: the dataset config
+        global_rank: the global rank
+        world_size: the global world size
+        return_noise: whether to return the noise in output batch, default is False
+    """
     if 'augmentor' in config:
         augmentor = process_augmentations(config['augmentor'], global_rank=global_rank, world_size=world_size)
     else:
@@ -670,6 +760,7 @@ def get_audio_noise_dataset_from_config(
                 world_size=world_size,
                 augmentor=augmentor,
                 batch_augmentor=batch_augmentor,
+                return_noise=return_noise,
             )
         else:
             dataset = get_tarred_audio_noise_dataset(
@@ -679,6 +770,7 @@ def get_audio_noise_dataset_from_config(
                 world_size=world_size,
                 augmentor=augmentor,
                 batch_augmentor=batch_augmentor,
+                return_noise=return_noise,
             )
     else:
         if 'manifest_filepath' in config and config['manifest_filepath'] is None:
@@ -691,7 +783,8 @@ def get_audio_noise_dataset_from_config(
                 world_size=world_size,
                 augmentor=augmentor,
                 batch_augmentor=batch_augmentor,
+                return_noise=return_noise,
             )
         else:
-            dataset = get_audio_noise_dataset(config=config, augmentor=augmentor, batch_augmentor=batch_augmentor)
+            dataset = get_audio_noise_dataset(config=config, augmentor=augmentor, batch_augmentor=batch_augmentor, return_noise=return_noise)
     return dataset
