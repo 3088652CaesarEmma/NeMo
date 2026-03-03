@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from math import ceil
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -42,6 +42,7 @@ from nemo.core.neural_types import (
     SpectrogramType,
 )
 from nemo.utils import logging
+from nemo.utils.get_rank import is_global_rank_zero
 
 __all__ = ['SpeechEncDecSelfSupervisedModel', 'EncDecMaskedTokenPredModel', 'EncDecDenoiseMaskedTokenPredModel']
 
@@ -761,6 +762,15 @@ class EncDecMaskedTokenPredModel(SpeechEncDecSelfSupervisedModel):
             'train_loss': loss_value,
         }
 
+        if hasattr(self, '_trainer') and self._trainer is not None:
+            log_every_n_steps = self._trainer.log_every_n_steps
+            sample_id = self._trainer.global_step
+        else:
+            log_every_n_steps = 1
+            sample_id = batch_idx
+        if (sample_id + 1) % log_every_n_steps == 0:
+            self.log_codebook_coverage(tokens, encoded_len)
+
         return {'loss': loss_value, 'log': tensorboard_logs}
 
     def inference_pass(self, batch, batch_idx=0, dataloader_idx=0, mode='val', apply_mask=False):
@@ -820,6 +830,34 @@ class EncDecMaskedTokenPredModel(SpeechEncDecSelfSupervisedModel):
         test_loss_mean = torch.stack([x['test_loss'] for x in outputs]).mean()
         tensorboard_logs = {'test_loss': test_loss_mean}
         return {'test_loss': test_loss_mean, 'log': tensorboard_logs}
+
+    def log_codebook_coverage(self, tokens: torch.Tensor, encoded_len: torch.Tensor):
+        if tokens.ndim == 2:
+            _tokens = tokens.unsqueeze(-1)  # shape [B, T, 1]
+        else:
+            _tokens = tokens  # shape [B, T, N]
+
+        # find the number of unique tokens in the batch, excluding padding; count per codebook (batch collapsed) -> [N]
+        # encoded_len is of shape [B]; valid positions: t < encoded_len[b] for each batch item b
+        T, N = _tokens.size(1), _tokens.size(2)
+        valid_mask = torch.arange(T, device=_tokens.device, dtype=encoded_len.dtype).unsqueeze(
+            0
+        ) < encoded_len.unsqueeze(1)
+        num_unique_tokens = torch.zeros(N, device=_tokens.device, dtype=torch.long)
+        for n in range(N):
+            valid_tokens = _tokens[valid_mask][:, n]  # all valid token values for codebook n across batch and time
+            num_unique_tokens[n] = valid_tokens.unique().numel() if valid_tokens.numel() > 0 else 0
+
+        # Get the maximum number of unique tokens for each codebookacross all ranks
+        if torch.distributed.is_initialized():
+            torch.distributed.all_reduce(num_unique_tokens, op=torch.distributed.ReduceOp.MAX)
+
+        # coverage = fraction of codebook entries used
+        codebook_coverage = num_unique_tokens / float(self.cfg.num_classes)
+
+        for n in range(N):
+            self.log(f"codebook_coverage_cb{n}", codebook_coverage[n].float())
+        self.log(f"codebook_coverage_avg", codebook_coverage.mean().float())
 
 
 class EncDecDenoiseMaskedTokenPredModel(EncDecMaskedTokenPredModel):
@@ -945,7 +983,20 @@ class EncDecDenoiseMaskedTokenPredModel(EncDecMaskedTokenPredModel):
         processed_noisy_input_signal=None,
         processed_noisy_input_signal_length=None,
         apply_mask=False,
-    ):
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Forward pass for the model.
+        Args:
+            input_signal: Input signal of shape [B, T].
+            input_signal_length: Lengths of the input signal of shape [B].
+            processed_signal: Processed signal of shape [B, D, T].
+            processed_signal_length: Lengths of the processed signal of shape [B].
+        Returns:
+            log_probs: Log probabilities of the model of shape [B, T, C].
+            encoded_len: Lengths of the encoded signal of shape [B].
+            masks: Masks of the model of shape [B, D, T].
+            tokens: Target tokens of the model of shape [B, T, N] or [B, T] if num_books == 1 and squeeze_single is True.
+        """
         has_input_signal = input_signal is not None and input_signal_length is not None
         has_processed_signal = processed_signal is not None and processed_signal_length is not None
         if (has_input_signal ^ has_processed_signal) == False:
@@ -1032,6 +1083,15 @@ class EncDecDenoiseMaskedTokenPredModel(EncDecMaskedTokenPredModel):
             'global_step': self.trainer.global_step,
             'train_loss': loss_value,
         }
+
+        if hasattr(self, '_trainer') and self._trainer is not None:
+            log_every_n_steps = self._trainer.log_every_n_steps
+            sample_id = self._trainer.global_step
+        else:
+            log_every_n_steps = 1
+            sample_id = batch_idx
+        if (sample_id + 1) % log_every_n_steps == 0:
+            self.log_codebook_coverage(tokens, encoded_len)
 
         return {'loss': loss_value, 'log': tensorboard_logs}
 
