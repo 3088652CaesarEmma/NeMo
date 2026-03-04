@@ -17,7 +17,7 @@ import torch.nn.functional as F
 from torch import nn
 
 from nemo.core import NeuralModule
-from nemo.core.classes import Exportable, NeuralModule, typecheck
+from nemo.core.classes import Exportable, NeuralModule
 from nemo.core.neural_types import LabelsType, NeuralType, SpectrogramType
 
 
@@ -68,10 +68,15 @@ class RandomProjectionVectorQuantizer(NeuralModule, Exportable):
         torch.nn.init.xavier_normal_(self.proj.weight)
 
         # (num_books, num_classes, hid_dim)
-        codebooks = torch.randn(self.num_books, self.num_classes, self.code_dim).double()
-        torch.nn.init.normal_(codebooks, mean=0, std=1)
+        codebooks = torch.randn(self.num_books, self.num_classes, self.code_dim)
         codebooks = F.normalize(codebooks, dim=-1)
         self.codebooks = nn.Parameter(codebooks)
+        # Pre-computed offset for multi-book embedding lookup: [0, num_classes, 2*num_classes, ...]
+        self.register_buffer(
+            'book_offsets',
+            self.num_classes * torch.arange(self.num_books).reshape(1, 1, self.num_books),
+            persistent=False,
+        )
         if freeze:
             self.freeze()
 
@@ -105,7 +110,6 @@ class RandomProjectionVectorQuantizer(NeuralModule, Exportable):
             "xid": NeuralType(('B', 'T', 'H'), LabelsType()),
         }
 
-    @typecheck()
     def forward(self, input_signal):
         """
         Args:
@@ -133,19 +137,22 @@ class RandomProjectionVectorQuantizer(NeuralModule, Exportable):
 
         # get tokens (xid) of shape (B, T, num_books)
         if self.dist_fn == "cosine":
-            # (B, T, num_books, code_dim) -> (B, T, num_books, num_classes)
+            # (B, T, num_books, code_dim) x (num_books, num_classes, code_dim) -> (B, T, num_books, num_classes)
             xid = torch.einsum('btdh,dch->btdc', x, self.codebooks)
             # (B, T, num_books, num_classes) -> (B, T, num_books)
             xid = xid.max(dim=-1)[1]
         elif self.dist_fn == "l2":
-            # (B, T, num_books, code_dim) -> (B, T, num_books, code_dim, num_classes)
-            xid = x.unsqueeze(-1) - self.codebooks.transpose(1, 2).unsqueeze(0).unsqueeze(0)
-            xid = xid.norm(dim=-2).argmin(dim=-1)
+            # ||a-b||^2 = ||a||^2 + ||b||^2 - 2*a·b  (avoids code_dim-sized intermediate)
+            x_sq = (x * x).sum(dim=-1, keepdim=True)  # (B, T, books, 1)
+            cb_sq = (self.codebooks * self.codebooks).sum(dim=-1)  # (books, classes)
+            dot = torch.einsum('btdh,dch->btdc', x, self.codebooks)  # (B, T, books, classes)
+            dist = x_sq + cb_sq - 2 * dot  # (B, T, books, classes)
+            xid = dist.argmin(dim=-1)
         else:
             raise ValueError(f"Unknown distance function {self.dist_fn}, must be one of {self.DIST_FN_LIST}")
 
         # xid2: (B, T, num_books) -> (B, T, num_books)
-        xid2 = xid + self.num_classes * torch.arange(self.num_books, device=xid.device).unsqueeze(0).unsqueeze(0)
+        xid2 = xid + self.book_offsets
         # xid2: (B, T, num_books) -> (B*num_books, T)
         xid2 = xid2.transpose(1, 2).contiguous().view(-1, T)
 

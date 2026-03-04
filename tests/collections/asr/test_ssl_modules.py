@@ -30,6 +30,17 @@ sys.modules.setdefault("masking", _mod)
 _spec.loader.exec_module(_mod)
 RandomBlockMasking = _mod.RandomBlockMasking
 
+# Import the quantizer module
+_q_spec = importlib.util.spec_from_file_location(
+    "quantizers",
+    "nemo/collections/asr/modules/ssl_modules/quantizers.py",
+    submodule_search_locations=[],
+)
+_q_mod = importlib.util.module_from_spec(_q_spec)
+sys.modules.setdefault("quantizers", _q_mod)
+_q_spec.loader.exec_module(_q_mod)
+RandomProjectionVectorQuantizer = _q_mod.RandomProjectionVectorQuantizer
+
 
 class TestRandomBlockMasking:
     @pytest.fixture(params=[False, True], ids=["no_overlap", "overlap"])
@@ -153,3 +164,143 @@ class TestRandomBlockMasking:
 
         assert masked_feats.device.type == 'cuda'
         assert masks.device.type == 'cuda'
+
+
+class TestRandomProjectionVectorQuantizer:
+    @pytest.fixture(params=["cosine", "l2"])
+    def quantizer(self, request):
+        return RandomProjectionVectorQuantizer(
+            feat_in=32,
+            code_dim=8,
+            num_classes=64,
+            num_books=2,
+            dist_fn=request.param,
+        )
+
+    def test_output_shapes(self, quantizer):
+        B, D, T = 2, 32, 10
+        x = torch.randn(B, D, T)
+        xq, xid = quantizer(input_signal=x)
+        assert xq.shape == (B, 8, T, 2)  # (B, code_dim, T, num_books)
+        assert xid.shape == (B, T, 2)  # (B, T, num_books)
+
+    def test_output_shapes_time_ahead(self):
+        q = RandomProjectionVectorQuantizer(
+            feat_in=32,
+            code_dim=8,
+            num_classes=64,
+            num_books=2,
+            dist_fn="l2",
+            time_ahead=True,
+        )
+        B, T, D = 2, 10, 32
+        x = torch.randn(B, T, D)
+        xq, xid = q(input_signal=x)
+        assert xq.shape == (B, T, 8, 2)  # (B, T, code_dim, num_books)
+        assert xid.shape == (B, T, 2)
+
+    def test_squeeze_single(self):
+        q = RandomProjectionVectorQuantizer(
+            feat_in=32,
+            code_dim=8,
+            num_classes=64,
+            num_books=1,
+            dist_fn="cosine",
+            squeeze_single=True,
+        )
+        x = torch.randn(2, 32, 10)
+        xq, xid = q(input_signal=x)
+        assert xq.shape == (2, 8, 10)  # squeezed book dim
+        assert xid.shape == (2, 10)
+
+    def test_combine_time_steps(self):
+        q = RandomProjectionVectorQuantizer(
+            feat_in=16,
+            code_dim=8,
+            num_classes=64,
+            num_books=1,
+            dist_fn="l2",
+            combine_time_steps=2,
+        )
+        x = torch.randn(2, 16, 10)  # T=10, will become T=5
+        xq, xid = q(input_signal=x)
+        assert xq.shape == (2, 8, 5, 1)
+        assert xid.shape == (2, 5, 1)
+
+    def test_codebooks_are_float32(self):
+        q = RandomProjectionVectorQuantizer(feat_in=16, code_dim=8, num_classes=32, num_books=1)
+        assert q.codebooks.dtype == torch.float32
+
+    def test_l2_nearest_neighbor_correctness(self):
+        """Verify L2 picks the closest codebook entry on a small example."""
+        q = RandomProjectionVectorQuantizer(
+            feat_in=4,
+            code_dim=4,
+            num_classes=3,
+            num_books=1,
+            dist_fn="l2",
+            time_ahead=True,
+            squeeze_single=True,
+        )
+        # Set projection to identity so x passes through unchanged
+        with torch.no_grad():
+            q.proj.weight.copy_(torch.eye(4))
+            # Set codebook to known vectors (already normalized)
+            cb = torch.tensor(
+                [
+                    [1.0, 0.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0, 0.0],
+                ]
+            ).unsqueeze(
+                0
+            )  # (1, 3, 4)
+            q.codebooks.copy_(cb)
+
+        # Input close to codebook entry 2 (z-axis)
+        inp = torch.tensor([[[0.05, 0.05, 0.9, 0.0]]])  # (1, 1, 4)
+        _, xid = q(input_signal=inp)
+        assert xid.item() == 2
+
+        # Input close to codebook entry 0 (x-axis)
+        inp = torch.tensor([[[0.9, 0.1, 0.0, 0.0]]])
+        _, xid = q(input_signal=inp)
+        assert xid.item() == 0
+
+    def test_cosine_nearest_neighbor_correctness(self):
+        """Verify cosine picks the most similar codebook entry."""
+        q = RandomProjectionVectorQuantizer(
+            feat_in=4,
+            code_dim=4,
+            num_classes=3,
+            num_books=1,
+            dist_fn="cosine",
+            time_ahead=True,
+            squeeze_single=True,
+        )
+        with torch.no_grad():
+            q.proj.weight.copy_(torch.eye(4))
+            cb = torch.tensor(
+                [
+                    [1.0, 0.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0, 0.0],
+                ]
+            ).unsqueeze(0)
+            q.codebooks.copy_(cb)
+
+        inp = torch.tensor([[[0.05, 0.05, 0.9, 0.0]]])
+        _, xid = q(input_signal=inp)
+        assert xid.item() == 2
+
+        inp = torch.tensor([[[0.9, 0.1, 0.0, 0.0]]])
+        _, xid = q(input_signal=inp)
+        assert xid.item() == 0
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+    def test_gpu(self, quantizer):
+        quantizer = quantizer.cuda()
+        x = torch.randn(2, 32, 10, device='cuda')
+        xq, xid = quantizer(input_signal=x)
+        assert xq.device.type == 'cuda'
+        assert xid.device.type == 'cuda'
