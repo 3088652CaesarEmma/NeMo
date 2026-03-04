@@ -768,7 +768,8 @@ class EncDecMaskedTokenPredModel(SpeechEncDecSelfSupervisedModel):
         else:
             log_every_n_steps = 1
             sample_id = batch_idx
-        if (sample_id + 1) % log_every_n_steps == 0:
+
+        if self.cfg.get("log_codebook_coverage", False) and (sample_id + 1) % log_every_n_steps == 0:
             self.log_codebook_coverage(tokens, encoded_len)
 
         return {'loss': loss_value, 'log': tensorboard_logs}
@@ -1122,7 +1123,8 @@ class EncDecDenoiseMaskedTokenPredModel(EncDecMaskedTokenPredModel):
         else:
             log_every_n_steps = 1
             sample_id = batch_idx
-        if (sample_id + 1) % log_every_n_steps == 0:
+
+        if self.cfg.get("log_codebook_coverage", False) and (sample_id + 1) % log_every_n_steps == 0:
             self.log_codebook_coverage(tokens, encoded_len)
 
         return {'loss': loss_value, 'log': tensorboard_logs}
