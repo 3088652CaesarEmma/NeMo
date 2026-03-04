@@ -859,9 +859,7 @@ class EncDecMaskedTokenPredModel(SpeechEncDecSelfSupervisedModel):
             unique_tokens = valid_tokens.unique()
             num_unique_tokens[n] = unique_tokens.numel() if unique_tokens.numel() > 0 else 0
             if valid_tokens.numel() > 0:
-                counts = torch.bincount(
-                    valid_tokens.long(), minlength=int(self.cfg.num_classes), device=_tokens.device
-                )
+                counts = torch.bincount(valid_tokens.long(), minlength=int(self.cfg.num_classes))
                 batch_token_count[n] = counts
 
         # Sync batch counts across ranks (SUM) so cumulative is global
