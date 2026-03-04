@@ -1084,17 +1084,23 @@ class EncDecDenoiseMaskedTokenPredModel(EncDecMaskedTokenPredModel):
             )
             masks = self.pre_encoder.get_current_mask()
         else:
-            _, tokens = self.quantizer(input_signal=processed_signal)
+            with torch.cuda.nvtx.range("quantizer"):
+                _, tokens = self.quantizer(input_signal=processed_signal)
             if apply_mask:
-                masked_signal, masks = self.mask_processor(
-                    input_feats=processed_noisy_input_signal, input_lengths=processed_noisy_input_signal_length
-                )
+                with torch.cuda.nvtx.range("mask_processor"):
+                    masked_signal, masks = self.mask_processor(
+                        input_feats=processed_noisy_input_signal, input_lengths=processed_noisy_input_signal_length
+                    )
             else:
                 masked_signal = processed_noisy_input_signal
                 masks = torch.zeros_like(processed_noisy_input_signal)
-            encoded, encoded_len = self.encoder(audio_signal=masked_signal, length=processed_noisy_input_signal_length)
+            with torch.cuda.nvtx.range("encoder"):
+                encoded, encoded_len = self.encoder(
+                    audio_signal=masked_signal, length=processed_noisy_input_signal_length
+                )
 
-        log_probs = self.decoder(encoder_output=encoded)
+        with torch.cuda.nvtx.range("decoder"):
+            log_probs = self.decoder(encoder_output=encoded)
 
         return log_probs, encoded_len, masks, tokens
 
