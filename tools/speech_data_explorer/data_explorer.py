@@ -212,9 +212,11 @@ def get_shard_index_from_path(path_pattern, concrete_path):
 
 def get_tar_path_for_shard(tar_pattern, shard_index):
     """Get the tar file path for a specific shard index.
+    Uses zero-padding to match the pattern width (e.g. 000000..000098 → 000042).
 
     Args:
         tar_pattern: Tar pattern like s3://bucket/audio__OP_0..255_CL_.tar
+                     or /path/recording._OP_000000..000098_CL_.tar
         shard_index: The shard index to substitute
 
     Returns:
@@ -224,9 +226,14 @@ def get_tar_path_for_shard(tar_pattern, shard_index):
 
     if tar_pattern is None:
         return None
-
-    pattern = r'_OP_\d+\.\.\d+_CL_'
-    return re.sub(pattern, str(shard_index), str(tar_pattern))
+    tar_pattern = str(tar_pattern)
+    pattern = r'_OP_(\d+)\.\.(\d+)_CL_'
+    match = re.search(pattern, tar_pattern)
+    if not match:
+        return tar_pattern
+    width = max(len(match.group(1)), len(match.group(2)))
+    replacement = str(shard_index).zfill(width)
+    return re.sub(pattern, replacement, tar_pattern)
 
 
 def parse_s3_path(s3_path):
@@ -577,6 +584,39 @@ def get_audio_from_s3_tar(tar_s3_path, audio_filename, dali_index_base=None):
     return audio_bytes
 
 
+def get_audio_from_local_tar(tar_path, member_name):
+    """Extract an audio file from a local tar archive.
+
+    Args:
+        tar_path: Path to the tar file (local filesystem)
+        member_name: Name of the member within the tar (e.g. cut id or filename)
+
+    Returns:
+        bytes: Audio file contents
+    """
+    with tarfile.open(tar_path, 'r:*') as tar:
+        # Try exact match first, then basename
+        target = None
+        if member_name in tar.getnames():
+            target = member_name
+        else:
+            base = os.path.basename(member_name)
+            for name in tar.getnames():
+                if name == member_name or name.endswith(member_name) or name.endswith('/' + member_name):
+                    target = name
+                    break
+                if os.path.basename(name) == base or os.path.basename(name) == member_name:
+                    target = name
+                    break
+        if target is None:
+            available = tar.getnames()[:10]
+            raise FileNotFoundError(
+                f"Member '{member_name}' not found in tar {tar_path}. Available: {available}..."
+            )
+        with tar.extractfile(target) as f:
+            return f.read()
+
+
 def load_audio_from_s3(audio_filepath, tar_base_path=None, shard_index=None, dali_index_base=None):
     """Load audio data from S3, supporting both direct files and tarred audio.
 
@@ -812,8 +852,8 @@ def load_data(
                         word = line.strip()
                     vocabulary_ext[word] = 1
 
-        # Disable caching for S3 manifests (cannot get mtime)
-        if not disable_caching and not is_s3_path(data_filename):
+        # Disable caching for S3 manifests (cannot get mtime) and sharded paths (pattern is not a file)
+        if not disable_caching and not is_s3_path(data_filename) and not is_sharded_path(data_filename):
             pickle_filename = data_filename.split('.json')[0]
             json_mtime = datetime.datetime.fromtimestamp(os.path.getmtime(data_filename))
             timestamp = json_mtime.strftime('%Y%m%d_%H%M')
@@ -1291,9 +1331,9 @@ def absolute_audio_filepath(audio_filepath, audio_base_path, tar_base_path=None)
     Returns:
         str: The resolved audio filepath
     """
-    # If using tarred audio from S3, just return the filename as-is
+    # If using tarred audio (S3 or local), just return the filename as-is
     # The actual loading will be handled by load_audio_data
-    if tar_base_path and is_s3_path(tar_base_path):
+    if tar_base_path:
         return str(audio_filepath)
 
     # If audio_filepath is already an S3 path, return as-is
@@ -1334,12 +1374,20 @@ def load_audio_data(audio_filepath, audio_base_path=None, tar_base_path=None, sh
         audio_buffer = load_audio_from_s3(audio_filepath, tar_base_path, shard_index, dali_index_base)
         return librosa.load(audio_buffer, sr=None)
 
-    # Case 2: Direct S3 audio file
+    # Case 2: Tarred audio on local filesystem (supports sharded pattern with zero-padding)
+    if tar_base_path and not is_s3_path(tar_base_path):
+        actual_tar_path = tar_base_path
+        if is_sharded_path(tar_base_path) and shard_index is not None:
+            actual_tar_path = get_tar_path_for_shard(tar_base_path, shard_index)
+        audio_bytes = get_audio_from_local_tar(actual_tar_path, audio_filepath)
+        return librosa.load(io.BytesIO(audio_bytes), sr=None)
+
+    # Case 3: Direct S3 audio file
     if is_s3_path(audio_filepath):
         audio_buffer = load_audio_from_s3(audio_filepath)
         return librosa.load(audio_buffer, sr=None)
 
-    # Case 3: Local file
+    # Case 4: Local file
     filepath = absolute_audio_filepath(audio_filepath, audio_base_path, tar_base_path)
     return librosa.load(path=filepath, sr=None)
 
