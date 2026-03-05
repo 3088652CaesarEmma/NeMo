@@ -42,7 +42,7 @@ from nemo.core.neural_types import (
     SpectrogramType,
 )
 from nemo.utils import logging
-from nemo.utils.get_rank import is_global_rank_zero
+from nemo.utils.nemo_logging import LogMode
 
 __all__ = ['SpeechEncDecSelfSupervisedModel', 'EncDecMaskedTokenPredModel', 'EncDecDenoiseMaskedTokenPredModel']
 
@@ -1093,6 +1093,15 @@ class EncDecDenoiseMaskedTokenPredModel(EncDecMaskedTokenPredModel):
                 masked_signal = processed_noisy_input_signal
                 masks = torch.zeros_like(processed_noisy_input_signal)
             encoded, encoded_len = self.encoder(audio_signal=masked_signal, length=processed_noisy_input_signal_length)
+
+        if tokens.size(1) > encoded.size(1):
+            logging.warning(f"Tokens length {tokens.size(1)} is greater than encoded length {encoded.size(1)}")
+            tokens = tokens[:, : encoded.size(1), :]
+        elif tokens.size(1) < encoded.size(1):
+            logging.warning(f"Tokens length {tokens.size(1)} is less than encoded length {encoded.size(1)}")
+            encoded = encoded[:, : tokens.size(1), :]
+            torch.clamp(encoded_len, max=tokens.size(1))
+            masks = masks[:, : tokens.size(1)]
 
         log_probs = self.decoder(encoder_output=encoded)
 
