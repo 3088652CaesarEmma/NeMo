@@ -853,15 +853,14 @@ class EncDecMaskedTokenPredModel(SpeechEncDecSelfSupervisedModel):
             )
 
         # This batch's token counts per codebook [N, num_classes]; will be summed across ranks then added to cumulative
+        all_valid = _tokens[valid_mask]  # (num_valid, N) — index once outside loop
         batch_token_count = torch.zeros([N, int(self.cfg.num_classes)], device=_tokens.device, dtype=torch.long)
-        num_unique_tokens = torch.zeros(N, device=_tokens.device, dtype=torch.long)
         for n in range(N):
-            valid_tokens = _tokens[valid_mask][:, n]  # all valid token values for codebook n across batch and time
-            unique_tokens = valid_tokens.unique()
-            num_unique_tokens[n] = unique_tokens.numel() if unique_tokens.numel() > 0 else 0
-            if valid_tokens.numel() > 0:
-                counts = torch.bincount(valid_tokens.long(), minlength=int(self.cfg.num_classes))
-                batch_token_count[n] = counts
+            valid_tokens_n = all_valid[:, n]
+            if valid_tokens_n.numel() > 0:
+                batch_token_count[n] = torch.bincount(valid_tokens_n.long(), minlength=int(self.cfg.num_classes))
+        # Derive unique count from bincount — no separate .unique() call
+        num_unique_tokens = (batch_token_count > 0).sum(dim=1)
 
         # Sync batch counts across ranks (SUM) so cumulative is global
         if torch.distributed.is_initialized():
