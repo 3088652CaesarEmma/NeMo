@@ -1094,16 +1094,23 @@ class EncDecDenoiseMaskedTokenPredModel(EncDecMaskedTokenPredModel):
                 masks = torch.zeros_like(processed_noisy_input_signal)
             encoded, encoded_len = self.encoder(audio_signal=masked_signal, length=processed_noisy_input_signal_length)
 
-        if tokens.size(1) > encoded.size(1):
-            logging.warning(f"Tokens length {tokens.size(1)} is greater than encoded length {encoded.size(1)}")
-            tokens = tokens[:, : encoded.size(1), :]
-        elif tokens.size(1) < encoded.size(1):
-            logging.warning(f"Tokens length {tokens.size(1)} is less than encoded length {encoded.size(1)}")
-            encoded = encoded[:, : tokens.size(1), :]
-            torch.clamp(encoded_len, max=tokens.size(1))
-            masks = masks[:, : tokens.size(1)]
-
         log_probs = self.decoder(encoder_output=encoded)
+
+        # Handle the case where the token length is not equal to the log_probs length,
+        # which might happen when using causal downsampling in streaming encoder.
+        if tokens.size(1) > log_probs.size(1):
+            logging.warning(
+                f"Tokens length {tokens.size(1)} is greater than log_probs length {log_probs.size(1)}",
+                mode=LogMode.ONCE,
+            )
+            tokens = tokens[:, : log_probs.size(1)]
+        elif tokens.size(1) < log_probs.size(1):
+            logging.warning(
+                f"Tokens length {tokens.size(1)} is less than log_probs length {log_probs.size(1)}", mode=LogMode.ONCE
+            )
+            log_probs = log_probs[:, : tokens.size(1)]
+            torch.clamp(encoded_len, max=tokens.size(1))
+            masks = masks[:, :, : tokens.size(1)]
 
         return log_probs, encoded_len, masks, tokens
 
