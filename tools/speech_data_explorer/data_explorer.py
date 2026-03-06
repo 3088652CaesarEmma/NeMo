@@ -31,6 +31,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import boto3
+import braceexpand
 import dash
 import dash_bootstrap_components as dbc
 import diff_match_patch
@@ -96,32 +97,63 @@ def parse_s3cfg(config_path='~/.s3cfg', section='default'):
             'secret_key': config.get(section, 'secret_key', fallback=None),
             'bucket_location': config.get(section, 'bucket_location', fallback=None),
             'host_base': config.get(section, 'host_base', fallback=None),
+            'authn_token': config.get(section, 'authn_token', fallback=None),
         }
         return s3_config
     else:
         raise ValueError(f"No [{section}] section found in config file")
 
 
+class AISClient:
+    """Thin S3-compatible client for AIStore using Bearer token auth."""
+
+    def __init__(self, endpoint_url, token):
+        import requests as _requests
+
+        self._base = endpoint_url.rstrip('/')
+        self._session = _requests.Session()
+        self._session.headers['Authorization'] = f'Bearer {token}'
+
+    def get_object(self, Bucket, Key, Range=None):
+        url = f'{self._base}/s3/{Bucket}/{Key}'
+        headers = {}
+        if Range:
+            headers['Range'] = Range
+        resp = self._session.get(url, headers=headers)
+        if resp.status_code >= 400:
+            raise ClientError(
+                {'Error': {'Code': str(resp.status_code), 'Message': resp.reason}},
+                'GetObject',
+            )
+        return {'Body': io.BytesIO(resp.content)}
+
+
 def get_s3_client(s3cfg):
-    """Get or create a boto3 S3 client.
+    """Get or create an S3-compatible client.
     Args:
-        s3cfg: S3 configuration file
+        s3cfg: S3 configuration file path with section, e.g. ~/.s3cfg[default]
     Returns:
-        boto3.client: S3 client
+        boto3.client or AISClient
     """
     global _s3_client
     path, section = s3cfg.rsplit('[', 1)
     s3_config = parse_s3cfg(path, section.rstrip(']'))
     logging.debug(f"S3 config loaded: {s3_config}")
     if _s3_client is None:
-        _s3_client = boto3.client(
-            's3',
-            endpoint_url="https://" + s3_config['host_base'],
-            aws_access_key_id=s3_config['access_key'],
-            aws_secret_access_key=s3_config['secret_key'],
-            region_name=s3_config['bucket_location'],
-            config=Config(connect_timeout=5),
-        )
+        endpoint_url = ("https://" if s3_config['use_https'] else "http://") + s3_config['host_base']
+        authn_token = s3_config.get('authn_token')
+
+        if authn_token:
+            _s3_client = AISClient(endpoint_url, authn_token)
+        else:
+            _s3_client = boto3.client(
+                's3',
+                endpoint_url=endpoint_url,
+                aws_access_key_id=s3_config['access_key'],
+                aws_secret_access_key=s3_config['secret_key'],
+                region_name=s3_config['bucket_location'],
+                config=Config(connect_timeout=5),
+            )
     return _s3_client
 
 
@@ -142,84 +174,28 @@ def is_sharded_path(path):
 def expand_sharded_path(path_pattern):
     """Expand a sharded path pattern into a list of individual paths.
 
+    Converts NeMo _OP_/_CL_ range syntax to brace syntax and uses braceexpand
+    for correct cartesian-product expansion of multiple ranges.
+
     Supports patterns like:
-        s3://ASR/sharded_manifests/manifest__OP_0..255_CL_.json
-    which expands to:
-        s3://ASR/sharded_manifests/manifest_0.json
-        s3://ASR/sharded_manifests/manifest_1.json
-        ...
-        s3://ASR/sharded_manifests/manifest_255.json
+        s3://ASR/manifest__OP_0..255_CL_.json
+        -> [manifest_0.json, manifest_1.json, ..., manifest_255.json]
+
+        s3://ASR/bucket_OP_1..2_CL_/audio__OP_0..1_CL_.tar
+        -> [bucket1/audio_0.tar, bucket1/audio_1.tar,
+            bucket2/audio_0.tar, bucket2/audio_1.tar]
 
     Args:
-        path_pattern: Path string containing _OP_start..end_CL_ pattern
+        path_pattern: Path string containing _OP_start..end_CL_ pattern(s)
 
     Returns:
         list: List of expanded paths, or single-element list if no pattern found
     """
-    import re
-
-    pattern = r'_OP_(\d+)\.\.(\d+)_CL_'
-    match = re.search(pattern, str(path_pattern))
-
-    if not match:
-        return [str(path_pattern)]
-
-    start = int(match.group(1))
-    end = int(match.group(2))
-
-    paths = []
-    for i in range(start, end + 1):
-        expanded_path = re.sub(pattern, str(i), str(path_pattern))
-        paths.append(expanded_path)
-
-    return paths
-
-
-def get_shard_index_from_path(path_pattern, concrete_path):
-    """Get the shard index from a concrete path given the pattern.
-
-    Args:
-        path_pattern: Pattern like s3://bucket/manifest__OP_0..255_CL_.json
-        concrete_path: Concrete path like s3://bucket/manifest_5.json
-
-    Returns:
-        int: The shard index, or None if pattern doesn't match
-    """
-    import re
-
-    pattern = r'_OP_(\d+)\.\.(\d+)_CL_'
-    match = re.search(pattern, str(path_pattern))
-
-    if not match:
-        return None
-
-    # Create a regex pattern to extract the index from the concrete path
-    # Replace _OP_start..end_CL_ with a capture group for digits
-    extraction_pattern = re.sub(pattern, r'(\\d+)', re.escape(str(path_pattern)))
-    extraction_match = re.search(extraction_pattern, str(concrete_path))
-
-    if extraction_match:
-        return int(extraction_match.group(1))
-    return None
-
-
-def get_tar_path_for_shard(tar_pattern, shard_index):
-    """Get the tar file path for a specific shard index.
-
-    Args:
-        tar_pattern: Tar pattern like s3://bucket/audio__OP_0..255_CL_.tar
-        shard_index: The shard index to substitute
-
-    Returns:
-        str: The concrete tar path for this shard
-    """
-    import re
-
-    if tar_pattern is None:
-        return None
-
-    pattern = r'_OP_\d+\.\.\d+_CL_'
-    return re.sub(pattern, str(shard_index), str(tar_pattern))
+    s = str(path_pattern)
+    if '_OP_' not in s:
+        return [s]
+    brace_pattern = s.replace('_OP_', '{').replace('_CL_', '}')
+    return list(braceexpand.braceexpand(brace_pattern))
 
 
 def parse_s3_path(s3_path):
@@ -570,35 +546,27 @@ def get_audio_from_s3_tar(tar_s3_path, audio_filename, dali_index_base=None):
     return audio_bytes
 
 
-def load_audio_from_s3(audio_filepath, tar_base_path=None, shard_index=None, dali_index_base=None):
+def load_audio_from_s3(audio_filepath, tar_path=None, dali_index_base=None):
     """Load audio data from S3, supporting both direct files and tarred audio.
 
     Args:
         audio_filepath: The audio file path (e.g., "audio1.wav" for tarred, or full S3 URL)
-        tar_base_path: Base S3 path for tar files (e.g., "s3://ASR/tarred/audio_0.tar")
-                       Can also be a sharded pattern like "s3://ASR/tarred/audio__OP_0..255_CL_.tar"
-                       If provided, audio_filepath is treated as a file within this tar.
-        shard_index: For sharded tar patterns, the index to use for this audio file
+        tar_path: Resolved S3 path to the tar file (e.g., "s3://ASR/tarred/audio_0.tar").
+                  If provided, audio_filepath is treated as a file within this tar.
         dali_index_base: Optional base S3 path for DALI index files (for fast offset lookup)
 
     Returns:
-        tuple: (audio_bytes, io.BytesIO) - BytesIO object for librosa to read
+        io.BytesIO: BytesIO object for librosa to read
     """
-    if tar_base_path and is_s3_path(tar_base_path):
-        actual_tar_path = tar_base_path
-        if is_sharded_path(tar_base_path) and shard_index is not None:
-            actual_tar_path = get_tar_path_for_shard(tar_base_path, shard_index)
-        logging.debug(f"Loading audio from S3 tar: {actual_tar_path}")
-
-        # Audio is inside a tar file on S3
-        audio_bytes = get_audio_from_s3_tar(actual_tar_path, audio_filepath, dali_index_base)
+    if tar_path and is_s3_path(tar_path):
+        logging.debug(f"Loading audio from S3 tar: {tar_path}")
+        audio_bytes = get_audio_from_s3_tar(tar_path, audio_filepath, dali_index_base)
         return io.BytesIO(audio_bytes)
     elif is_s3_path(audio_filepath):
-        # Direct S3 audio file
         audio_bytes = read_s3_file_bytes(audio_filepath)
         return io.BytesIO(audio_bytes)
     else:
-        raise ValueError(f"Cannot load audio: {audio_filepath} (tar_base_path={tar_base_path})")
+        raise ValueError(f"Cannot load audio: {audio_filepath} (tar_path={tar_path})")
 
 
 def open_manifest_file(manifest_path):
@@ -807,9 +775,9 @@ def load_data(
                         item['OOV'] = item['word'] not in vocabulary_ext
                 if estimate_audio:
                     for item in data:
-                        shard_index = item.get('_shard_index')
+                        tar_path = item.get('_tar_path')
                         signal, sr = load_audio_data(
-                            item['audio_filepath'], audio_base_path, tar_base_path, shard_index, dali_index_base
+                            item['audio_filepath'], audio_base_path, tar_path, dali_index_base
                         )
                         bw = eval_bandwidth(signal, sr)
                         item['freq_bandwidth'] = int(bw)
@@ -859,22 +827,46 @@ def load_data(
 
         # Expand sharded manifest paths if pattern is present
         manifest_paths = expand_sharded_path(data_filename)
-        is_sharded = len(manifest_paths) > 1
+
+        # Pre-expand tar paths in the same order so Nth manifest -> Nth tar
+        if tar_base_path and is_sharded_path(tar_base_path):
+            tar_paths = expand_sharded_path(tar_base_path)
+            if len(tar_paths) != len(manifest_paths):
+                logging.error(
+                    f"Manifest count ({len(manifest_paths)}) != tar count ({len(tar_paths)}). "
+                    f"The _OP_/_CL_ ranges in --manifest and --tar-base-path must match."
+                )
+                logging.error(f"  Manifest pattern: {data_filename}")
+                logging.error(f"  Tar pattern:      {tar_base_path}")
+                logging.error(f"  First manifest: {manifest_paths[0]}")
+                logging.error(f"  First tar:      {tar_paths[0]}")
+                logging.error(f"  Last manifest:  {manifest_paths[-1]}")
+                logging.error(f"  Last tar:       {tar_paths[-1]}")
+                raise ValueError(
+                    f"Manifest/tar count mismatch: {len(manifest_paths)} manifests vs {len(tar_paths)} tars. "
+                    f"Fix the _OP_/_CL_ ranges so they match."
+                )
+            # Log first few mappings so user can verify correctness
+            logging.info(f"Manifest-to-tar mapping ({len(manifest_paths)} pairs):")
+            for i in range(min(3, len(manifest_paths))):
+                logging.info(f"  [{i}] {manifest_paths[i]} -> {tar_paths[i]}")
+            if len(manifest_paths) > 3:
+                logging.info(f"  ... ({len(manifest_paths) - 3} more)")
+        elif tar_base_path:
+            # Non-sharded tar: same tar for all manifests
+            tar_paths = [tar_base_path] * len(manifest_paths)
+        else:
+            tar_paths = [None] * len(manifest_paths)
 
         logging.info(f"Loading {len(manifest_paths)} manifest file(s)")
 
         for manifest_idx, manifest_path in enumerate(manifest_paths):
-            # Get shard index from the manifest path
-            if is_sharded:
-                shard_index = get_shard_index_from_path(data_filename, manifest_path)
-                if shard_index is None:
-                    shard_index = manifest_idx
-            else:
-                shard_index = None
+            # Resolved tar path for this manifest shard
+            resolved_tar_path = tar_paths[manifest_idx] if manifest_idx < len(tar_paths) else None
 
             # Support both local files and S3 paths
             manifest_lines = list(open_manifest_file(manifest_path))
-            desc = f"Shard {shard_index}" if shard_index is not None else manifest_path
+            desc = f"Shard {manifest_idx}" if len(manifest_paths) > 1 else manifest_path
             for line in tqdm.tqdm(manifest_lines, desc=desc):
                 item = json.loads(line)
                 if not isinstance(item['text'], str):
@@ -918,17 +910,13 @@ def load_data(
                     'duration': round(item['duration'], 2),
                     'num_words': num_words,
                     'num_chars': num_chars,
-                    'word_rate': round(num_words / item['duration'], 2),
-                    'char_rate': round(num_chars / item['duration'], 2),
+                    'word_rate': round(num_words / item['duration'], 2) if item['duration'] > 0 else 0,
+                    'char_rate': round(num_chars / item['duration'], 2) if item['duration'] > 0 else 0,
                     'text': item['text'],
                 }
-                # Store shard index for sharded datasets (needed for tar file lookup)
-                # Priority: 1) shard_index from manifest path, 2) shard_id from manifest entry
-                item_shard_index = shard_index
-                if item_shard_index is None and 'shard_id' in item:
-                    item_shard_index = item['shard_id']
-                if item_shard_index is not None:
-                    entry['_shard_index'] = item_shard_index
+                # Store resolved tar path for this entry (needed for audio playback)
+                if resolved_tar_path is not None:
+                    entry['_tar_path'] = resolved_tar_path
                 data.append(entry)
                 if metrics_available:
                     data[-1][field_name] = item[field_name]
@@ -944,13 +932,13 @@ def load_data(
                     data[-1]['D-I'] = measures['deletions'] - measures['insertions']
                 if estimate_audio:
                     signal, sr = load_audio_data(
-                        item['audio_filepath'], audio_base_path, tar_base_path, shard_index, dali_index_base
+                        item['audio_filepath'], audio_base_path, resolved_tar_path, dali_index_base
                     )
                     bw = eval_bandwidth(signal, sr)
                     item['freq_bandwidth'] = int(bw)
                     item['level_db'] = 20 * np.log10(np.max(np.abs(signal)))
                 for k in item:
-                    if k not in data[-1]:
+                    if k not in data[-1] and not isinstance(item[k], (list, dict)):
                         data[-1][k] = item[k]
 
         vocabulary_data = [{'word': word, 'count': vocabulary[word]} for word in vocabulary]
@@ -1202,23 +1190,22 @@ def absolute_audio_filepath(audio_filepath, audio_base_path, tar_base_path=None)
     return filename
 
 
-def load_audio_data(audio_filepath, audio_base_path=None, tar_base_path=None, shard_index=None, dali_index_base=None):
+def load_audio_data(audio_filepath, audio_base_path=None, tar_path=None, dali_index_base=None):
     """Load audio data from local file, S3, or tarred S3 archive.
 
     Args:
         audio_filepath: Path to audio file (local, S3, or filename within tar)
         audio_base_path: Base path for relative audio files
-        tar_base_path: S3 path to tar file containing audio (optional).
-                       Can be a sharded pattern like s3://bucket/audio__OP_0..255_CL_.tar
-        shard_index: For sharded tar patterns, the shard index for this audio file
+        tar_path: Resolved S3 path to the tar file (e.g., s3://bucket/audio_5.tar).
+                  Already expanded from any _OP_/_CL_ pattern.
         dali_index_base: Optional base S3 path for DALI index files (for fast offset lookup)
 
     Returns:
         tuple: (audio_signal, sample_rate)
     """
     # Case 1: Tarred audio on S3
-    if tar_base_path and is_s3_path(tar_base_path):
-        audio_buffer = load_audio_from_s3(audio_filepath, tar_base_path, shard_index, dali_index_base)
+    if tar_path and is_s3_path(tar_path):
+        audio_buffer = load_audio_from_s3(audio_filepath, tar_path, dali_index_base)
         return librosa.load(audio_buffer, sr=None)
 
     # Case 2: Direct S3 audio file
@@ -1227,7 +1214,7 @@ def load_audio_data(audio_filepath, audio_base_path=None, tar_base_path=None, sh
         return librosa.load(audio_buffer, sr=None)
 
     # Case 3: Local file
-    filepath = absolute_audio_filepath(audio_filepath, audio_base_path, tar_base_path)
+    filepath = absolute_audio_filepath(audio_filepath, audio_base_path)
     return librosa.load(path=filepath, sr=None)
 
 
@@ -2427,9 +2414,9 @@ def plot_signal(idx, data):
         raise PreventUpdate
     figs = make_subplots(rows=2, cols=1, subplot_titles=('Waveform', 'Spectrogram'))
     try:
-        shard_index = data[idx[0]].get('_shard_index')
+        tar_path = data[idx[0]].get('_tar_path')
         audio, fs = load_audio_data(
-            data[idx[0]]['audio_filepath'], args.audio_base_path, args.tar_base_path, shard_index, args.dali_index_base
+            data[idx[0]]['audio_filepath'], args.audio_base_path, tar_path, args.dali_index_base
         )
         if 'offset' in data[idx[0]]:
             audio = audio[
@@ -2489,9 +2476,9 @@ def plot_signal(idx, data):
         raise PreventUpdate
     figs = make_subplots(rows=2, cols=1, subplot_titles=('Waveform', 'Spectrogram'))
     try:
-        shard_index = data[idx[0]].get('_shard_index')
+        tar_path = data[idx[0]].get('_tar_path')
         audio, fs = load_audio_data(
-            data[idx[0]]['audio_filepath'], args.audio_base_path, args.tar_base_path, shard_index, args.dali_index_base
+            data[idx[0]]['audio_filepath'], args.audio_base_path, tar_path, args.dali_index_base
         )
         if 'offset' in data[idx[0]]:
             audio = audio[
@@ -2547,9 +2534,9 @@ def update_player(idx, data):
     if len(idx) == 0:
         raise PreventUpdate
     try:
-        shard_index = data[idx[0]].get('_shard_index')
+        tar_path = data[idx[0]].get('_tar_path')
         signal, sr = load_audio_data(
-            data[idx[0]]['audio_filepath'], args.audio_base_path, args.tar_base_path, shard_index, args.dali_index_base
+            data[idx[0]]['audio_filepath'], args.audio_base_path, tar_path, args.dali_index_base
         )
         if 'offset' in data[idx[0]]:
             signal = signal[
@@ -2574,9 +2561,9 @@ def update_player(idx, data):
     if len(idx) == 0:
         raise PreventUpdate
     try:
-        shard_index = data[idx[0]].get('_shard_index')
+        tar_path = data[idx[0]].get('_tar_path')
         signal, sr = load_audio_data(
-            data[idx[0]]['audio_filepath'], args.audio_base_path, args.tar_base_path, shard_index, args.dali_index_base
+            data[idx[0]]['audio_filepath'], args.audio_base_path, tar_path, args.dali_index_base
         )
         if 'offset' in data[idx[0]]:
             signal = signal[
