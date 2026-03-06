@@ -136,6 +136,8 @@ class NeMoTurnTakingService(FrameProcessor):
         """
         Check if the text is a backchannel phrase.
         """
+        if not self.backchannel_phrases:
+            return False
         if text.startswith("<speaker_"):
             # if the text starts with a speaker tag, we remove it
             text = text[len("<speaker_0>") :]
@@ -325,6 +327,9 @@ class NeMoTurnTakingService(FrameProcessor):
         self._vad_user_speaking = True
         logger.debug("NeMoTurnTakingService: VADUserStartedSpeakingFrame")
         await self.push_frame(frame, direction)
+        if not self.backchannel_phrases and not self._have_sent_user_started_speaking:
+            await self._handle_user_interruption(UserStartedSpeakingFrame())
+            self._have_sent_user_started_speaking = True
 
     def _contains_only_speaker_tags(self, text: str) -> bool:
         """
