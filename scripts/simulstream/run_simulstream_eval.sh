@@ -5,6 +5,7 @@
 # 1. If segments-manifest=... is provided, creates audio definitions for evaluation.
 # 2. Runs NeMo simulstream on longform manifest and writes hypothesis JSON to structured OUTPUT_DIR.
 # 3. If segments-manifest=... and simulstream-config=... are set, runs omnisteval longform evaluation.
+# 4. If segments-manifest=... is set, runs simulstream score/stats evaluation.
 #
 # Usage:
 #   ./scripts/simulstream/run_simulstream_eval.sh \
@@ -33,6 +34,8 @@ SPEECH_SEGMENTATION=""
 SIMULSTREAM_CONFIG=""
 LLM_MODEL="Qwen/Qwen2.5-7B-Instruct"
 COMET=""
+LATENCY_UNIT="word"
+SACREBLEU_TOKENIZER="13a"
 HF_HOME=/home/lgrigoryan/data/hf_cache
 
 usage() {
@@ -50,6 +53,8 @@ usage() {
   echo "  simulstream-config=YAML  Simulstream config for omnisteval (e.g. nemo_cascade.yaml)"
   echo "  llm-model=MODEL          LLM model (default: Qwen/Qwen2.5-7B-Instruct)"
   echo "  comet=true|false         Enable COMET in omnisteval (default: false)"
+  echo "  latency-unit=UNIT        Latency unit for simulstream eval (default: word)"
+  echo "  sacrebleu-tokenizer=TOK  Tokenizer for sacrebleu scorer (default: 13a)"
   exit 1
 }
 
@@ -63,6 +68,8 @@ for arg in "$@"; do
     nemo-config=*)         NEMO_CONFIG="${arg#*=}" ;;
     simulstream-config=*)  SIMULSTREAM_CONFIG="${arg#*=}" ;;
     llm-model=*)           LLM_MODEL="${arg#*=}" ;;
+    latency-unit=*)        LATENCY_UNIT="${arg#*=}" ;;
+    sacrebleu-tokenizer=*) SACREBLEU_TOKENIZER="${arg#*=}" ;;
     comet=*)
       COMET_VALUE="${arg#*=}"
       case "${COMET_VALUE,,}" in
@@ -152,6 +159,8 @@ else
   echo "Simulstream output written to: $HYPOTHESIS_JSON"
 fi
 
+
+
 if [[ -n "$SIMULSTREAM_CONFIG" ]]; then
   if [[ -z "$SEGMENTS_MANIFEST_ABS" ]]; then
      echo "Error: segments-manifest=PATH is required for omnisteval evaluation."
@@ -177,6 +186,71 @@ if [[ -n "$SIMULSTREAM_CONFIG" ]]; then
   echo "Omnisteval results in: $OMNI_OUTPUT"
 else
   echo "Omnisteval skipped (set simulstream-config=... to run)."
+fi
+
+if [[ -n "$SIMULSTREAM_CONFIG" ]]; then
+  if [[ -n "$SEGMENTS_MANIFEST_ABS" ]]; then
+    mkdir -p "$OUTPUT_DIR_ABS/simulstream"
+    AUDIO_DEFINITION="$OUTPUT_DIR_ABS/audio_definitions.yaml"
+    REFERENCE_FILE="$OUTPUT_DIR_ABS/references.txt"
+    TRANSCRIPT_FILE="$OUTPUT_DIR_ABS/transcripts.txt"
+    LOG_FILE="$HYPOTHESIS_JSON"
+
+    if [[ ! -f "$AUDIO_DEFINITION" || ! -f "$REFERENCE_FILE" || ! -f "$TRANSCRIPT_FILE" || ! -f "$LOG_FILE" ]]; then
+      echo "Skipping simulstream eval (missing one of: audio_definitions.yaml, references.txt, transcripts.txt, simulstream_output.json)."
+    else
+      echo ""
+      echo "========== 4. Run simulstream eval (latency/quality/stats) =========="
+      echo "Running simulstream_score_latency..."
+      PYTHONUNBUFFERED=1 uv run simulstream_score_latency \
+        --scorer stream_laal \
+        --eval-config "$SIMULSTREAM_CONFIG" \
+        --log-file "$LOG_FILE" \
+        --reference "$REFERENCE_FILE" \
+        --audio-definition "$AUDIO_DEFINITION" \
+        --latency-unit "$LATENCY_UNIT" > "$OUTPUT_DIR_ABS/simulstream/simulstream_score_latency.log" 2>&1
+
+      echo "Running simulstream_score_quality..."
+      PYTHONUNBUFFERED=1 uv run simulstream_score_quality \
+        --scorer sacrebleu \
+        --tokenizer "$SACREBLEU_TOKENIZER" \
+        --eval-config "$SIMULSTREAM_CONFIG" \
+        --log-file "$LOG_FILE" \
+        --references "$REFERENCE_FILE" \
+        --transcripts "$TRANSCRIPT_FILE" \
+        --audio-definition "$AUDIO_DEFINITION" \
+        --latency-unit "$LATENCY_UNIT"  > "$OUTPUT_DIR_ABS/simulstream/simulstream_score_quality.log" 2>&1
+
+      if [ -n "${HF_TOKEN:-}" ]; then
+        echo "HF_TOKEN detected. Logging into Hugging Face..."
+        huggingface-cli login --token "$HF_TOKEN" --add-to-git-credential
+
+        echo "Running simulstream_score_quality comet..."
+
+        PYTHONUNBUFFERED=1 uv run simulstream_score_quality \
+          --scorer comet \
+          --model "Unbabel/XCOMET-XL" \
+          --batch-size "8" \
+          --eval-config "$SIMULSTREAM_CONFIG" \
+          --log-file "$LOG_FILE" \
+          --references "$REFERENCE_FILE" \
+          --transcripts "$TRANSCRIPT_FILE" \
+          --audio-definition "$AUDIO_DEFINITION" \
+          --latency-unit "$LATENCY_UNIT" \
+          > "$OUTPUT_DIR_ABS/simulstream/simulstream_score_quality_comet.log" 2>&1
+      else
+        echo "HF_TOKEN not set. Skipping COMET evaluation."
+      fi
+
+      echo "Running simulstream_stats..."
+      PYTHONUNBUFFERED=1 uv run simulstream_stats \
+        --eval-config "$SIMULSTREAM_CONFIG" \
+        --log-file "$LOG_FILE" \
+        --latency-unit "$LATENCY_UNIT" >> "$OUTPUT_DIR_ABS/simulstream/simulstream_stats.log" 2>&1
+    fi
+  else
+    echo "Simulstream eval skipped (set segments-manifest=... to run)."
+  fi
 fi
 
 echo ""

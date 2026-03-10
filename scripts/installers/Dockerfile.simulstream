@@ -27,8 +27,8 @@ RUN pip install vllm==0.12.0
 
 # Install simulstream from specific commit in GitHub
 RUN git clone https://github.com/lilithgrigoryan/simulstream.git simulstream && \
-    cd /opt/simulstream && \
-    git checkout 65ad5686d96f96d2c9e8c90f9014d0ce4eed0386 && \
+    cd simulstream && \
+    git checkout 0d6754312e1fc779c02aa48d20d850b0a2f9e33b && \
     pip install -e .
 
 RUN git clone https://github.com/pe-trik/omnisteval.git && \
