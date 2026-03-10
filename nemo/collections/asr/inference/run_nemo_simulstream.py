@@ -39,6 +39,7 @@ LANGUAGE_CODES = {
     "da": "Danish",
     "it": "Italian",
     "de": "German",
+    "zh": "Chinese",
 }
 
 

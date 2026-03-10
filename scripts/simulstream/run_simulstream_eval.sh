@@ -105,7 +105,9 @@ fi
 
 # Determine subdirectory name based on config and manifest
 CONFIG_NAME=$(basename "$NEMO_CONFIG" .yaml)
-MANIFEST_NAME=$(basename "$MANIFEST" .jsonl)
+MANIFEST_NAME=$(basename "$MANIFEST")
+MANIFEST_NAME="${MANIFEST_NAME%.jsonl}"
+MANIFEST_NAME="${MANIFEST_NAME%.json}"
 # Remove 'manifest_' prefix if present for cleaner name
 MANIFEST_NAME=${MANIFEST_NAME#manifest_}
 
@@ -158,8 +160,6 @@ else
   echo ""
   echo "Simulstream output written to: $HYPOTHESIS_JSON"
 fi
-
-
 
 if [[ -n "$SIMULSTREAM_CONFIG" ]]; then
   if [[ -z "$SEGMENTS_MANIFEST_ABS" ]]; then
@@ -237,7 +237,19 @@ if [[ -n "$SIMULSTREAM_CONFIG" ]]; then
           --transcripts "$TRANSCRIPT_FILE" \
           --audio-definition "$AUDIO_DEFINITION" \
           --latency-unit "$LATENCY_UNIT" \
-          > "$OUTPUT_DIR_ABS/simulstream/simulstream_score_quality_comet.log" 2>&1
+          > "$OUTPUT_DIR_ABS/simulstream/simulstream_score_quality_comet_unbabel_xcomet_xl.log" 2>&1
+
+          PYTHONUNBUFFERED=1 uv run simulstream_score_quality \
+          --scorer comet \
+          --model "Unbabel/wmt22-comet-da" \
+          --batch-size "8" \
+          --eval-config "$SIMULSTREAM_CONFIG" \
+          --log-file "$LOG_FILE" \
+          --references "$REFERENCE_FILE" \
+          --transcripts "$TRANSCRIPT_FILE" \
+          --audio-definition "$AUDIO_DEFINITION" \
+          --latency-unit "$LATENCY_UNIT" \
+          > "$OUTPUT_DIR_ABS/simulstream/simulstream_score_quality_comet_unbabel_wmt22_comet_da.log" 2>&1
       else
         echo "HF_TOKEN not set. Skipping COMET evaluation."
       fi
