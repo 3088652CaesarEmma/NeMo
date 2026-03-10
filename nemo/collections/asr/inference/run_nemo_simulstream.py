@@ -70,7 +70,7 @@ def add_simulstream_fields(cfg_path: str, override_chunk_size: float = None, src
                 print(f"  {ov}")
         except Exception as e:
             print(f"  Error applying overrides {overrides}: {e}")
-            
+
     if src_lang is not None:
         cfg.nmt.source_language = LANGUAGE_CODES[src_lang]
     if tgt_lang is not None:

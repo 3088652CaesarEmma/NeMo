@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 #
-# Run simulstream inference from a manifest and optionally evaluate with omnisteval.
+# Run simulstream inference on longform audio and optionally evaluate with omnisteval.
 #
-# 1. Converts manifest (can be segments manifest) to audio definitions (references.txt, transcripts.txt, audio_definitions.yaml).
-# 2. Runs NeMo simulstream and writes hypothesis JSON to OUTPUT_DIR.
-# 3. If --speech-segmentation and --simulstream-config are set, runs omnisteval longform.
+# 1. If segments-manifest=... is provided, creates audio definitions for evaluation.
+# 2. Runs NeMo simulstream on longform manifest and writes hypothesis JSON to structured OUTPUT_DIR.
+# 3. If segments-manifest=... and simulstream-config=... are set, runs omnisteval longform evaluation.
 #
 # Usage:
 #   ./scripts/simulstream/run_simulstream_eval.sh \
-#     --manifest /path/to/manifest.jsonl \
-#     --output-dir /path/to/output \
-#     --src-lang en --tgt-lang ru \
-#     --nemo-config examples/asr/conf/asr_streaming_inference/cache_aware_rnnt.yaml \
-#     [--speech-segmentation /path/to/gold_segments.yaml] \
-#     [--simulstream-config /path/to/simulstream/config/nemo_cascade.yaml] \
-#     [--run-name my_run] \
-#     [--comet]
+#     manifest=/path/to/longform_manifest.jsonl \
+#     output-dir=/path/to/output_base \
+#     src-lang=en tgt-lang=ru \
+#     nemo-config=examples/asr/conf/asr_streaming_inference/cache_aware_rnnt.yaml \
+#     [segments-manifest=/path/to/segments_manifest.jsonl] \
+#     [simulstream-config=/path/to/simulstream/config/nemo_cascade.yaml] \
+#     [llm-model="Qwen/Qwen2.5-7B-Instruct"] \
+#     [comet=true]
 #
 set -euo pipefail
 
@@ -36,45 +36,52 @@ COMET=""
 HF_HOME=/home/lgrigoryan/data/hf_cache
 
 usage() {
-  echo "Usage: $0 --manifest PATH --output-dir DIR --src-lang LANG --tgt-lang LANG --nemo-config YAML [OPTIONS]"
+  echo "Usage: $0 manifest=PATH output-dir=DIR src-lang=LANG tgt-lang=LANG nemo-config=YAML [OPTIONS]"
   echo ""
   echo "Required:"
-  echo "  --manifest PATH       Longform NeMo manifest JSONL (for inference)"
-  echo "  --output-dir DIR      Base directory for outputs (subdir will be created)"
-  echo "  --src-lang LANG       Source language code (e.g. en, ru)"
-  echo "  --tgt-lang LANG       Target language code (e.g. ru, en)"
-  echo "  --nemo-config YAML    NeMo streaming config (e.g. cache_aware_rnnt.yaml)"
+  echo "  manifest=PATH         Longform NeMo manifest JSONL (for inference)"
+  echo "  output-dir=DIR        Base directory for outputs (subdir will be created)"
+  echo "  src-lang=LANG         Source language code (e.g. en, ru)"
+  echo "  tgt-lang=LANG         Target language code (e.g. ru, en)"
+  echo "  nemo-config=YAML      NeMo streaming config (e.g. cache_aware_rnnt.yaml)"
   echo ""
   echo "Optional:"
-  echo "  --segments-manifest PATH   Segments NeMo manifest JSONL (required for omnisteval evaluation)"
-  echo "  --simulstream-config YAML    Simulstream config for omnisteval (e.g. nemo_cascade.yaml)"
-  echo "  --llm-model MODEL            LLM model (default: Qwen/Qwen2.5-7B-Instruct)"
-  echo "  --comet                     Pass --comet to omnisteval"
+  echo "  segments-manifest=PATH   Segments NeMo manifest JSONL (required for omnisteval evaluation)"
+  echo "  simulstream-config=YAML  Simulstream config for omnisteval (e.g. nemo_cascade.yaml)"
+  echo "  llm-model=MODEL          LLM model (default: Qwen/Qwen2.5-7B-Instruct)"
+  echo "  comet=true|false         Enable COMET in omnisteval (default: false)"
   exit 1
 }
 
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --manifest)            MANIFEST="$2"; shift 2 ;;
-    --segments-manifest)   SEGMENTS_MANIFEST="$2"; shift 2 ;;
-    --output-dir)          OUTPUT_DIR_BASE="$2"; shift 2 ;;
-    --src-lang)            SRC_LANG="$2"; shift 2 ;;
-    --tgt-lang)            TGT_LANG="$2"; shift 2 ;;
-    --nemo-config)         NEMO_CONFIG="$2"; shift 2 ;;
-    --simulstream-config)  SIMULSTREAM_CONFIG="$2"; shift 2 ;;
-    --llm-model)           LLM_MODEL="$2"; shift 2 ;;
-    --comet)               COMET="--comet"; shift ;;
-    -h|--help)             usage ;;
-    *) echo "Unknown option: $1"; usage ;;
+for arg in "$@"; do
+  case "$arg" in
+    manifest=*)            MANIFEST="${arg#*=}" ;;
+    segments-manifest=*)   SEGMENTS_MANIFEST="${arg#*=}" ;;
+    output-dir=*)          OUTPUT_DIR_BASE="${arg#*=}" ;;
+    src-lang=*)            SRC_LANG="${arg#*=}" ;;
+    tgt-lang=*)            TGT_LANG="${arg#*=}" ;;
+    nemo-config=*)         NEMO_CONFIG="${arg#*=}" ;;
+    simulstream-config=*)  SIMULSTREAM_CONFIG="${arg#*=}" ;;
+    llm-model=*)           LLM_MODEL="${arg#*=}" ;;
+    comet=*)
+      COMET_VALUE="${arg#*=}"
+      case "${COMET_VALUE,,}" in
+        1|true|yes|on) COMET="--comet" ;;
+        0|false|no|off|"") COMET="" ;;
+        *) echo "Error: invalid comet value '$COMET_VALUE' (use true/false)"; usage ;;
+      esac
+      ;;
+    -h|--help|help=true)   usage ;;
+    *=*)                   echo "Unknown option: $arg"; usage ;;
+    *)                     echo "Invalid argument format (expected key=value): $arg"; usage ;;
   esac
 done
 
-for var in MANIFEST OUTPUT_DIR_BASE SRC_LANG TGT_LANG NEMO_CONFIG; do
-  if [[ -z "${!var}" ]]; then
-    echo "Error: missing required argument: --${var,,}"
-    usage
-  fi
-done
+[[ -z "$MANIFEST" ]] && echo "Error: missing required argument: manifest=PATH" && usage
+[[ -z "$OUTPUT_DIR_BASE" ]] && echo "Error: missing required argument: output-dir=DIR" && usage
+[[ -z "$SRC_LANG" ]] && echo "Error: missing required argument: src-lang=LANG" && usage
+[[ -z "$TGT_LANG" ]] && echo "Error: missing required argument: tgt-lang=LANG" && usage
+[[ -z "$NEMO_CONFIG" ]] && echo "Error: missing required argument: nemo-config=YAML" && usage
 
 if [[ ! -f "$MANIFEST" ]]; then
   echo "Error: manifest not found: $MANIFEST"
@@ -140,14 +147,14 @@ else
     --src-lang "$SRC_LANG" \
     --tgt-lang "$TGT_LANG" \
     --metrics-log "$HYPOTHESIS_JSON" \
-    --nmt.model_name "$LLM_MODEL"
+    "nmt.model_name=$LLM_MODEL"
   echo ""
   echo "Simulstream output written to: $HYPOTHESIS_JSON"
 fi
 
 if [[ -n "$SIMULSTREAM_CONFIG" ]]; then
   if [[ -z "$SEGMENTS_MANIFEST_ABS" ]]; then
-     echo "Error: --segments-manifest is required for omnisteval evaluation."
+     echo "Error: segments-manifest=PATH is required for omnisteval evaluation."
      exit 1
   fi
 
@@ -169,7 +176,7 @@ if [[ -n "$SIMULSTREAM_CONFIG" ]]; then
     $COMET
   echo "Omnisteval results in: $OMNI_OUTPUT"
 else
-  echo "Omnisteval skipped (set --simulstream-config to run)."
+  echo "Omnisteval skipped (set simulstream-config=... to run)."
 fi
 
 echo ""
