@@ -535,12 +535,13 @@ class AudioFeatureIterator(IterableDataset):
         else:
             self.output = False
             segment = self._features[:, self._start : self._features_len[0]].cpu()
-            if segment.shape[1] < self.min_frame_len:
+            if segment.shape[1] == 0:
                 raise StopIteration
-            if not self.pad_to_frame_len:
+            if not self.pad_to_frame_len and segment.shape[1] >= self.min_frame_len:
                 frame = segment
             else:
-                frame = np.zeros([self._features.shape[0], int(self._feature_frame_len)], dtype='float32')
+                target_frame_len = int(self._feature_frame_len) if self.pad_to_frame_len else self.min_frame_len
+                frame = np.zeros([self._features.shape[0], target_frame_len], dtype='float32')
                 frame[:, : segment.shape[1]] = segment
         self.count += 1
         return frame
@@ -1924,19 +1925,18 @@ class FrameBatchMultiTaskAED(FrameBatchASR):
         for batch in iter(self.data_loader):
             feat_signal, feat_signal_len = batch
             min_input_frames = self._get_min_input_frames()
-            valid_chunk_mask = feat_signal_len >= min_input_frames
-            if not valid_chunk_mask.all():
-                skipped_chunk_lengths = feat_signal_len[~valid_chunk_mask].tolist()
+            short_chunk_mask = feat_signal_len < min_input_frames
+            if short_chunk_mask.any():
+                short_chunk_lengths = feat_signal_len[short_chunk_mask].tolist()
                 logging.warning(
-                    "Skipping %d chunk(s) shorter than the minimum encoder input length (%d frames): %s",
-                    len(skipped_chunk_lengths),
+                    "Zero-padding %d chunk(s) shorter than the minimum encoder input length (%d frames): %s",
+                    len(short_chunk_lengths),
                     min_input_frames,
-                    skipped_chunk_lengths,
+                    short_chunk_lengths,
                 )
-                if not valid_chunk_mask.any():
-                    continue
-                feat_signal = feat_signal[valid_chunk_mask]
-                feat_signal_len = feat_signal_len[valid_chunk_mask]
+                if feat_signal.size(-1) < min_input_frames:
+                    feat_signal = torch.nn.functional.pad(feat_signal, (0, min_input_frames - feat_signal.size(-1)))
+                feat_signal_len = feat_signal_len.clamp(min=min_input_frames)
             # keep track of chunk offsets
             self.chunk_offsets.extend(feat_signal_len.tolist())
             feat_signal, feat_signal_len = feat_signal.to(device), feat_signal_len.to(device)

@@ -571,7 +571,7 @@ class TestEncDecMultiTaskModel:
         assert isinstance(outputs, Hypothesis)
 
     @pytest.mark.unit
-    def test_FrameBatchMultiTaskAED_skips_too_short_tail_chunk(self, monkeypatch):
+    def test_FrameBatchMultiTaskAED_zero_pads_too_short_tail_chunk(self, monkeypatch):
         class DummyPreprocessor:
             def __init__(self):
                 self._cfg = {'window_stride': 0.01}
@@ -647,16 +647,19 @@ class TestEncDecMultiTaskModel:
 
         def fake_predict_step(batch_input, has_processed_signal=True, timestamps=False):
             predict_calls.append(batch_input.audio_lens.tolist())
-            return [Hypothesis(score=0.0, y_sequence=torch.tensor([]), text="ok")]
+            return [
+                Hypothesis(score=0.0, y_sequence=torch.tensor([]), text="full"),
+                Hypothesis(score=0.0, y_sequence=torch.tensor([]), text="tail"),
+            ]
 
         monkeypatch.setattr(model.frame_bufferer, "get_buffers_batch", fake_get_buffers_batch)
         monkeypatch.setattr(asr_model, "predict_step", fake_predict_step)
 
         outputs = model.transcribe()
 
-        assert predict_calls == [[4]]
-        assert outputs.text == "ok"
-        assert model.chunk_offsets == [0, 4]
+        assert predict_calls == [[4, 3]]
+        assert outputs.text == "full tail"
+        assert model.chunk_offsets == [0, 4, 3]
 
     @pytest.mark.with_downloads()
     @pytest.mark.unit
