@@ -5,7 +5,7 @@
 #  +--------------+---------+---------+----------+--------------+------------+---------+
 #  | Model        | d_model | n_heads | n_layers | weight_decay |  xscaling  | use_bias|
 #  +==============+=========+========+===========+==============+============+=========+
-#  | Large (119M) |   512   |    8   |    33     |     1e-3     |    True    |   True  |
+#  | Large (119M) |   512   |    8   |    33     |     1e-3     |    False   |   True  |
 #  +--------------+---------+--------+-----------+--------------+------------+---------+
 #  | XLarge (612M)|   1024  |    8   |    44     |     1e-3     |    False   |   False |
 #  +--------------+---------+--------+-----------+--------------+------------+---------+
@@ -149,6 +149,7 @@ model:
     ff_expansion_factor: 4
 
     # Multi-headed Attention Module's params
+    post_ln: false  # apply normalization before or after self-attention
     self_attention_model: rel_pos # rel_pos or abs_pos
     n_heads: 8 # may need to be lower for smaller d_models
     # [left, right] specifies the number of steps to be seen from left and right of each step in self-attention
@@ -215,7 +216,6 @@ trainer:
   enable_progress_bar: True
   num_sanity_val_steps: 0 # number of steps to perform validation steps for sanity check the validation process before starting the training, setting to 0 disables it
   check_val_every_n_epoch: 1 # number of evaluations on validation every n epochs
-  sync_batchnorm: true
   enable_checkpointing: False  # Provided by exp_manager
   logger: false  # Provided by exp_manager
   benchmark: false # needs to be false for models with variable-length speech input as it slows down training

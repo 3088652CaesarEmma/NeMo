@@ -114,7 +114,7 @@ class ASRTransformerEncoder(NeuralModule, StreamingEncoder, Exportable, AccessMi
             Defaults to None.
         conv_dual_mode (bool): specifies if convolution should be dual mode when dual_offline mode is being used. When enables, the left half of the convolution kernel would get masked in streaming cases.
             Defaults to False
-        use_bias (bool): Use bias in all Linear and Conv1d layers from each ConformerLayer to improve activation flow and stabilize training of huge models.
+        use_bias (bool): Use bias in all Linear ASRTransformerLayer to improve activation flow and stabilize training of huge models.
             Defaults to True.
         dropout (float): the dropout rate used in all layers except the attention layers
             Defaults to 0.1.
