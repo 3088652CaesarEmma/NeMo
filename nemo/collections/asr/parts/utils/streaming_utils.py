@@ -1979,9 +1979,7 @@ class FrameBatchMultiTaskAED(FrameBatchASR):
         try:
             encoder.eval()
             for candidate_frames in range(1, max_candidate_frames + 1):
-                test_signal = torch.zeros(
-                    1, feat_in, candidate_frames, device=encoder_device, dtype=encoder_dtype
-                )
+                test_signal = torch.zeros(1, feat_in, candidate_frames, device=encoder_device, dtype=encoder_dtype)
                 test_signal_len = torch.tensor([candidate_frames], device=encoder_device)
                 try:
                     encoder(audio_signal=test_signal, length=test_signal_len)
