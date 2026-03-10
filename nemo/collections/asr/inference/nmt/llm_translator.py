@@ -156,7 +156,7 @@ class LLMTranslator:
         """
         name = str(model_name).strip()
         # Qwen3 models: use template with think-disabled suffix (<think>\\n\\n</think>\\n\\n)
-        if "Qwen3" in name or "Qwen/Qwen3" in name and not "Instruct" in name:
+        if "Qwen3" in name and not "Instruct" in name:
             logging.info(f"Using Qwen3TranslatorPromptTemplate for model: {name}")
             return Qwen3TranslatorPromptTemplate
         if name in [EURO_LLM_INSTRUCT_SMALL, EURO_LLM_INSTRUCT_LARGE, QWEN_3_4B]:
@@ -228,7 +228,7 @@ class LLMTranslator:
         for tgt_prefix, output in zip(prefixes, outputs):
             output_text = output.outputs[0].text
             output_text = self.prompt_template.extract(output_text)
-            translations.append(f"{tgt_prefix}{output_text}")
+            translations.append(f"{tgt_prefix} {output_text.strip()}")
         return translations
 
     def translate(

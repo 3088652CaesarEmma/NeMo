@@ -1,0 +1,52 @@
+FROM pytorch/pytorch:2.9.0-cuda12.8-cudnn9-runtime
+
+# Set working directory
+WORKDIR /workspace
+
+RUN apt-get update && \
+  apt-get upgrade -y && \
+  apt-get install -y \
+  libtool libltdl-dev \
+  libsndfile1 sox \
+  libfreetype6 \
+  libsox-fmt-all \
+  swig \
+  ffmpeg \
+  libavdevice-dev \
+  git \
+  build-essential \
+  cmake && \
+  rm -rf /var/lib/apt/lists/*
+
+RUN git clone --recursive https://github.com/NVIDIA-NeMo/NeMo.git nemo_dir && cd nemo_dir && \
+  git checkout lgrigoryan/simulstream-to-exniva-0903-3 && \
+  pip install ".[all]"
+
+# Install vLLM for streaming speech translation
+RUN pip install vllm==0.12.0
+
+# Install simulstream from specific commit in GitHub
+RUN git clone https://github.com/lilithgrigoryan/simulstream.git simulstream && \
+    cd /opt/simulstream && \
+    git checkout 65ad5686d96f96d2c9e8c90f9014d0ce4eed0386 && \
+    pip install -e .
+
+RUN git clone https://github.com/pe-trik/omnisteval.git && \
+    cd omnisteval && \
+    pip install -e . 
+
+# Install additional packages for simulstream scoring
+RUN pip install unbabel-comet
+RUN pip install mweralign
+RUN pip install mosestokenizer>=1.2.1
+
+# Set some flags to prevent hanging. Pure magic.
+ENV MKL_THREADING_LAYER=GNU
+ENV OMP_NUM_THREADS=1
+ENV MKL_NUM_THREADS=1
+
+# Set working directory back to workspace
+WORKDIR /workspace
+
+# Default command
+CMD ["/bin/bash"]

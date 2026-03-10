@@ -42,7 +42,7 @@ LANGUAGE_CODES = {
 }
 
 
-def add_simulstream_fields(cfg_path: str, override_chunk_size: float = None, src_lang: str = None, tgt_lang: str = None) -> str:
+def add_simulstream_fields(cfg_path: str, override_chunk_size: float = None, src_lang: str = None, tgt_lang: str = None, overrides: list = None) -> str:
     """
     Load NeMo config and add simulstream-required fields.
     
@@ -52,6 +52,7 @@ def add_simulstream_fields(cfg_path: str, override_chunk_size: float = None, src
     Args:
         cfg_path: Path to NeMo config file
         override_chunk_size: Optional override for chunk size (if None, reads from config)
+        overrides: List of "key=value" strings to override config fields
         
     Returns:
         Path to temporary config file with added fields
@@ -59,6 +60,17 @@ def add_simulstream_fields(cfg_path: str, override_chunk_size: float = None, src
     # Load the config
     cfg = OmegaConf.load(cfg_path)
     
+    # Apply command-line overrides
+    if overrides:
+        print("Applying command-line overrides:")
+        try:
+            override_conf = OmegaConf.from_dotlist(overrides)
+            cfg = OmegaConf.merge(cfg, override_conf)
+            for ov in overrides:
+                print(f"  {ov}")
+        except Exception as e:
+            print(f"  Error applying overrides {overrides}: {e}")
+            
     if src_lang is not None:
         cfg.nmt.source_language = LANGUAGE_CODES[src_lang]
     if tgt_lang is not None:
@@ -152,7 +164,22 @@ def main():
         help='Audio chunk size in seconds (default: read from config streaming.chunk_size)'
     )
     
-    args = parser.parse_args()
+    # Use parse_known_args to allow unrecognized arguments (overrides)
+    args, unknown_args = parser.parse_known_args()
+    
+    # Treat unknown args as config overrides if they look like key=value
+    overrides = []
+    if getattr(args, 'override', None):
+         overrides.extend(args.override)
+    
+    if unknown_args:
+        for arg in unknown_args:
+            if arg.startswith("--"):
+                print(f"Warning: Unknown argument: {arg}", file=sys.stderr)
+            elif "=" in arg:
+                overrides.append(arg)
+            else:
+                print(f"Warning: Ignoring unknown argument (expected key=value): {arg}", file=sys.stderr)
     
     # Handle manifest input - extract audio paths to temporary file
     wav_list_path = args.wav_list
@@ -176,7 +203,7 @@ def main():
         print(f"Created temporary wav list: {temp_wav_list}")
     
     # Add simulstream fields to config if needed
-    config_path = add_simulstream_fields(args.config, args.speech_chunk_size, args.src_lang, args.tgt_lang)
+    config_path = add_simulstream_fields(args.config, args.speech_chunk_size, args.src_lang, args.tgt_lang, overrides)
     
     # Find simulstream_inference (check virtualenv first)
     simulstream_cmd = shutil.which('simulstream_inference')
