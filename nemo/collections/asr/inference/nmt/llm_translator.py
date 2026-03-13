@@ -178,10 +178,12 @@ class LLMTranslator:
         try:
             os.environ["CUDA_VISIBLE_DEVICES"] = str(self.device_id)
             local_path=self.get_local_model_path(self.model_name)
-            if local_path is not None:
-                model = LLM(model=local_path, **llm_params)
-            else:
-                model = LLM(model=self.model_name, **llm_params)
+            # if local_path is not None and os.path.exists(local_path):
+            #     model = LLM(model=local_path, **llm_params)
+            # else:
+            #     model = LLM(model=self.model_name, **llm_params)
+            # return model
+            model = LLM(model=self.model_name, **llm_params)
             return model
         except Exception as e:
             raise RuntimeError(f"Model loading failed: {str(e)}")

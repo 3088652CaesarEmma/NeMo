@@ -111,7 +111,6 @@ streaming:
   chunk_size_in_secs: null                    # Amount of audio to load for each streaming step, e.g., 0.08s for FastConformer. Set to `null` for using default size equal to 1+lookahead frames.
   request_type: frame                         # Type of request: frame or feature_buffer
   num_slots: 256                             # Number of slots in the context manager: must be >= batch_size
-  chunk_size: 1.12                             # Audio chunk size in seconds
 
 # ========================
 # Pipeline settings

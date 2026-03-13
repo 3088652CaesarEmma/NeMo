@@ -195,3 +195,5 @@ eval_results/
 
 jsons/
 core.*
+
+**/submit_*_grid.sh

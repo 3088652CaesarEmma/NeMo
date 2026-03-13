@@ -34,12 +34,14 @@ Key Insight:
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from typing import List, Optional
 
 import numpy as np
 import torch
 from omegaconf import OmegaConf
+from pathlib import Path
 
 from nemo.utils import logging
 
@@ -102,6 +104,8 @@ class NeMoStreamingPipelineAdapter(SpeechProcessor):
     """
     
     pipeline = None  # Class-level pipeline (shared across instances)
+    output_manifest_path: Optional[str] = None
+    wav_names: list[str] = []
     
     def __init__(self, config: SimpleNamespace):
         """
@@ -120,10 +124,20 @@ class NeMoStreamingPipelineAdapter(SpeechProcessor):
         self.stream_id = 0
         self.frame_count = 0
         self.is_first_chunk = True
+        self._final_transcript_acc = ""
+        self._final_translation_acc = ""
+        self._last_partial_transcript = ""
+        self._last_partial_translation = ""
         # Determine request type from config
         self.request_type = getattr(config, 'request_type', 'frame')
         if hasattr(config, 'streaming') and hasattr(config.streaming, 'request_type'):
             self.request_type = config.streaming.request_type
+        self.latency_unit = getattr(config, 'latency_unit', 'word')
+        if isinstance(self.latency_unit, str):
+            self.latency_unit = self.latency_unit.lower()
+        if self.latency_unit not in ("word", "char"):
+            logging.warning(f"Unsupported latency_unit='{self.latency_unit}', defaulting to 'word'")
+            self.latency_unit = "word"
         
         # Language settings (from runtime args)
         self.src_lang = None
@@ -151,6 +165,26 @@ class NeMoStreamingPipelineAdapter(SpeechProcessor):
         # Build pipeline using NeMo's factory
         cls.pipeline = PipelineBuilder.build_pipeline(cfg)
         cls.pipeline.open_session()
+
+        # Output manifest path (optional, but enabled by default when metrics_log_file is available).
+        cls.output_manifest_path = getattr(config, 'output_manifest_file', None) or getattr(config, 'output_manifest', None)
+        if cls.output_manifest_path is None:
+            metrics_log_file = getattr(config, 'metrics_log_file', None)
+            if metrics_log_file:
+                metrics_path = Path(metrics_log_file)
+                cls.output_manifest_path = str(metrics_path.parent / f"{metrics_path.stem}_pred_manifest.jsonl")
+
+        if cls.output_manifest_path:
+            # Truncate at start of run.
+            Path(cls.output_manifest_path).write_text("", encoding="utf-8")
+            logging.info(f"Prediction manifest output: {cls.output_manifest_path}")
+
+        # Load wav names from wav list if available.
+        cls.wav_names = []
+        wav_list_file = getattr(config, 'wav_list_file', None)
+        if wav_list_file and Path(wav_list_file).exists():
+            with open(wav_list_file, 'r', encoding='utf-8') as f:
+                cls.wav_names = [line.strip() for line in f if line.strip()]
         
         # Register cleanup handler to properly shutdown vLLM on exit
         # Attempting to gracefully shut down vLLM engine, to get "ERROR 02-09 16:53:28 [core_client.py:610] Engine core proc EngineCore_DP0 died unexpectedly, shutting down client." 
@@ -217,12 +251,6 @@ class NeMoStreamingPipelineAdapter(SpeechProcessor):
         # Convert audio to torch tensor
         audio_tensor = torch.from_numpy(audio).float().to(self.pipeline.device)
 
-        # DEBUG: First chunk difference vs regular cache_aware script.
-        # Simulstream uses speech_chunk_size (may differ from pipeline chunk_size_in_secs).
-        # Frame length=audio_length, size=expected_chunk_size; bufferer gets [zeros, this chunk]
-        # and uses valid_size for preprocess. If length/valid_size are wrong you can get
-        # all LOG_MEL_ZERO (-16.635) in the first feature chunk.
-
         # Create request based on config's request_type
         if self.request_type == "feature_buffer":
             # Extract features first, then create FeatureBuffer
@@ -254,6 +282,15 @@ class NeMoStreamingPipelineAdapter(SpeechProcessor):
         # This internally handles: buffering → encoding → decoding → translation
         step_outputs = self.pipeline.transcribe_step([request])
         step_output = step_outputs[0]
+
+        # Track final and latest partial outputs to write a NeMo-style prediction manifest line.
+        self._final_transcript_acc += step_output.final_transcript or ""
+        self._final_translation_acc += step_output.final_translation or ""
+        self._last_partial_transcript = step_output.partial_transcript or ""
+        if step_output.final_translation:
+            self._last_partial_translation = step_output.final_translation
+        elif step_output.partial_translation:
+            self._last_partial_translation = step_output.partial_translation
         
         # Convert NeMo's output to simulstream's IncrementalOutput
         result = self._convert_to_incremental_output(step_output)
@@ -268,7 +305,9 @@ class NeMoStreamingPipelineAdapter(SpeechProcessor):
         Convert NeMo's TranscribeStepOutput to simulstream's IncrementalOutput.
         
         Calculate generated and deleted tokens by comparing previous and current partial outputs.
-        Uses word-level tokenization (split by whitespace) for token-level tracking.
+        Uses tokenization based on latency_unit:
+          - word: split by whitespace
+          - char: split into individual characters
         TODO: Think more on how actualyy this tokenization should be done.
         
         Args:
@@ -291,10 +330,8 @@ class NeMoStreamingPipelineAdapter(SpeechProcessor):
             current_partial = ""
 
         print(f"Current partial: {current_partial}")
-        
-        # Tokenize by whitespace (word-level tokens)
-        prev_tokens = prev_partial.split() if prev_partial else []
-        curr_tokens = current_partial.split() if current_partial else []
+        prev_tokens = self._tokenize_text(prev_partial)
+        curr_tokens = self._tokenize_text(current_partial)
         
         # Find longest common prefix to identify what changed
         common_prefix_len = 0
@@ -309,8 +346,8 @@ class NeMoStreamingPipelineAdapter(SpeechProcessor):
         generated_tokens = curr_tokens[common_prefix_len:]  # Tokens added in current
         
         # Construct strings from token lists
-        deleted_string = " ".join(deleted_tokens) if deleted_tokens else ""
-        generated_string = " ".join(generated_tokens) if generated_tokens else ""
+        deleted_string = self._join_tokens(deleted_tokens)
+        generated_string = self._join_tokens(generated_tokens)
         
         return IncrementalOutput(
             new_tokens=generated_tokens,  # List of string tokens added
@@ -332,8 +369,12 @@ class NeMoStreamingPipelineAdapter(SpeechProcessor):
         Returns:
             IncrementalOutput: Empty output in most cases
         """
-        # NOTE: Last chunk was already processed with is_last=True in process_chunk()
-        # Nothing more to do - NeMo's buffers were already flushed
+        pred_text = (self._final_transcript_acc + self._last_partial_transcript).strip()
+        pred_translation = (self._final_translation_acc + self._last_partial_translation).strip()
+        self._write_prediction_manifest_line(pred_text, pred_translation)
+
+        # NOTE: Last chunk was already processed with is_last=False in process_chunk().
+        # We only finalize stream state and emit empty incremental output here.
         self.pipeline.delete_state(self.stream_id)
         return IncrementalOutput(
             new_tokens=[],
@@ -356,6 +397,29 @@ class NeMoStreamingPipelineAdapter(SpeechProcessor):
         self.stream_id += 1
         self.frame_count = 0
         self.is_first_chunk = True
+        self._final_transcript_acc = ""
+        self._final_translation_acc = ""
+        self._last_partial_transcript = ""
+        self._last_partial_translation = ""
+
+    def _write_prediction_manifest_line(self, pred_text: str, pred_translation: str) -> None:
+        """Write one NeMo-style manifest line with model predictions."""
+        if not self.output_manifest_path:
+            return
+
+        audio_filepath = ""
+        if self.stream_id < len(self.wav_names):
+            audio_filepath = self.wav_names[self.stream_id]
+
+        item = {
+            "audio_filepath": audio_filepath,
+            "pred_text": pred_text,
+            "pred_translation": pred_translation,
+            # Keep plural alias for compatibility with downstream scripts expecting this key.
+            "pred_translations": pred_translation,
+        }
+        with open(self.output_manifest_path, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(item, ensure_ascii=False) + "\n")
     
     def tokens_to_string(self, tokens: List[str]) -> str:
         """
@@ -367,8 +431,22 @@ class NeMoStreamingPipelineAdapter(SpeechProcessor):
         Returns:
             Detokenized string
         """
-        # Use NeMo's tokenizer to properly detokenize
-        # Just creating text as tokens are words for now.
+        return self._join_tokens(tokens)
+
+    def _tokenize_text(self, text: Optional[str]) -> List[str]:
+        """Tokenize text according to configured latency unit."""
+        if not text:
+            return []
+        if self.latency_unit == "char":
+            return list(text)
+        return text.split()
+
+    def _join_tokens(self, tokens: List[str]) -> str:
+        """Join tokens according to configured latency unit."""
+        if not tokens:
+            return ""
+        if self.latency_unit == "char":
+            return "".join(tokens)
         return " ".join(tokens)
     
     @classmethod
