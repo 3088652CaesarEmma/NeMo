@@ -201,7 +201,7 @@ def load_noise_audio(
     pad_to_max: bool = True,
     min_white_noise_db: int = -90,
     max_white_noise_db: int = -46,
-    max_trial: int = 100,
+    max_trial: int = 1,
 ):
     """
     Load noise audio from the manifest item, and apply white noise if the loaded noise audio is empty.
@@ -265,7 +265,7 @@ def load_noise_audio(
     return noise, noise_len
 
 
-def sample_noise(noise_data: List[Dict], sample_rate: int, max_audio_len: int | None = None, max_trial: int = 20):
+def sample_noise(noise_data: List[Dict], sample_rate: int, max_audio_len: int | None = None, max_trial: int = 1):
     """
     Randomly sample noise audio from the noise manifest.
     Args:
