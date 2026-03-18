@@ -2403,21 +2403,18 @@ class DynamicTensor:
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
     ):
-        assert init_length > 0
-        self._max_length = init_length
+        self._max_length = init_length if init_length >= 1 else 1  # min 1 required for 2x growth
         self.batch_size = batch_size
         self.device = device
         self.dtype = dtype or torch.get_default_dtype()
         if dim_shape is None:
             self.dim_shape = []
         elif isinstance(dim_shape, int):
-            self.dim_shape = [
-                dim_shape,
-            ]
+            self.dim_shape = [dim_shape]
         else:
             assert isinstance(dim_shape, list)
             self.dim_shape = dim_shape
-        self.data = torch.zeros([batch_size, self._max_length] + dim_shape, dtype=self.dtype, device=device)
+        self.data = torch.zeros([batch_size, self._max_length] + self.dim_shape, dtype=self.dtype, device=device)
         self.lengths = torch.zeros(batch_size, device=device, dtype=torch.long)
 
     def clear_(self):
@@ -2427,35 +2424,37 @@ class DynamicTensor:
         self.lengths.fill_(0)
         self.data.fill_(0)
 
-    def _allocate_more(self):
+    def _allocate_more(self, min_add_length: int | None = None):
         """
-        Allocate 2x space for tensors, similar to common C++ std::vector implementations
+        Allocate at least 2x space for tensors, similar to common C++ std::vector implementations
         to maintain O(1) insertion time complexity
         """
-        self.data = torch.cat((self.storage, torch.zeros_like(self.data)), dim=1)
-        self._max_length *= 2
+        add_len = self._max_length if min_add_length is None else max(min_add_length, self._max_length)
+        add_shape = [self.batch_size, add_len] + self.dim_shape
+        self.data = torch.cat((self.data, self.data.new_zeros(add_shape)), dim=1)
+        self._max_length += add_len
 
     def to_device(self, device: str | torch.device):
         self.device = device
         self.data.to(device=device)
         self.lengths.to(device=device)
 
-    def append_(self, data: torch.Tensor, lengths: torch.Tensor | None):
+    def append_(self, data: torch.Tensor, lengths: torch.Tensor | None = None):
         cur_len = self.lengths.max().item()
         other_len = data.shape[1] if lengths is None else lengths.max().item()
         if cur_len + other_len >= self._max_length:
-            add_len = cur_len + other_len - self._max_length + 1
-            add_shape = [self.batch_size, add_len] + self.dim_shape
-            self.data = torch.cat((self.data, torch.zeros(add_shape, dtype=self.dtype, device=self.device)), dim=1)
-            self._max_length += add_len
+            self._allocate_more(min_add_length=cur_len + other_len - self._max_length + 1)
         self.append_no_checks_(data=data[:, :other_len], lengths=lengths)
 
-    def append_no_checks_(self, data: torch.Tensor, lengths: torch.Tensor | None):
+    def append_no_checks_(self, data: torch.Tensor, lengths: torch.Tensor | None = None):
         other_len = data.shape[1]
         indices = torch.arange(other_len, device=self.device)
         shifted_indices = self.lengths[:, None] + indices[None, :]
-        self.data.scatter_(dim=1, index=shifted_indices, src=data)
-        self.lengths += lengths
+        self.data.scatter_(dim=1, index=shifted_indices.unsqueeze(-1).expand([-1, -1, self.data.shape[-1]]), src=data)
+        if lengths is None:
+            self.lengths += other_len
+        else:
+            self.lengths += lengths
 
     def clone(self) -> "DynamicTensor":
         """Return a copy of self"""
@@ -2477,4 +2476,5 @@ class DynamicTensor:
         Args:
             other: DynamicTensor
         """
-        raise NotImplementedError
+        self.append_(data=other.data, lengths=other.lengths)
+        return self

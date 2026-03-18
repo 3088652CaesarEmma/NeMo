@@ -153,8 +153,8 @@ class TranscriptionConfig:
     # Per-utterance biasing with biasing config in the manifest
     use_per_stream_biasing: bool = False
     # simulated decoding (False by default) for faster experiments
-    # encoder is evaluated on chunks, output is concatenated and decoded
-    # at one step using any decoding algorithm
+    # + experiments with different decoding algorithms not yet implemented in streaming
+    # encoder is evaluated on chunks, output is concatenated and decoded at one step
     # expected to provide the same results if the decoding strategy supports
     # streaming decoding without additional heuristics (e.g., pruning between steps)
     simulated: bool = False
@@ -291,7 +291,13 @@ def main(cfg: TranscriptionConfig) -> TranscriptionConfig:
     asr_model.preprocessor.featurizer.pad_to = 0
     asr_model.eval()
 
-    decoding_computer: GreedyBatchedLabelLoopingComputerBase = asr_model.decoding.decoding.decoding_computer
+    try:
+        decoding_computer: GreedyBatchedLabelLoopingComputerBase | None = asr_model.decoding.decoding.decoding_computer
+    except AttributeError:
+        decoding_computer = None
+
+    if not use_simulated_decoding:
+        assert decoding_computer is not None
 
     audio_sample_rate = model_cfg.preprocessor['sample_rate']
 
@@ -438,11 +444,12 @@ def main(cfg: TranscriptionConfig) -> TranscriptionConfig:
                 )
 
                 if use_simulated_decoding:
+                    # store encoder output
                     if encoder_output_aggregated is None:
                         encoder_output_aggregated = DynamicTensor(
                             batch_size=batch_size,
-                            init_length=1,
-                            dim_shape=1,
+                            init_length=encoder_output.shape[1],
+                            dim_shape=encoder_output.shape[2],
                             device=device,
                             dtype=compute_dtype,
                         )
@@ -467,19 +474,30 @@ def main(cfg: TranscriptionConfig) -> TranscriptionConfig:
                 right_sample = min(right_sample + context_samples.chunk, audio_batch.shape[1])  # add next chunk
 
             if use_simulated_decoding:
-                current_batched_hyps, _, _ = decoding_computer(
-                    x=encoder_output_aggregated.data,
-                    out_len=encoder_output_aggregated.lengths,
-                    prev_batched_state=state,
-                    multi_biasing_ids=multi_biasing_ids,
-                )
+                if decoding_computer is not None:
+                    current_batched_hyps, _, _ = decoding_computer(
+                        x=encoder_output_aggregated.data,
+                        out_len=encoder_output_aggregated.lengths,
+                        prev_batched_state=state,
+                        multi_biasing_ids=multi_biasing_ids,
+                    )
+                    all_hyps.extend(batched_hyps_to_hypotheses(current_batched_hyps, None, batch_size=batch_size))
+                else:
+                    (cur_hyps,) = asr_model.decoding.decoding(
+                        encoder_output=encoder_output_aggregated.data.transpose(1, 2),
+                        encoded_lengths=encoder_output_aggregated.lengths,
+                    )
+                    all_hyps.extend(cur_hyps)
+            else:
+                all_hyps.extend(batched_hyps_to_hypotheses(current_batched_hyps, None, batch_size=batch_size))
+
             # remove biasing requests from the decoder
             if use_per_stream_biasing and audio_data.biasing_requests is not None:
                 for request in audio_data.biasing_requests:
                     if request is not None and request.multi_model_id is not None:
                         decoding_computer.biasing_multi_model.remove_model(request.multi_model_id)
                         request.multi_model_id = None
-            all_hyps.extend(batched_hyps_to_hypotheses(current_batched_hyps, None, batch_size=batch_size))
+
         timer.stop(device=map_location)
 
     # convert text
