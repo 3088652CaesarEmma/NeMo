@@ -1,0 +1,2 @@
+cuda-python>=13,<14 ; platform_system != "Darwin"
+numba-cuda[cu13] ; platform_system != "Darwin"
