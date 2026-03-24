@@ -45,12 +45,14 @@ import argparse
 import copy
 import json
 import os
+import random
 import shutil
 from dataclasses import fields
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 import numpy as np
+import torch
 
 from nemo.collections.asr.parts.utils.manifest_utils import read_manifest
 from nemo.collections.tts.models.magpietts import ModelInferenceParameters
@@ -220,7 +222,8 @@ def run_inference_and_evaluation(
         "wer_cumulative,ssim_pred_gt_avg,ssim_pred_context_avg,ssim_gt_context_avg,"
         "ssim_pred_gt_avg_alternate,ssim_pred_context_avg_alternate,"
         "ssim_gt_context_avg_alternate,cer_gt_audio_cumulative,wer_gt_audio_cumulative,"
-        "utmosv2_avg,total_gen_audio_seconds,frechet_codec_distance"
+        "utmosv2_avg,total_gen_audio_seconds,frechet_codec_distance,"
+        "eou_cutoff_rate,eou_silence_rate,eou_noise_rate,eou_error_rate"
     )
 
     for dataset in datasets:
@@ -368,12 +371,28 @@ def run_inference_and_evaluation(
     return None, None
 
 
+def seed_all(seed: int):
+    """
+    Attempts to make script deterministic
+    """
+    torch.manual_seed(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.backends.cudnn.benchmark = False
+    torch.use_deterministic_algorithms(True)
+
+
 def create_argument_parser() -> argparse.ArgumentParser:
     """Create the CLI argument parser."""
     parser = argparse.ArgumentParser(
         description='MagpieTTS Inference and Evaluation',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
+    )
+    parser.add_argument(
+        '--deterministic',
+        action='store_true',
+        help='Attempts to make results deterministic to the best that can be done. Used for testing',
     )
 
     # Model loading arguments
@@ -514,6 +533,8 @@ def main(argv=None):
     """
     parser = create_argument_parser()
     args = parser.parse_args(argv)
+    if args.deterministic:
+        seed_all(seed=9)
 
     dataset_meta_info = load_evalset_config(args.datasets_json_path)
     datasets = filter_datasets(dataset_meta_info, args.datasets)
