@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 import torch
+from lhotse.cut import CutSet
 from lhotse.dataset import AudioSamples
 from omegaconf import DictConfig, ListConfig, open_dict
 from torch import Tensor
@@ -493,9 +494,17 @@ class LhotseAudioNoiseDataset(torch.utils.data.Dataset):
         self.load_audio = AudioSamples(fault_tolerant=True)
         self.return_noise = return_noise
 
-    def __getitem__(self, cuts):
+    def __getitem__(self, cuts: CutSet):
 
-        audios, audio_lens, cuts = self.load_audio(cuts)
+        resolved_cuts = []
+        for cut in cuts:
+            try:
+                resolved_cuts.append(cut.move_to_memory())
+            except:
+                cut.recording.sources[0].channel_ids = [0, 1]
+                resolved_cuts.append(cut.to_mono(mono_downmix=True))
+        audios, audio_lens, cuts = self.load_audio(resolved_cuts)
+
         if len(self.noise_data) > 0:
             sampled_noises = [sample_noise(self.noise_data, cut.sampling_rate, cut.num_samples) for cut in cuts]
             sampled_noises, sampled_noises_lens = zip(*sampled_noises)
