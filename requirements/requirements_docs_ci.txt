@@ -1,0 +1,15 @@
+# requirements for building docs on CI
+-r requirements.txt
+-r requirements_asr.txt
+-r requirements_audio.txt
+-r requirements_common.txt
+-r requirements_docs.txt
+-r requirements_lightning.txt
+-r requirements_run.txt
+-r requirements_slu.txt
+-r requirements_tts.txt
+
+# excluded requirements:
+# -r requirements_test.txt
+# -r requirements_cu12.txt
+# -r requirements_cu13.txt
