@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 import torch
-from lhotse.cut import CutSet
+from lhotse.cut import CutSet, MixedCut
 from lhotse.dataset import AudioSamples
 from omegaconf import DictConfig, ListConfig, open_dict
 from torch import Tensor
@@ -469,6 +469,28 @@ class TarredAudioNoiseDataset(audio_to_text.TarredAudioToCharDataset):
         return _audio_noise_collate_fn(batch, self.batch_augmentor, self.return_noise)
 
 
+def maybe_convert_cuts_to_mono(cuts: CutSet) -> CutSet:
+    """
+    Convert the cuts to mono if they are not already mono.
+    Args:
+        cuts: the cuts to convert
+    Returns:
+        the converted cuts
+    """
+    resolved_cuts = []
+    for cut in cuts:
+        try:
+            resolved_cuts.append(cut.move_to_memory())
+        except:
+            if isinstance(cut, MixedCut):
+                cut.first_non_padding_cut.recording.sources[0].channel_ids = [0, 1]
+            else:
+                cut.recording.sources[0].channel_ids = [0, 1]
+            resolved_cuts.append(cut.to_mono(mono_downmix=True))
+    cuts = CutSet(resolved_cuts)
+    return cuts
+
+
 class LhotseAudioNoiseDataset(torch.utils.data.Dataset):
     def __init__(
         self,
@@ -501,7 +523,10 @@ class LhotseAudioNoiseDataset(torch.utils.data.Dataset):
             try:
                 resolved_cuts.append(cut.move_to_memory())
             except:
-                cut.recording.sources[0].channel_ids = [0, 1]
+                if isinstance(cut, MixedCut):
+                    cut.first_non_padding_cut.recording.sources[0].channel_ids = [0, 1]
+                else:
+                    cut.recording.sources[0].channel_ids = [0, 1]
                 resolved_cuts.append(cut.to_mono(mono_downmix=True))
         audios, audio_lens, cuts = self.load_audio(resolved_cuts)
 
