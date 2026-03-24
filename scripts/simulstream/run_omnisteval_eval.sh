@@ -22,9 +22,6 @@ SEGMENTS_MANIFEST=""
 LATENCY_UNIT="word"
 BLEU_TOKENIZER="13a"
 LATENCY_FLAG="--word_level"
-if [[ "$LATENCY_UNIT" == "char" ]]; then
-  LATENCY_FLAG="--char_level"
-fi
 
 usage() {
   echo "Usage: $0 output-dir=DIR tgt-lang=LANG [OPTIONS]"
@@ -63,6 +60,19 @@ for arg in "$@"; do
     *)                     echo "Invalid argument format (expected key=value): $arg"; usage ;;
   esac
 done
+
+case "${LATENCY_UNIT,,}" in
+  char)
+    LATENCY_FLAG="--char_level"
+    ;;
+  word)
+    LATENCY_FLAG="--word_level"
+    ;;
+  *)
+    echo "Error: invalid latency-unit='$LATENCY_UNIT' (use char|word)"
+    usage
+    ;;
+esac
 
 [[ -z "$OUTPUT_DIR" ]] && echo "Error: missing required argument: output-dir=DIR" && usage
 [[ -z "$TGT_LANG" ]] && echo "Error: missing required argument: tgt-lang=LANG" && usage

@@ -440,9 +440,10 @@ class NeMoStreamingPipelineAdapter(SpeechProcessor):
         .replace(" ", "") on resegmented text, so delay count must be non-space chars only)."""
         if not text:
             return []
+        # for compatability with omnisteval
+        text = text.replace("…", "")
         if self.latency_unit == "char":
-            norm = unicodedata.normalize("NFKC", text.strip())
-            return list(norm.replace(" ", ""))
+            return list(text.strip())
         return text.strip().split()
 
     def _join_tokens(self, tokens: List[str]) -> str:
