@@ -11,5 +11,5 @@
 
 # excluded requirements:
 # -r requirements_test.txt
--r requirements_cu12.txt
+# -r requirements_cu12.txt
 # -r requirements_cu13.txt
