@@ -73,6 +73,7 @@ autodoc_mock_imports = [
 _skipped_autodoc_mock_imports = ['wrapt', 'numpy']
 
 for req_path in sorted(list(glob.glob("../../requirements/*.txt"))):
+    # NB: mocking `coverage` from test requirements results in error with `numba`
     if "docs.txt" in req_path or "test.txt" in req_path:
         continue
 
