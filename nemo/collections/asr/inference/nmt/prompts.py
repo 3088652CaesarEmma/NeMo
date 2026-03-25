@@ -203,7 +203,17 @@ class Qwen3TranslatorPromptTemplate(PromptTemplate):
     """
 
     SYSTEM_MESSAGE = (
-        "You are a translator. Translate the user's source text into the requested target language."
+        """
+            You are a professional machine translation assistant.
+            Translate the input text into the target language. Output text only in target language.
+
+            - Output only the translation.
+            - Do not complete or extend the text.
+            - The input may be incomplete. Preserve incompleteness.
+            - Do not infer missing content.
+            - Stop immediately after translating.
+            - Preserve named entities, numbers, punctuation, and formatting.
+        """
     )
 
     _CHAT_TOKENS = ("<|im_start|>", "<|im_end|>")

@@ -50,6 +50,7 @@ CACHE_ATT_CONTEXT_SIZE="13"
 BUFFERED_CHUNK_SIZE="1.12"
 BUFFERED_LEFT_PADDING_SIZE="5.6"
 BUFFERED_RIGHT_PADDING_SIZE="0.56"
+ENDPOINT_STOP_HISTORY_EOU=""
 
 FORCE="false"
 
@@ -73,6 +74,7 @@ usage() {
   echo "  buffered-chunk-size=FLOAT    Required for buffered_rnnt naming/override"
   echo "  buffered-left-padding-size=FLOAT  Required for buffered_rnnt naming/override"
   echo "  buffered-right-padding-size=FLOAT Required for buffered_rnnt naming/override"
+  echo "  endpoint-stop-history-eou=INT Optional buffered_rnnt override for endpointing.stop_history_eou"
   exit 1
 }
 
@@ -89,6 +91,7 @@ for arg in "$@"; do
     buffered-chunk-size=*) BUFFERED_CHUNK_SIZE="${arg#*=}" ;;
     buffered-left-padding-size=*) BUFFERED_LEFT_PADDING_SIZE="${arg#*=}" ;;
     buffered-right-padding-size=*) BUFFERED_RIGHT_PADDING_SIZE="${arg#*=}" ;;
+    endpoint-stop-history-eou=*) ENDPOINT_STOP_HISTORY_EOU="${arg#*=}" ;;
     force=*)
       FORCE_VALUE="${arg#*=}"
       case "${FORCE_VALUE,,}" in
@@ -172,6 +175,9 @@ if [[ "$CONFIG_NAME" == "buffered_rnnt" ]]; then
     "streaming.left_padding_size=${BUFFERED_LEFT_PADDING_SIZE}"
     "streaming.right_padding_size=${BUFFERED_RIGHT_PADDING_SIZE}"
   )
+  if [[ -n "$ENDPOINT_STOP_HISTORY_EOU" ]]; then
+    EXTRA_OVERRIDES+=("endpointing.stop_history_eou=${ENDPOINT_STOP_HISTORY_EOU}")
+  fi
 fi
 
 if [[ "${LLM_MODEL,,}" == *"eurollm"* ]]; then
