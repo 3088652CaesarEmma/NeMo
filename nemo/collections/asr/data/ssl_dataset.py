@@ -548,12 +548,14 @@ def safe_collate_audios(cuts: CutSet) -> tuple[Tensor, Tensor, CutSet]:
 class LhotseAudioNoiseDataset(torch.utils.data.Dataset):
     def __init__(
         self,
+        cfg: DictConfig,
         noise_manifest: Optional[Union[str, ListConfig]] = None,
         batch_augmentor_cfg: DictConfig = None,
         return_noise: bool = False,
     ):
         """
         Args:
+            cfg: the dataset config
             noise_manifest: the noise manifest file or list of noise manifest files
             batch_augmentor_cfg: the batch augmentor config
             return_noise: whether to return the noise in output batch, default is False
@@ -569,13 +571,16 @@ class LhotseAudioNoiseDataset(torch.utils.data.Dataset):
         self.noise_data = load_noise_manifest(noise_manifest)
         self.load_audio = AudioSamples(fault_tolerant=True)
         self.return_noise = return_noise
+        self.cfg = cfg
 
     def __getitem__(self, cuts: CutSet):
         audios, audio_lens, cuts = safe_collate_audios(cuts)
         if audios is None:
             return None
+
+        max_audio_len = audios.shape[1]
         if len(self.noise_data) > 0:
-            sampled_noises = [sample_noise(self.noise_data, cut.sampling_rate, cut.num_samples) for cut in cuts]
+            sampled_noises = [sample_noise(self.noise_data, self.cfg["sample_rate"], max_audio_len) for _ in cuts]
             sampled_noises, sampled_noises_lens = zip(*sampled_noises)
             sampled_noises = torch.stack(sampled_noises).float()
             sampled_noises_lens = torch.tensor(sampled_noises_lens).long()

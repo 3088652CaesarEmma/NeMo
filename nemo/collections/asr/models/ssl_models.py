@@ -926,6 +926,7 @@ class EncDecDenoiseMaskedTokenPredModel(EncDecMaskedTokenPredModel):
                 global_rank=self.global_rank,
                 world_size=self.world_size,
                 dataset=ssl_dataset.LhotseAudioNoiseDataset(
+                    cfg=config,
                     noise_manifest=config.get('noise_manifest', None),
                     batch_augmentor_cfg=config.get('batch_augmentor', None),
                     return_noise=False,
