@@ -651,9 +651,14 @@ class BufferedRNNTPipeline(BasePipeline):
             tokens = hyp.y_sequence
             timestamp = torch.tensor(timestamp) if isinstance(timestamp, list) else timestamp
             tokens = torch.tensor(tokens) if isinstance(tokens, list) else tokens
-            timestamp = update_punctuation_and_language_tokens_timestamps(
-                tokens, timestamp, self.tokens_to_move, self.underscore_id
-            )
+            if not self.stateful:
+                # TODO(vbataev): fix stateful properly
+                # core issue: in stateful decoding, punctuation at the start of the chunk should be moved
+                # not to 0 timestamp (which is beyond chunk boundaries) – it will be lost
+                # (since for stateful decoding timestamps are global)
+                timestamp = update_punctuation_and_language_tokens_timestamps(
+                    tokens, timestamp, self.tokens_to_move, self.underscore_id
+                )
             vad_segments = request.vad_segments
             eou_detected = self.run_greedy_decoder(
                 state=state,
