@@ -197,3 +197,4 @@ jsons/
 core.*
 
 **/submit_*_grid.sh
+**/submit_**
