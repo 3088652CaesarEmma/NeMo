@@ -235,6 +235,9 @@ def main(cfg: TranscriptionConfig) -> TranscriptionConfig:
     use_simulated_decoding = cfg.simulated
 
     # Change Decoding Config
+    if use_per_stream_biasing:
+        with open_dict(cfg.decoding):
+            cfg.decoding.greedy.enable_per_stream_biasing = use_per_stream_biasing
     if use_simulated_decoding:
         with open_dict(cfg.decoding):
             if cfg.decoding.strategy != "greedy_batch" or cfg.decoding.greedy.loop_labels is not True:
@@ -253,8 +256,6 @@ def main(cfg: TranscriptionConfig) -> TranscriptionConfig:
             cfg.decoding.greedy.preserve_alignments = False
             cfg.decoding.fused_batch_size = -1  # temporarily stop fused batch during inference.
             cfg.decoding.beam.return_best_hypothesis = True  # return and write the best hypothsis only
-            if use_per_stream_biasing:
-                cfg.decoding.greedy.enable_per_stream_biasing = use_per_stream_biasing
 
     # Setup decoding strategy
     if hasattr(asr_model, 'change_decoding_strategy'):
