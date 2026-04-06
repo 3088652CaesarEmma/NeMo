@@ -569,7 +569,7 @@ class LhotseAudioNoiseDataset(torch.utils.data.Dataset):
 
         self.batch_augmentor = batch_augmentor
         self.noise_data = load_noise_manifest(noise_manifest)
-        self.load_audio = AudioSamples(fault_tolerant=True, use_batch_loader=True)
+        self.load_audio = AudioSamples(fault_tolerant=True, use_batch_loader=True, mono_downmix=True)
         self.return_noise = return_noise
         self.cfg = cfg
 
