@@ -36,13 +36,13 @@ from __future__ import annotations
 
 import json
 import unicodedata
+from pathlib import Path
 from types import SimpleNamespace
 from typing import List, Optional
 
 import numpy as np
 import torch
 from omegaconf import OmegaConf
-from pathlib import Path
 
 from nemo.utils import logging
 

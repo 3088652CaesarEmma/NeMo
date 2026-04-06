@@ -14,10 +14,11 @@
 #
 
 from re import X
+
 import torch
+import torch.nn.functional as F
 from torch import nn as nn
 from torch.nn import LayerNorm
-import torch.nn.functional as F
 
 from nemo.collections.asr.parts.submodules.adapters.attention_adapter_mixin import AttentionAdapterModuleMixin
 from nemo.collections.asr.parts.submodules.batchnorm import FusedBatchNorm1d
@@ -30,7 +31,6 @@ from nemo.collections.asr.parts.submodules.multi_head_attention import (
 from nemo.collections.asr.parts.utils.activations import Swish
 from nemo.collections.common.parts.utils import activation_registry
 from nemo.core.classes.mixins import AccessMixin
-
 from nemo.utils import logging
 
 __all__ = ['ConformerConvolution', 'ConformerFeedForward', 'ConformerLayer']
