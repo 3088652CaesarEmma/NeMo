@@ -1,0 +1,22 @@
+type: nemo
+main_model_id: "/datap/misc/EasyMagpieAssets/EMTTS_Pretraining_Qwen_WithCrossLingual_3_5_Delay.nemo"
+codec_model_path: "/datap/misc/EasyMagpieAssets/25fps_spectral_codec_with_bandwidth_extension.nemo"
+phoneme_tokenizer_path: "/datap/misc/EasyMagpieAssets/bpe_ipa_tokenizer_2048_en_de_es_fr_hi_it_vi_zh.json"
+
+# Context conditioning: use context_text (style tag) OR context_audio_path (voice cloning), not both
+context_text: "Speaker and Emotion: | Language:en Dataset:rivaLindyRodney Speaker:Lindy_WIZWIKI |"
+# context_audio_path: null
+
+# Streaming decode: emit audio every N codec frames (8 frames @ 25fps = 320ms first chunk)
+decode_every_n_frames: 8
+
+# Inference parameters
+temperature: 0.7
+topk: 80
+use_cfg: false
+cfg_scale: 2.5
+max_steps: 300
+
+# Text segmentation
+extra_separator: [',', '\n', '.', '?', '!', ';']
+think_tokens: ['<think>', '</think>']

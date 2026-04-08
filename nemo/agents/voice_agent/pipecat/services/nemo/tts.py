@@ -13,9 +13,17 @@
 # limitations under the License.
 
 import asyncio
+import concurrent.futures
 import inspect
+import os
+import queue as stdlib_queue
+import threading
+import time
 import uuid
+from collections import deque
 from collections.abc import AsyncGenerator
+from copy import deepcopy
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Iterator, List, Optional
 
@@ -829,6 +837,349 @@ class MagpieTTSService(BaseNemoTTSService):
         pass
 
 
+class EasyMagpieTTSService(BaseNemoTTSService):
+    """Text-to-Speech service using EasyMagpieTTS decoder-only model with true streaming audio output.
+
+    Uses streaming_init + streaming_step: audio codes are generated one step at a time and
+    decoded in chunks every decode_every_n_frames frames, yielding audio progressively instead
+    of waiting for the full sentence to finish.
+    """
+
+    def __init__(
+        self,
+        *,
+        model_path: str,
+        codec_model_path: str,
+        phoneme_tokenizer_path: str,
+        context_text: str = "[NO TEXT CONTEXT]",
+        context_audio_path: Optional[str] = None,
+        decode_every_n_frames: int = 20,
+        temperature: float = 0.7,
+        topk: int = 80,
+        use_cfg: bool = False,
+        cfg_scale: float = 2.5,
+        max_steps: int = 300,
+        device: str = "cuda",
+        **kwargs,
+    ):
+        self._model_path = model_path
+        self._codec_model_path = codec_model_path
+        self._phoneme_tokenizer_path = phoneme_tokenizer_path
+        self._context_text = context_text
+        self._context_audio_path = context_audio_path
+        self._decode_every_n_frames = decode_every_n_frames
+        self._temperature = temperature
+        self._topk = topk
+        self._use_cfg = use_cfg
+        self._cfg_scale = cfg_scale
+        self._max_steps = max_steps
+        self._codec_sample_rate = 22050  # EasyMagpie codec always outputs at 22050 Hz (bandwidth extension)
+        self._decode_codec_helper = None
+        self._base_context_tensors = None
+        self._base_streaming_state = None
+        # The pipecat WebSocketTransport frontend player runs at PLAYER_SAMPLE_RATE=24000 Hz.
+        # Audio is resampled from the codec's native 22050 Hz to 24000 Hz before sending.
+        output_sample_rate = kwargs.pop("sample_rate", 24000)
+        super().__init__(model=model_path, device=device, sample_rate=output_sample_rate, **kwargs)
+        self.setup_tool_calling()
+
+    def _setup_model(self):
+        if "EASYMAGPIE_LT_BACKEND" not in os.environ:
+            os.environ["EASYMAGPIE_LT_BACKEND"] = "compile"
+
+        from nemo.collections.tts.models import AudioCodecModel
+        from nemo.collections.tts.models.easy_magpietts_inference import EasyMagpieTTSInferenceModel
+        from nemo.collections.tts.modules.audio_codec_modules import VectorQuantizerIndexConverter
+        from nemo.collections.tts.modules.magpietts_modules import CodecHelper
+        from omegaconf import open_dict
+
+        logger.info(f"Loading EasyMagpieTTS model from {self._model_path}")
+        model_cfg = EasyMagpieTTSInferenceModel.restore_from(self._model_path, return_config=True)
+        with open_dict(model_cfg):
+            model_cfg.target = "nemo.collections.tts.models.easy_magpietts_inference.EasyMagpieTTSInferenceModel"
+            model_cfg.codecmodel_path = self._codec_model_path
+            model_cfg.train_ds = None
+            model_cfg.validation_ds = None
+            model_cfg.run_val_inference = False
+            model_cfg.use_utmos = False
+            model_cfg.use_meta_init_for_decoder = True
+            if getattr(model_cfg, "phoneme_tokenizer", None) is not None:
+                model_cfg.phoneme_tokenizer.tokenizer_path = self._phoneme_tokenizer_path
+
+        model = EasyMagpieTTSInferenceModel.restore_from(
+            self._model_path,
+            override_config_path=model_cfg,
+            map_location=torch.device("cpu"),
+        )
+        model.use_kv_cache_for_inference = True
+        model.eval().to(self._device).float()
+
+        # Build a separate codec instance dedicated to decoding
+        logger.info("Building decode codec helper...")
+        codec_model = AudioCodecModel.restore_from(
+            self._codec_model_path, strict=False, map_location=torch.device("cpu")
+        )
+        if hasattr(codec_model, "discriminator"):
+            del codec_model.discriminator
+        codec_model.freeze()
+        _codec_device = self._device
+        codec_model = codec_model.to(_codec_device).eval()
+
+        codec_converter = None
+        if model._codec_converter is not None:
+            vq_new = deepcopy(model._codec_converter.vector_quantizer_new).to(_codec_device).eval()
+            codec_converter = VectorQuantizerIndexConverter(
+                vector_quantizer_original=codec_model.vector_quantizer,
+                vector_quantizer_new=vq_new,
+            ).to(_codec_device).eval()
+
+        self._decode_codec_helper = CodecHelper(codec_model=codec_model, codec_converter=codec_converter)
+        self._codec_device = _codec_device
+        logger.info("Decode codec helper built")
+
+        # Pre-compute and cache context tensors (reused on every sentence)
+        self._base_context_tensors = self._build_context_inputs(model)
+        logger.info("Context tensors pre-computed and cached")
+
+        # Warm-up: prime CUDA kernels and KV-cache path
+        self._run_warmup(model)
+
+        # Cache the streaming_init state so _generate_audio never calls streaming_init again —
+        # each call clones this instead, avoiding the full context-encoding forward pass.
+        # Must be built under inference_mode + autocast so the KV-cache tensors have bfloat16
+        # dtype, matching the autocast context used during _generate_audio. A dtype mismatch
+        # would cause torch.compile to retrace (slow) or deadlock on the background thread.
+        _device_type = "cuda" if "cuda" in self._device else "cpu"
+        with torch.inference_mode():
+            self._base_streaming_state = self._call_streaming_init(model, device_type=_device_type)
+        logger.info("Cached base streaming_init state")
+
+        return model
+
+    def _build_context_inputs(self, model):
+        """Encode context text/audio into tensors once at init. Reused for every streaming_init."""
+        device = next(model.parameters()).device
+        context_text = self._context_text or "[NO TEXT CONTEXT]"
+        text_ids = model.tokenizer.encode(context_text, tokenizer_name=model.text_conditioning_tokenizer_name)
+        context_text_tokens = torch.tensor([text_ids], dtype=torch.long, device=device)
+        context_text_lens = torch.tensor([len(text_ids)], dtype=torch.long, device=device)
+
+        if self._context_audio_path:
+            context_audio = model._load_audio_for_inference(self._context_audio_path, model.sample_rate)
+            context_audio = model._adjust_audio_to_duration_for_inference(
+                context_audio, model.sample_rate, 5.0, model.codec_model_samples_per_frame
+            )
+            context_audio = context_audio.to(device)
+            context_audio_lens = torch.tensor([context_audio.size(1)], dtype=torch.long, device=device)
+            with torch.inference_mode():
+                context_audio_codes, context_audio_codes_lens = model._codec_helper.audio_to_codes(
+                    context_audio, context_audio_lens
+                )
+        else:
+            context_audio_codes = torch.zeros(
+                1, model.data_num_audio_codebooks, 0, dtype=torch.long, device=device
+            )
+            context_audio_codes_lens = torch.zeros(1, dtype=torch.long, device=device)
+
+        return context_audio_codes, context_audio_codes_lens, context_text_tokens, context_text_lens
+
+    def _call_streaming_init(self, model, device_type: str = "cuda"):
+        """Run streaming_init with the cached context tensors and return the state.
+
+        Must be called inside torch.inference_mode(). Pass device_type='cuda' when
+        called inside torch.autocast so the returned state has bfloat16 KV-cache
+        tensors that match the inference autocast context.
+        """
+        ctx = self._base_context_tensors
+        with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
+            state = model.streaming_init(
+                context_audio_codes=ctx[0],
+                context_audio_codes_lens=ctx[1],
+                context_text_tokens=ctx[2],
+                context_text_tokens_lens=ctx[3],
+                use_cfg=self._use_cfg,
+                cfg_scale=self._cfg_scale,
+                use_local_transformer=True,
+                temperature=self._temperature,
+                topk=self._topk,
+            )
+        return state
+
+    @staticmethod
+    def _clone_state(state):
+        """Clone a StreamingState without deepcopy.
+
+        deepcopy of DynamicCache (HF transformers 4.38+) can deadlock when called
+        from a background thread because it interacts with torch.compile's internal
+        guard/compilation machinery. This function clones all tensors explicitly and
+        copies primitive values directly, bypassing deepcopy entirely.
+        """
+        from dataclasses import fields as dc_fields
+
+        def _clone_val(v):
+            if isinstance(v, torch.Tensor):
+                return v.clone()
+            if isinstance(v, list):
+                return [_clone_val(x) for x in v]
+            if isinstance(v, tuple):
+                return tuple(_clone_val(x) for x in v)
+            # HF transformers DynamicCache (past_key_values)
+            try:
+                from transformers.cache_utils import DynamicCache
+                if isinstance(v, DynamicCache):
+                    new_cache = DynamicCache()
+                    for layer in v.layers:
+                        from transformers.cache_utils import DynamicLayer
+                        new_layer = DynamicLayer()
+                        if getattr(layer, 'is_initialized', False):
+                            new_layer.dtype = layer.dtype
+                            new_layer.device = layer.device
+                            new_layer.keys = layer.keys.clone()
+                            new_layer.values = layer.values.clone()
+                            new_layer.is_initialized = True
+                        new_cache.layers.append(new_layer)
+                    new_cache._seen_tokens = getattr(v, '_seen_tokens', 0)
+                    return new_cache
+            except ImportError:
+                pass
+            # For legacy tuple-based KV cache (pre-4.38 transformers)
+            return v  # primitives (int, bool, float, str, torch.device, etc.)
+
+        # Clone StreamingConfig (immutable after init — shallow copy is safe for
+        # primitives and tensors are cloned via _clone_val)
+        from nemo.collections.tts.models.easy_magpietts_inference import StreamingConfig
+        cfg = state.config
+        new_cfg = StreamingConfig(
+            **{f.name: _clone_val(getattr(cfg, f.name)) for f in dc_fields(cfg)}
+        )
+
+        # Clone StreamingState
+        from nemo.collections.tts.models.easy_magpietts_inference import StreamingState
+        return StreamingState(
+            **{f.name: _clone_val(getattr(state, f.name)) for f in dc_fields(state)
+               if f.name != 'config'},
+            config=new_cfg,
+        )
+
+    def _run_warmup(self, model):
+        device = next(model.parameters()).device
+        main_tokenizer_name = list(model.cfg.text_tokenizers.keys())[0]
+        token_ids = model.tokenizer.encode("This is a warmup.", tokenizer_name=main_tokenizer_name)
+        token_ids.append(model.eos_id)
+        pending = deque(token_ids)
+        steps = 0
+        device_type = "cuda" if "cuda" in str(device) else "cpu"
+        with torch.inference_mode():
+            state = self._call_streaming_init(model, device_type=device_type)
+            with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
+                while not bool(state.finished.all()) and steps < 80:
+                    tok = pending.popleft() if pending else None
+                    text_tokens = torch.tensor([tok], dtype=torch.long, device=device) if tok is not None else None
+                    state, _, _ = model.streaming_step(state=state, text_tokens=text_tokens, use_inference_mode=True)
+                    steps += 1
+        torch.cuda.empty_cache()
+
+    def _decode_new_chunk(self, accumulated_codes, last_emitted_sample_idx):
+        codes_lens = torch.tensor(
+            [accumulated_codes.size(-1)], dtype=torch.long, device=accumulated_codes.device
+        )
+        pred_codes, pred_codes_lens = self._model._prepare_codes_for_decode(accumulated_codes, codes_lens)
+        codec_dev = getattr(self, "_codec_device", None)
+        if codec_dev is not None:
+            pred_codes = pred_codes.to(codec_dev)
+            pred_codes_lens = pred_codes_lens.to(codec_dev)
+        audio, audio_len, _ = self._decode_codec_helper.codes_to_audio(pred_codes, pred_codes_lens)
+        full_wav = audio[0, : audio_len[0]].detach().float().cpu().numpy()
+        if full_wav.shape[0] <= last_emitted_sample_idx:
+            return np.zeros((0,), dtype=np.float32), last_emitted_sample_idx
+        new_samples = full_wav[last_emitted_sample_idx:]
+        if self._codec_sample_rate != self.sample_rate:
+            import soxr
+            new_samples = soxr.resample(new_samples, self._codec_sample_rate, self.sample_rate)
+        return new_samples, full_wav.shape[0]
+
+    def _decode_new_chunk_no_grad(self, accumulated_codes, last_emitted_sample_idx):
+        """Wrapper that calls _decode_new_chunk inside torch.no_grad so the
+        codec decode can safely run in a ThreadPoolExecutor thread (which
+        doesn't inherit the torch.inference_mode context from the caller)."""
+        with torch.no_grad():
+            return self._decode_new_chunk(accumulated_codes, last_emitted_sample_idx)
+
+    def _generate_audio(self, text: str) -> Iterator[np.ndarray]:
+        model = self._model
+        device = next(model.parameters()).device
+
+        main_tokenizer_name = list(model.cfg.text_tokenizers.keys())[0]
+        token_ids = model.tokenizer.encode(text, tokenizer_name=main_tokenizer_name)
+        token_ids.append(model.eos_id)
+        pending = deque(token_ids)
+
+        state = self._clone_state(self._base_streaming_state)
+
+        accumulated_codes = None
+        last_emitted_sample_idx = 0
+        steps = 0
+        num_decoding_steps = 0
+        _max_codec_frames = 64
+        _spf = getattr(model, 'codec_model_samples_per_frame', 640)
+        pending_decode_future = None
+
+        device_type = "cuda" if "cuda" in self._device else "cpu"
+        with torch.inference_mode(), torch.autocast(device_type=device_type, dtype=torch.bfloat16):
+            while not bool(state.finished.all()) and steps < self._max_steps:
+                tok = pending.popleft() if pending else None
+                text_tokens = torch.tensor([tok], dtype=torch.long, device=device) if tok is not None else None
+
+                state, audio_codes, _ = model.streaming_step(
+                    state=state, text_tokens=text_tokens, use_inference_mode=True
+                )
+                steps += 1
+                num_decoding_steps += 1
+
+                if audio_codes is not None:
+                    audio_codes = audio_codes.to(device=device, dtype=torch.long)
+                    accumulated_codes = (
+                        audio_codes if accumulated_codes is None
+                        else torch.cat([accumulated_codes, audio_codes], dim=-1)
+                    )
+
+                if accumulated_codes is not None and num_decoding_steps >= self._decode_every_n_frames:
+                    num_decoding_steps = 0
+
+                    if pending_decode_future is not None:
+                        chunk, last_emitted_sample_idx = pending_decode_future.result()
+                        if chunk.size > 0:
+                            yield chunk
+
+                    if last_emitted_sample_idx > 0 and accumulated_codes.size(-1) > _max_codec_frames:
+                        _trim = accumulated_codes.size(-1) - _max_codec_frames
+                        last_emitted_sample_idx = max(0, last_emitted_sample_idx - _trim * _spf)
+                        accumulated_codes = accumulated_codes[..., _trim:]
+
+                    pending_decode_future = self._decode_executor.submit(
+                        self._decode_new_chunk_no_grad,
+                        accumulated_codes,
+                        last_emitted_sample_idx,
+                    )
+
+        if pending_decode_future is not None:
+            chunk, last_emitted_sample_idx = pending_decode_future.result()
+            if chunk.size > 0:
+                yield chunk
+            if last_emitted_sample_idx > 0 and accumulated_codes is not None and accumulated_codes.size(-1) > _max_codec_frames:
+                _trim = accumulated_codes.size(-1) - _max_codec_frames
+                last_emitted_sample_idx = max(0, last_emitted_sample_idx - _trim * _spf)
+                accumulated_codes = accumulated_codes[..., _trim:]
+
+        if accumulated_codes is not None:
+            chunk, _ = self._decode_new_chunk_no_grad(accumulated_codes, last_emitted_sample_idx)
+            if chunk.size > 0:
+                yield chunk
+
+    def setup_tool_calling(self):
+        pass
+
+
 def get_tts_service_from_config(config: DictConfig, audio_logger: Optional[AudioLogger] = None) -> BaseNemoTTSService:
     """Get the TTS service from the configuration.
 
@@ -888,5 +1239,24 @@ def get_tts_service_from_config(config: DictConfig, audio_logger: Optional[Audio
             audio_logger=audio_logger,
             ignore_strings=config.get("ignore_strings", None),
         )
+    elif model == "easy_magpie":
+        return EasyMagpieTTSService(
+            model_path=config.get("main_model_id"),
+            codec_model_path=config.get("codec_model_path"),
+            phoneme_tokenizer_path=config.get("phoneme_tokenizer_path"),
+            context_text=config.get("context_text", "[NO TEXT CONTEXT]"),
+            context_audio_path=config.get("context_audio_path", None),
+            decode_every_n_frames=config.get("decode_every_n_frames", 6),
+            temperature=config.get("temperature", 0.7),
+            topk=config.get("topk", 80),
+            use_cfg=config.get("use_cfg", False),
+            cfg_scale=config.get("cfg_scale", 2.5),
+            max_steps=config.get("max_steps", 300),
+            device=device,
+            text_aggregator=text_aggregator,
+            think_tokens=config.get("think_tokens", None),
+            audio_logger=audio_logger,
+            ignore_strings=config.get("ignore_strings", None),
+        )
     else:
-        raise ValueError(f"Invalid model: {model}, only 'fastpitch-hifigan', 'magpie' and 'kokoro' are supported")
+        raise ValueError(f"Invalid model: {model}, only 'fastpitch-hifigan', 'magpie', 'kokoro' and 'easy_magpie' are supported")
