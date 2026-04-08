@@ -292,6 +292,10 @@ class ExpManagerConfig:
     fault_tolerance: Optional[FaultToleranceParams] = field(default_factory=FaultToleranceParams)
     # logs TFLOPs per sec per gpu
     log_tflops_per_sec_per_gpu: Optional[bool] = True
+    # Move old log files into run_0/, run_1/, etc. subdirectories on resume.
+    # Disable on shared filesystems (e.g. Lustre) where moving files while other ranks
+    # are starting up can cause FileNotFoundError in Lightning's checkpoint scanner.
+    move_files_to_run_dirs: Optional[bool] = True
 
 
 class TimingCallback(Callback):
@@ -625,6 +629,7 @@ def exp_manager(trainer: 'lightning.pytorch.Trainer', cfg: Optional[Union[DictCo
         cfg.resume_ignore_no_checkpoint,
         cfg.checkpoint_callback_params.dirpath,
         cfg.resume_from_checkpoint,
+        cfg.move_files_to_run_dirs,
     )
 
     checkpoint_name = name
@@ -903,6 +908,7 @@ def check_resume(
     resume_ignore_no_checkpoint: bool = False,
     dirpath: str = None,
     resume_from_checkpoint: str = None,
+    move_files_to_run_dirs: bool = True,
 ):
     """Checks that resume=True was used correctly with the arguments pass to exp_manager. Sets
     trainer._checkpoint_connector._ckpt_path as necessary.
@@ -1054,7 +1060,7 @@ def check_resume(
         trainer.ckpt_path = str(checkpoint)
         logging.info(f'Resuming training from checkpoint: {trainer.ckpt_path}')
 
-    if is_global_rank_zero():
+    if move_files_to_run_dirs and is_global_rank_zero():
         # Check to see if any files exist that need to be moved
         files_to_move = []
         if Path(log_dir).exists():
