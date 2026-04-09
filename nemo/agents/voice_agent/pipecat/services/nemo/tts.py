@@ -914,6 +914,13 @@ class EasyMagpieTTSService(BaseNemoTTSService):
         model.use_kv_cache_for_inference = True
         model.eval().to(self._device).float()
 
+        lt_backend = os.environ.get("EASYMAGPIE_LT_BACKEND", "torch").strip().lower()
+        if lt_backend == "compile":
+            logger.info("Compiling local_transformer with torch.compile(mode='reduce-overhead')")
+            compiled_lt = torch.compile(model.local_transformer, mode="reduce-overhead")
+            model.local_transformer = compiled_lt
+            model._lt_helper.local_transformer = compiled_lt
+
         # Build a separate codec instance dedicated to decoding
         logger.info("Building decode codec helper...")
         codec_model = AudioCodecModel.restore_from(
