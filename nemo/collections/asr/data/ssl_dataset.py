@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 import torch
-from lhotse.cut import Cut, CutSet, MixedCut, MonoCut, MultiCut
+from lhotse.cut import Cut, CutSet, MixedCut, MultiCut
 from lhotse.dataset import AudioSamples
 from lhotse.dataset.collation import collate_vectors
 from omegaconf import DictConfig, ListConfig, open_dict
