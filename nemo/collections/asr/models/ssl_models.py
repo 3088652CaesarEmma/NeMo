@@ -42,7 +42,6 @@ from nemo.core.neural_types import (
     SpectrogramType,
 )
 from nemo.utils import logging
-from nemo.utils.nemo_logging import LogMode
 
 __all__ = ['SpeechEncDecSelfSupervisedModel', 'EncDecMaskedTokenPredModel', 'EncDecDenoiseMaskedTokenPredModel']
 
