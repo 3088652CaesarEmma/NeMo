@@ -112,7 +112,8 @@ class NeMoStreamingPipelineAdapter(SpeechProcessor):
     pipeline = None  # Class-level pipeline (shared across instances)
     output_manifest_path: Optional[str] = None
     wav_names: list[str] = []
-    boosting_requests: list[BiasingRequestItemConfig] | None = None
+    per_stream_boosting_requests: list[BiasingRequestItemConfig] | None = None
+    detailed_log_path: str | None = None
 
     def __init__(self, config: SimpleNamespace):
         """
@@ -172,6 +173,8 @@ class NeMoStreamingPipelineAdapter(SpeechProcessor):
         # Build pipeline using NeMo's factory
         cls.pipeline = PipelineBuilder.build_pipeline(cfg)
         cls.pipeline.open_session()
+
+        cls.detailed_log_path = getattr(config, "detailed_log_path", None)
 
         # Output manifest path (optional, but enabled by default when metrics_log_file is available).
         cls.output_manifest_path = getattr(config, 'output_manifest_file', None) or getattr(
@@ -331,6 +334,24 @@ class NeMoStreamingPipelineAdapter(SpeechProcessor):
 
         self.is_first_chunk = False
         self.frame_count += 1
+
+        if self.detailed_log_path is not None:
+            with open(self.detailed_log_path, "a", encoding="utf-8") as f:
+                print(
+                    json.dumps(
+                        {
+                            "final_transcript": step_output.final_transcript,
+                            "partial_transcript": step_output.partial_transcript,
+                            "final_translation": step_output.final_translation,
+                            "partial_translation": step_output.partial_translation,
+                            "new_tokens": result.new_tokens,
+                            "new_string": result.new_string,
+                            "deleted_tokens": result.deleted_tokens,
+                            "deleted_string": result.deleted_string,
+                        }
+                    ),
+                    file=f,
+                )
 
         return result
 
