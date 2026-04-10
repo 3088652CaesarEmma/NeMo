@@ -45,16 +45,20 @@ import torch
 from omegaconf import OmegaConf
 
 from nemo.utils import logging
+from nemo.collections.asr.parts.context_biasing.biasing_multi_model import BiasingRequestItemConfig
+from nemo.collections.asr.parts.context_biasing.boosting_graph_batched import BoostingTreeModelConfig
+
 
 try:
     from simulstream.server.speech_processors import SAMPLE_RATE, SpeechProcessor
     from simulstream.server.speech_processors.incremental_output import IncrementalOutput
+
     SIMULSTREAM_AVAILABLE = True
 except ImportError:
     SIMULSTREAM_AVAILABLE = False
     SpeechProcessor = object
     SAMPLE_RATE = 16000
-    
+
     # Mock IncrementalOutput for type hints when simulstream not available
     class IncrementalOutput:
         def __init__(self, asr_partial="", asr_final="", translation_partial="", translation_final=""):
@@ -64,10 +68,10 @@ except ImportError:
 def load_nemo_config(config_path: str):
     """
     Load NeMo config using OmegaConf (NeMo's native config system).
-    
+
     Args:
         config_path: Path to YAML config file
-        
+
     Returns:
         DictConfig: OmegaConf configuration object
     """
@@ -77,14 +81,15 @@ def load_nemo_config(config_path: str):
 def create_nemo_pipeline_from_config(config_path: str):
     """
     Create NeMo streaming pipeline directly from config file.
-    
+
     Args:
         config_path: Path to NeMo YAML config
-        
+
     Returns:
         BasePipeline: NeMo streaming pipeline
     """
     from nemo.collections.asr.inference.factory.pipeline_builder import PipelineBuilder
+
     cfg = load_nemo_config(config_path)
     return PipelineBuilder.build_pipeline(cfg)
 
@@ -92,10 +97,10 @@ def create_nemo_pipeline_from_config(config_path: str):
 class NeMoStreamingPipelineAdapter(SpeechProcessor):
     """
     Adapter to use NeMo's streaming pipelines with simulstream evaluation.
-    
+
     Architecture:
         audio_chunk → Frame → pipeline.transcribe_step() → TranscribeStepOutput → IncrementalOutput
-        
+
     The pipeline internally handles:
         - Buffering (cache-aware or buffered mode)
         - Feature extraction
@@ -103,24 +108,25 @@ class NeMoStreamingPipelineAdapter(SpeechProcessor):
         - Translation (optional, via LLMTranslator)
         - State management per stream
     """
-    
+
     pipeline = None  # Class-level pipeline (shared across instances)
     output_manifest_path: Optional[str] = None
     wav_names: list[str] = []
-    
+    boosting_requests: list[BiasingRequestItemConfig] | None = None
+
     def __init__(self, config: SimpleNamespace):
         """
         Initialize adapter.
-        
+
         Args:
             config: Configuration from simulstream (SimpleNamespace)
                     Note: Will be converted to OmegaConf DictConfig for NeMo
         """
         if not SIMULSTREAM_AVAILABLE:
             raise ImportError("simulstream is required. Install with: pip install simulstream")
-        
+
         super().__init__(config)
-        
+
         # Stream state
         self.stream_id = 0
         self.frame_count = 0
@@ -139,22 +145,22 @@ class NeMoStreamingPipelineAdapter(SpeechProcessor):
         if self.latency_unit not in ("word", "char"):
             logging.warning(f"Unsupported latency_unit='{self.latency_unit}', defaulting to 'word'")
             self.latency_unit = "word"
-        
+
         # Language settings (from runtime args)
         self.src_lang = None
         self.tgt_lang = None
-    
+
     @classmethod
     def load_model(cls, config: SimpleNamespace):
         """
         Load NeMo pipeline once (class-level, shared).
-        
+
         Args:
             config: Configuration from simulstream
         """
         if cls.pipeline is not None:
             return  # Already loaded
-        
+
         import atexit
 
         from nemo.collections.asr.inference.factory.pipeline_builder import PipelineBuilder
@@ -162,13 +168,16 @@ class NeMoStreamingPipelineAdapter(SpeechProcessor):
         # Convert SimpleNamespace to DictConfig
         # SimulStream uses SimpleNamespace for configuration, so we need to convert it to use in NeMo.
         cfg = OmegaConf.create(cls._namespace_to_dict(config))
-        
+
         # Build pipeline using NeMo's factory
         cls.pipeline = PipelineBuilder.build_pipeline(cfg)
         cls.pipeline.open_session()
 
         # Output manifest path (optional, but enabled by default when metrics_log_file is available).
-        cls.output_manifest_path = getattr(config, 'output_manifest_file', None) or getattr(config, 'output_manifest', None)
+        cls.output_manifest_path = getattr(config, 'output_manifest_file', None) or getattr(
+            config, 'output_manifest', None
+        )
+        # cls.detailed_output_path = Path(cls.output_manifest_path).parent / "detailed_output.jsonl"
         if cls.output_manifest_path is None:
             metrics_log_file = getattr(config, 'metrics_log_file', None)
             if metrics_log_file:
@@ -186,55 +195,74 @@ class NeMoStreamingPipelineAdapter(SpeechProcessor):
         if wav_list_file and Path(wav_list_file).exists():
             with open(wav_list_file, 'r', encoding='utf-8') as f:
                 cls.wav_names = [line.strip() for line in f if line.strip()]
-        
+
         # Register cleanup handler to properly shutdown vLLM on exit
-        # Attempting to gracefully shut down vLLM engine, to get "ERROR 02-09 16:53:28 [core_client.py:610] Engine core proc EngineCore_DP0 died unexpectedly, shutting down client." 
+        # Attempting to gracefully shut down vLLM engine, to get "ERROR 02-09 16:53:28 [core_client.py:610] Engine core proc EngineCore_DP0 died unexpectedly, shutting down client."
         # Works for now, but returns warning.
         # TODO: Find a better way to gracefully shut down vLLM engine.
         atexit.register(cls.cleanup_model)
-        
+
         logging.info(f"Loaded NeMo pipeline: {type(cls.pipeline).__name__}")
         logging.info(f"  ASR model: {cfg.asr.model_name}")
         if cfg.get('enable_nmt', False):
             logging.info(f"  NMT model: {cfg.nmt.model_name}")
             logging.info(f"  Translation: {cfg.nmt.source_language} → {cfg.nmt.target_language}")
-    
+
+        if cfg.get("per_stream_boosting") and cfg.per_stream_boosting.get("phrases_file"):
+            boosting_model_alpha = cfg.per_stream_boosting.get("alpha", 1.0)
+            with open(cfg.per_stream_boosting.phrases_file, "r", encoding="utf-8") as f:
+                boosting_requests_raw = json.load(f)
+                cls.per_stream_boosting_requests = [
+                    BiasingRequestItemConfig(
+                        BoostingTreeModelConfig(key_phrases_list=item["key_phrases_list"]),
+                        boosting_model_alpha=boosting_model_alpha,
+                    )
+                    for item in boosting_requests_raw
+                ]
+            logging.info(
+                f"Per-stream boosting enabled with weight {boosting_model_alpha:.2g}, "
+                f"expected {len(cls.per_stream_boosting_requests)} ordered streams"
+            )
+        else:
+            logging.info(
+                "Per-stream boosting disabled; to enable, "
+                "specify `per_stream_boosting.phrases_file` and `per_stream_boosting.alpha`"
+            )
+
     @staticmethod
     def _namespace_to_dict(obj):
         """Recursively convert SimpleNamespace to dict."""
         if isinstance(obj, SimpleNamespace):
-            return {k: NeMoStreamingPipelineAdapter._namespace_to_dict(v) 
-                    for k, v in vars(obj).items()}
+            return {k: NeMoStreamingPipelineAdapter._namespace_to_dict(v) for k, v in vars(obj).items()}
         elif isinstance(obj, dict):
-            return {k: NeMoStreamingPipelineAdapter._namespace_to_dict(v) 
-                    for k, v in obj.items()}
+            return {k: NeMoStreamingPipelineAdapter._namespace_to_dict(v) for k, v in obj.items()}
         elif isinstance(obj, list):
             return [NeMoStreamingPipelineAdapter._namespace_to_dict(item) for item in obj]
         return obj
-    
+
     def set_source_language(self, language: str) -> None:
         """Set source language (simulstream interface)."""
         self.src_lang = language
-    
+
     def set_target_language(self, language: str) -> None:
         """Set target language (simulstream interface)."""
         self.tgt_lang = language
-    
+
     def process_chunk(self, audio: np.ndarray) -> IncrementalOutput:
         """
         Process audio chunk using NeMo's native streaming API.
-        
-        This creates a Frame or FeatureBuffer request (depending on config) and 
+
+        This creates a Frame or FeatureBuffer request (depending on config) and
         calls pipeline.transcribe_step(), which internally handles all buffering,
         feature extraction, and decoding.
-        
+
         Auto-detects the last chunk by comparing chunk size to expected size.
         If chunk is smaller than expected, it's treated as the last chunk.
         NOTE: works only with batch size 1 (so does SimulStream).
-        
+
         Args:
             audio: Audio chunk (numpy array, float32, mono, 16kHz)
-            
+
         Returns:
             IncrementalOutput: Streaming results (partial/final ASR + translation)
         """
@@ -252,21 +280,26 @@ class NeMoStreamingPipelineAdapter(SpeechProcessor):
         # Convert audio to torch tensor
         audio_tensor = torch.from_numpy(audio).float().to(self.pipeline.device)
 
+        if self.is_first_chunk and self.per_stream_boosting_requests is not None:
+            biasing_cfg = self.per_stream_boosting_requests[self.stream_id]
+        else:
+            biasing_cfg = None
+
         # Create request based on config's request_type
         if self.request_type == "feature_buffer":
             # Extract features first, then create FeatureBuffer
             features = self.pipeline.preprocessor(
                 input_signal=audio_tensor.unsqueeze(0),
-                length=torch.tensor([audio_length], device=self.pipeline.device)
+                length=torch.tensor([audio_length], device=self.pipeline.device),
             )[0].squeeze(0)
-            
+
             request = FeatureBuffer(
                 stream_id=self.stream_id,
                 features=features,
                 is_first=self.is_first_chunk,
-                is_last=False, # simulstream does not tell wether chunk is last or not, we handle right context with return_full_right_context
+                is_last=False,  # simulstream does not tell wether chunk is last or not, we handle right context with return_full_right_context
                 length=features.shape[1],  # Valid feature length
-                options=ASRRequestOptions() if self.is_first_chunk else None
+                options=ASRRequestOptions(biasing_cfg=biasing_cfg) if self.is_first_chunk else None,
             )
         else:  # frame
             # Create Frame request (NeMo's native streaming input)
@@ -276,9 +309,9 @@ class NeMoStreamingPipelineAdapter(SpeechProcessor):
                 is_first=self.is_first_chunk,
                 is_last=False,  # simulstream does not tell wether chunk is last or not, we handle right context with return_full_right_context
                 length=audio_length,  # Valid audio length (without padding)
-                options=ASRRequestOptions() if self.is_first_chunk else None
+                options=ASRRequestOptions(biasing_cfg=biasing_cfg) if self.is_first_chunk else None,
             )
-        
+
         # Call NeMo's native streaming API
         # This internally handles: buffering → encoding → decoding → translation
         step_outputs = self.pipeline.transcribe_step([request])
@@ -292,36 +325,36 @@ class NeMoStreamingPipelineAdapter(SpeechProcessor):
             self._last_partial_translation = step_output.final_translation
         elif step_output.partial_translation:
             self._last_partial_translation = step_output.partial_translation
-        
+
         # Convert NeMo's output to simulstream's IncrementalOutput
         result = self._convert_to_incremental_output(step_output)
-        
+
         self.is_first_chunk = False
         self.frame_count += 1
-        
+
         return result
-    
+
     def _convert_to_incremental_output(self, step_output) -> IncrementalOutput:
         """
         Convert NeMo's TranscribeStepOutput to simulstream's IncrementalOutput.
-        
+
         Calculate generated and deleted tokens by comparing previous and current partial outputs.
         Uses tokenization based on latency_unit:
           - word: split by whitespace
           - char: split into individual characters
         TODO: Think more on how actualyy this tokenization should be done.
-        
+
         Args:
             step_output: NeMo's TranscribeStepOutput object with:
                 - previous_partial_transcript: Previous step's partial transcript
                 - previous_partial_translation: Previous step's partial translation
                 - partial_transcript: Current step's partial transcript
                 - partial_translation: Current step's partial translation (if NMT enabled)
-                
+
         Returns:
             IncrementalOutput: Simulstream format with generated/deleted token lists
         """
-        
+
         prev_partial = step_output.previous_partial_translation
         if step_output.final_translation:
             current_partial = step_output.final_translation
@@ -333,7 +366,7 @@ class NeMoStreamingPipelineAdapter(SpeechProcessor):
         print(f"Current partial: {current_partial}")
         prev_tokens = self._tokenize_text(prev_partial)
         curr_tokens = self._tokenize_text(current_partial)
-        
+
         # Find longest common prefix to identify what changed
         common_prefix_len = 0
         for i in range(min(len(prev_tokens), len(curr_tokens))):
@@ -341,32 +374,32 @@ class NeMoStreamingPipelineAdapter(SpeechProcessor):
                 common_prefix_len += 1
             else:
                 break
-        
+
         # Calculate deleted and generated token lists
         deleted_tokens = prev_tokens[common_prefix_len:]  # Tokens removed from previous
         generated_tokens = curr_tokens[common_prefix_len:]  # Tokens added in current
-        
+
         # Construct strings from token lists
         deleted_string = self._join_tokens(deleted_tokens)
         generated_string = self._join_tokens(generated_tokens)
-        
+
         return IncrementalOutput(
             new_tokens=generated_tokens,  # List of string tokens added
             new_string=generated_string,
             deleted_tokens=deleted_tokens,  # List of string tokens removed
             deleted_string=deleted_string,
         )
-    
+
     def end_of_stream(self) -> IncrementalOutput:
         """
         Called at the end of audio stream to finalize output.
-        
+
         In most cases, the last chunk is auto-detected by size and processed with
         is_last=True in process_chunk(), so this returns empty output.
-        
+
         This is kept as required by SpeechProcessor interface and serves as a
         fallback for edge cases where the last chunk has the same size as others.
-        
+
         Returns:
             IncrementalOutput: Empty output in most cases
         """
@@ -383,17 +416,17 @@ class NeMoStreamingPipelineAdapter(SpeechProcessor):
             deleted_tokens=[],
             deleted_string="",
         )
-    
+
     def clear(self) -> None:
         """
         Clear stream state and prepare for next audio (simulstream interface).
-        
+
         This finalizes the current stream and resets state for a new one.
         """
         # Finalize current stream if we've processed anything
         if not self.is_first_chunk:
             self.end_of_stream()
-        
+
         # Reset for next stream
         self.stream_id += 1
         self.frame_count = 0
@@ -421,14 +454,14 @@ class NeMoStreamingPipelineAdapter(SpeechProcessor):
         }
         with open(self.output_manifest_path, 'a', encoding='utf-8') as f:
             f.write(json.dumps(item, ensure_ascii=False) + "\n")
-    
+
     def tokens_to_string(self, tokens: List[str]) -> str:
         """
         Convert tokens to string using NeMo's tokenizer.
-        
+
         Args:
             tokens: List of token strings (BPE/SentencePiece tokens)
-            
+
         Returns:
             Detokenized string
         """
@@ -453,7 +486,7 @@ class NeMoStreamingPipelineAdapter(SpeechProcessor):
         if self.latency_unit == "char":
             return "".join(tokens)
         return " ".join(tokens)
-    
+
     @classmethod
     def cleanup_model(cls):
         """
@@ -468,13 +501,14 @@ class NeMoStreamingPipelineAdapter(SpeechProcessor):
                     if hasattr(vllm_engine, 'llm_engine'):
                         # Destroy the engine core
                         from vllm.distributed import destroy_model_parallel
+
                         destroy_model_parallel()
                     del vllm_engine
                     cls.pipeline.nmt_model.nmt_model = None
                     print("[NeMo Adapter] vLLM engine cleaned up")
             except Exception as e:
                 print(f"[NeMo Adapter] Warning during vLLM cleanup: {e}")
-    
+
     def __del__(self):
         """Cleanup when adapter is destroyed"""
         # Note: cleanup_model() is class-level, should be called explicitly
