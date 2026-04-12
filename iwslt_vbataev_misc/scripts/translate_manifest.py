@@ -2,7 +2,6 @@ import os
 from pathlib import Path
 
 import nltk
-import regex
 from tqdm.auto import tqdm
 from vllm import LLM, SamplingParams
 
@@ -17,15 +16,10 @@ from nemo.collections.asr.parts.utils.manifest_utils import read_manifest, write
 # nltk.download('punkt_tab')
 
 
-def main():
-    source_language = "English"
-    target_language = "German"
-    # target_language = "Russian"
-
+def get_llm(model_name="Qwen/Qwen3-4B-Instruct-2507"):
     # os.environ["CUDA_VISIBLE_DEVICES"] = "0"
     os.environ["HF_HOME"] = "/home/vbataev/hf_models"
     os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
-    model_name = "Qwen/Qwen3-4B-Instruct-2507"
     llm = LLM(
         model_name,
         **{
@@ -35,30 +29,26 @@ def main():
             "max_model_len": 8192,
         },
     )
+    return llm
 
-    sampling_params = SamplingParams(
-        **{
-            "max_tokens": 100,
-            "temperature": 0.7,
-            "top_p": 0.8,  # The cumulative probability threshold for nucleus sampling
-            "top_k": 20,  # The number of top tokens to sample from
-            "min_p": 0,  # The minimum probability threshold for sampling
-            "presence_penalty": 1.5,  # The presence penalty for sampling
-            "seed": 42,  # The seed to initialize the random number generator for sampling
-            "stop": ["<|im_end|>", "\u200d"],
-        }
-    )
 
-    prompt_template = EuroLLMTranslatorPromptTemplate()
+def get_uttid(record):
+    return Path(record["audio_filepath"]).stem
 
-    base_path = Path("/home/vbataev/code/worktrees/nemo/iwslt26/_checks/asr/en-096-096/baseline/")
 
-    manifest = read_manifest(base_path / "streaming_greedy_dev-long.jsonl")
+def translate_manifest(
+    manifest,
+    llm,
+    sampling_params,
+    prompt_template,
+    target_language: str,
+    source_language: str = "English",
+    num_keep_sentences=5,
+    text_key="pred_text",
+) -> list[str]:
     translations = []
-
-    num_keep_sentences = 5
     for record in tqdm(manifest):
-        text = record["pred_text"]
+        text = record[text_key]
         sentences = nltk.sent_tokenize(text)
         per_sentence_translations = []
         for i, sentence in enumerate(tqdm(sentences, leave=False)):
@@ -76,11 +66,64 @@ def main():
             per_sentence_translations.append(output_text)
         translation = " ".join(per_sentence_translations)
         translations.append(translation)
-        record["pred_text_de"] = translation
-    write_manifest(base_path / "streaming_greedy_dev-long_with_translation.jsonl", manifest)
-    with open(base_path / "streaming_greedy_dev-long_asr-to-de.txt", "w", encoding="utf-8") as f:
-        for translation in translations:
-            print(translation, file=f)
+    return translations
+
+
+def main():
+    llm = get_llm()
+
+    sampling_params = SamplingParams(
+        **{
+            "max_tokens": 100,
+            "temperature": 0.7,
+            "top_p": 0.8,  # The cumulative probability threshold for nucleus sampling
+            "top_k": 20,  # The number of top tokens to sample from
+            "min_p": 0,  # The minimum probability threshold for sampling
+            "presence_penalty": 1.5,  # The presence penalty for sampling
+            "seed": 42,  # The seed to initialize the random number generator for sampling
+            "stop": ["<|im_end|>", "\u200d"],
+        }
+    )
+
+    manifest_path = Path(
+        "/home/vbataev/code/worktrees/nemo/iwslt26/_checks/asr/en-096-096/baseline/streaming_greedy_dev-long.jsonl"
+    )
+
+    manifest = read_manifest(manifest_path)
+    # source_language = "English"
+    # target_language = "German"
+    # target_language = "Russian"
+    hyp_translations_de = translate_manifest(
+        manifest,
+        llm=llm,
+        sampling_params=sampling_params,
+        prompt_template=EuroLLMTranslatorPromptTemplate(),
+        target_language="German",
+    )
+    hyp_translations_it = translate_manifest(
+        manifest,
+        llm=llm,
+        sampling_params=sampling_params,
+        prompt_template=EuroLLMTranslatorPromptTemplate(),
+        target_language="Italian",
+    )
+
+    # prompt_template = EuroLLMTranslatorPromptTemplate()
+    for i, record in enumerate(manifest):
+        record["hyp_translation_de"] = hyp_translations_de[i]
+        record["hyp_translation_it"] = hyp_translations_it[i]
+
+    all_ref_manifest = read_manifest("/data/iwslt26/mcif/manifests/manifest_en_all.json")
+    ref_translations_de = []
+    ref_translations_it = []
+    for record, record_with_ref in zip(manifest, all_ref_manifest):
+        assert get_uttid(record) == get_uttid(record_with_ref)
+        record["ref_translation_de"] = record_with_ref["ref_translation_de"]
+        ref_translations_de.append(record_with_ref["ref_translation_de"])
+        record["ref_translation_it"] = record_with_ref["ref_translation_it"]
+        ref_translations_it.append(record_with_ref["ref_translation_it"])
+
+    write_manifest(manifest_path.parent / f"{manifest_path.stem}__hyp-en-it.jsonl", manifest)
 
 
 if __name__ == "__main__":
