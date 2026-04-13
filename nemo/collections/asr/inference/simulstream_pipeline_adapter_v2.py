@@ -32,10 +32,8 @@ Key Insight:
     3. Convert TranscribeStepOutput → IncrementalOutput
 """
 
-from __future__ import annotations
-
+import atexit
 import json
-import unicodedata
 from pathlib import Path
 from types import SimpleNamespace
 from typing import List, Optional
@@ -43,10 +41,14 @@ from typing import List, Optional
 import numpy as np
 import torch
 from omegaconf import OmegaConf
+from vllm.distributed import destroy_model_parallel
 
-from nemo.utils import logging
+from nemo.collections.asr.inference.factory.pipeline_builder import PipelineBuilder
+from nemo.collections.asr.inference.streaming.framing.request import FeatureBuffer, Frame
+from nemo.collections.asr.inference.streaming.framing.request_options import ASRRequestOptions
 from nemo.collections.asr.parts.context_biasing.biasing_multi_model import BiasingRequestItemConfig
 from nemo.collections.asr.parts.context_biasing.boosting_graph_batched import BoostingTreeModelConfig
+from nemo.utils import logging
 
 try:
     from simulstream.server.speech_processors import SAMPLE_RATE, SpeechProcessor
@@ -57,7 +59,6 @@ except ImportError:
     SIMULSTREAM_AVAILABLE = False
     SpeechProcessor = object
     SAMPLE_RATE = 16000
-
 
     # Mock IncrementalOutput for type hints when simulstream not available
     class IncrementalOutput:
@@ -88,7 +89,6 @@ def create_nemo_pipeline_from_config(config_path: str):
     Returns:
         BasePipeline: NeMo streaming pipeline
     """
-    from nemo.collections.asr.inference.factory.pipeline_builder import PipelineBuilder
 
     cfg = load_nemo_config(config_path)
     return PipelineBuilder.build_pipeline(cfg)
@@ -162,10 +162,6 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
         if cls.pipeline is not None:
             return  # Already loaded
 
-        import atexit
-
-        from nemo.collections.asr.inference.factory.pipeline_builder import PipelineBuilder
-
         # Convert SimpleNamespace to DictConfig
         # SimulStream uses SimpleNamespace for configuration, so we need to convert it to use in NeMo.
         cfg = OmegaConf.create(cls._namespace_to_dict(config))
@@ -236,11 +232,11 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
     def _namespace_to_dict(obj):
         """Recursively convert SimpleNamespace to dict."""
         if isinstance(obj, SimpleNamespace):
-            return {k: NeMoStreamingPipelineAdapter._namespace_to_dict(v) for k, v in vars(obj).items()}
+            return {k: NeMoStreamingPipelineAdapterV2._namespace_to_dict(v) for k, v in vars(obj).items()}
         elif isinstance(obj, dict):
-            return {k: NeMoStreamingPipelineAdapter._namespace_to_dict(v) for k, v in obj.items()}
+            return {k: NeMoStreamingPipelineAdapterV2._namespace_to_dict(v) for k, v in obj.items()}
         elif isinstance(obj, list):
-            return [NeMoStreamingPipelineAdapter._namespace_to_dict(item) for item in obj]
+            return [NeMoStreamingPipelineAdapterV2._namespace_to_dict(item) for item in obj]
         return obj
 
     def set_source_language(self, language: str) -> None:
@@ -269,9 +265,6 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
         Returns:
             IncrementalOutput: Streaming results (partial/final ASR + translation)
         """
-        from nemo.collections.asr.inference.streaming.framing.request import FeatureBuffer, Frame
-        from nemo.collections.asr.inference.streaming.framing.request_options import ASRRequestOptions
-
         # import pdb; pdb.set_trace()
         if audio.ndim > 1:
             raise ValueError("Simulstream processes only one audio at a time (batch size 1).")
@@ -523,8 +516,6 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
                     vllm_engine = cls.pipeline.nmt_model.nmt_model
                     if hasattr(vllm_engine, 'llm_engine'):
                         # Destroy the engine core
-                        from vllm.distributed import destroy_model_parallel
-
                         destroy_model_parallel()
                     del vllm_engine
                     cls.pipeline.nmt_model.nmt_model = None
