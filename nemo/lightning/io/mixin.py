@@ -15,7 +15,9 @@
 import dataclasses
 import functools
 import inspect
+import io
 import json
+import pickle
 import shutil
 import threading
 import types
@@ -29,7 +31,6 @@ import fiddle as fdl
 import fiddle._src.experimental.dataclasses as fdl_dc
 import lightning.pytorch as pl
 from cloudpickle import dump
-from cloudpickle import load as pickle_load
 from fiddle._src import config as config_lib
 from fiddle._src import partial
 from fiddle._src.experimental import serialization
@@ -45,6 +46,47 @@ from nemo.utils import logging
 ConnT = TypeVar("ConnT", bound=ModelConnector)
 CkptType = TypeVar("CkptType")
 _enable_ext()
+
+_PICKLE_ALLOWED_MODULES = frozenset(
+    {
+        "cloudpickle",
+        "collections",
+        "fsspec",
+        "copy",
+        "dataclasses",
+        "enum",
+        "fiddle",
+        "functools",
+        "lightning",
+        "megatron",
+        "nemo",
+        "numpy",
+        "pathlib",
+        "signal",
+        "torch",
+        "transformers",
+        "typing",
+        "typing_extensions",
+    }
+)
+
+
+class RestrictedUnpickler(pickle.Unpickler):
+    """Unpickler that only allows known-safe modules to prevent code execution attacks."""
+
+    def find_class(self, module: str, name: str) -> type:
+        top_level = module.split(".")[0]
+        if top_level not in _PICKLE_ALLOWED_MODULES:
+            raise pickle.UnpicklingError(
+                f"Deserialization of '{module}.{name}' is not allowed. "
+                "Only known NeMo, PyTorch, and related framework classes are permitted."
+            )
+        return super().find_class(module, name)
+
+
+def _safe_pickle_load(f: io.BufferedIOBase) -> Any:
+    """Load a pickle file using RestrictedUnpickler to block dangerous classes."""
+    return RestrictedUnpickler(f).load()
 
 
 # Thread-local storage for artifacts directory
@@ -637,7 +679,7 @@ def _io_unflatten_object(values, metadata):
     if len(values) == 1:
         pickle_path = values[0]
         with open(Path(output_dir) / pickle_path, "rb") as f:
-            return pickle_load(f)
+            return _safe_pickle_load(f)
 
     return fdl.Config.__unflatten__(values, metadata)
 
