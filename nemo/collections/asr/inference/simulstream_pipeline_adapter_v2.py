@@ -297,8 +297,12 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
             device=self.asr_model.device,
         )
         self.decoding_state = None
-        self.all_tokens = []
-        self.all_timestamps = []
+        self.prev_tokens_rc = []
+        self.prev_timestamps_rc = []
+        self.accumulated_tokens = []
+        self.accumulated_timestamps = []
+        self.prev_sentences_asr = []
+        self.prev_sentences_translated = []
 
     @classmethod
     def load_model(cls, config: SimpleNamespace):
@@ -407,6 +411,25 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
         """Set target language (simulstream interface)."""
         self.tgt_lang = language
 
+    @staticmethod
+    def get_num_sentences(text: str) -> int:
+        n_utt = text.count(".▁") + text.count("!▁") + text.count("?▁")
+        if text.endswith((".", "!", "?")):
+            n_utt += 1
+        return n_utt
+
+    @staticmethod
+    def get_hyp_repr_with_temp(text: str, text_rc: str):
+        text_repr = ""
+        if text:
+            text_repr = text
+        if text_rc:
+            if not text_repr:
+                text_repr = f"[{text_rc}]"
+            else:
+                text_repr += f" [{text_rc}]"
+        return text_repr
+
     def process_chunk(self, audio: np.ndarray) -> "IncrementalOutput":
         """
         Process audio chunk using NeMo's native streaming API.
@@ -478,15 +501,17 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
         # merge hyps with previous hyps
         hyp_len = batched_hyps_chunk.current_lengths[0].cpu().item()
         if hyp_len:
-            transcript = batched_hyps_chunk.transcript[0, :hyp_len].cpu().tolist()
+            tokens = batched_hyps_chunk.transcript[0, :hyp_len].cpu().tolist()
             timestamps = batched_hyps_chunk.timestamps[0, :hyp_len].cpu().tolist()
-            text = self.asr_model.tokenizer.ids_to_text(transcript)
+            text = self.asr_model.tokenizer.ids_to_text(tokens)
         else:
-            transcript = []
+            tokens = []
             timestamps = []
             text = ""
 
         text_rc = ""
+        tokens_rc = []
+        timestamps_rc = []
         if not is_last_chunk:
             with torch.inference_mode(), torch.no_grad():
                 decoded_len = encoder_output_len_to_decode[0].item()
@@ -503,15 +528,52 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
                 )
             hyp_len_rc = batched_hyps_rc.current_lengths[0].cpu().item()
             if hyp_len_rc > 0:
-                transcript_rc = batched_hyps_rc.transcript[0, :hyp_len_rc].cpu().tolist()
+                tokens_rc = batched_hyps_rc.transcript[0, :hyp_len_rc].cpu().tolist()
                 timestamps_rc = batched_hyps_rc.timestamps[0, :hyp_len_rc].cpu().tolist()
-                text_rc = self.asr_model.tokenizer.ids_to_text(transcript_rc)
+                text_rc = self.asr_model.tokenizer.ids_to_text(tokens_rc)
             else:
-                transcript_rc = []
+                tokens_rc = []
                 timestamps_rc = []
                 text_rc = ""
 
-        logging.warning(f"Text: {text}" + (f" [{text_rc}]" if text_rc else ""))
+        logging.info(f"Text: {self.get_hyp_repr_with_temp(text, text_rc)}")
+        self.accumulated_tokens += tokens
+        self.accumulated_timestamps += timestamps
+
+        accumulated_text = self.asr_model.tokenizer.ids_to_text(self.accumulated_tokens)
+        if accumulated_text.endswith(".") or accumulated_text.endswith("?") or accumulated_text.endswith("!"):
+            fixed_part = self.asr_model.tokenizer.ids_to_text(self.accumulated_tokens)
+            self.accumulated_tokens = []
+        else:
+            tokens_repr = self.asr_model.tokenizer.ids_to_tokens(self.accumulated_tokens)
+            stop = None
+            for i in range(len(self.accumulated_tokens) - 1, 0, -1):
+                if tokens_repr[i].startswith("▁") and (tokens_repr[i-1].endswith(".") or tokens_repr[i-1].endswith("?") or tokens_repr[i-1].endswith("!")):
+                    stop = i
+                    break
+            if stop is not None:
+                fixed_part = self.asr_model.tokenizer.ids_to_text(self.accumulated_tokens[:stop])
+                self.accumulated_tokens = self.accumulated_tokens[stop:]
+            else:
+                fixed_part = ""
+
+        non_fixed_part = self.asr_model.tokenizer.ids_to_text(self.accumulated_tokens + tokens_rc)
+        logging.info(f"Split for translation: {self.get_hyp_repr_with_temp(fixed_part, non_fixed_part)}")
+
+
+        # if self.get_num_sentences(accumulated_text) > 0:
+        #
+        # if rightest_punct_idx == -1 and asr_segment.endswith((".", "!", "?")):
+        #     rightest_punct_idx = len(asr_segment) - 1
+        # find_end_time_result = find_end_time(asr_outputs[0].time_stamps, rightest_punct_idx, asr_hypo)
+        # if find_end_time_result is None:
+        #     return None, False
+        # utt_end_time = int(find_end_time_result * SAMPLE_RATE) + state.utt_timestamps[-1]
+        # utt_end_time = min(utt_end_time, len(state.source))
+        # state.utt_timestamps.append(utt_end_time)
+        # state.utt_sources.append(asr_segment[: rightest_punct_idx + 1])
+        # state.asr_hypotheses = [asr_hypo[rightest_punct_idx + 1:].strip()]
+        # asr_to_translate = " ".join(state.utt_sources[-1 - self.max_history_utterances:])
 
         return IncrementalOutput(
             new_tokens=[],
