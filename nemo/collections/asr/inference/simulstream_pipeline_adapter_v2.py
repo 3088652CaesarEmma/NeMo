@@ -40,14 +40,14 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Optional
 
-import nltk
 import numpy as np
 import torch
 from omegaconf import DictConfig, OmegaConf, open_dict
-from tqdm.auto import tqdm
+
 from vllm import LLM, SamplingParams
 from vllm.distributed import destroy_model_parallel
 
+from nemo.collections.asr.inference.nmt.prompts import EuroLLMTranslatorPromptTemplateV2
 from nemo.collections.asr.models import EncDecHybridRNNTCTCModel, EncDecRNNTModel
 from nemo.collections.asr.parts.context_biasing.biasing_multi_model import BiasingRequestItemConfig
 from nemo.collections.asr.parts.context_biasing.boosting_graph_batched import BoostingTreeModelConfig
@@ -195,39 +195,6 @@ def get_model_context(asr_model, cfg: DictConfig):
     return context_samples, context_encoder_frames, encoder_frame2audio_samples
 
 
-def translate_manifest(
-    manifest,
-    llm,
-    sampling_params,
-    prompt_template,
-    target_language: str,
-    source_language: str = "English",
-    num_keep_sentences=5,
-    text_key="pred_text",
-) -> list[str]:
-    translations = []
-    for record in tqdm(manifest):
-        text = record[text_key]
-        sentences = nltk.sent_tokenize(text)
-        per_sentence_translations = []
-        for i, sentence in enumerate(tqdm(sentences, leave=False)):
-            llm_input = prompt_template.format(
-                source_language,
-                target_language,
-                src_prefix=sentence,
-                tgt_prefix="",
-                src_context=" ".join(sentences[max(i - num_keep_sentences, 0) : i]),
-                tgt_context=" ".join(per_sentence_translations[max(i - num_keep_sentences, 0) : i]),
-            )
-            llm_output = llm.generate([llm_input], sampling_params, use_tqdm=False)
-            output_text = llm_output[0].outputs[0].text
-            output_text = prompt_template.extract(output_text).strip()
-            per_sentence_translations.append(output_text)
-        translation = " ".join(per_sentence_translations)
-        translations.append(translation)
-    return translations
-
-
 class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
     """
     Adapter to use NeMo's streaming pipelines with simulstream evaluation.
@@ -245,6 +212,7 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
 
     asr_model = None
     nmt_model = None
+    prompt_template = None
     context_samples = None
     context_encoder_frames = None
     encoder_frame2audio_samples = None
@@ -271,10 +239,10 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
         self.stream_id = 0
         self.frame_count = 0
         self.is_first_chunk = True
-        self._final_transcript_acc = ""
-        self._final_translation_acc = ""
-        self._last_partial_transcript = ""
-        self._last_partial_translation = ""
+        # self._final_transcript_acc = ""
+        # self._final_translation_acc = ""
+        # self._last_partial_transcript = ""
+        # self._last_partial_translation = ""
         # # Determine request type from config
         # self.request_type = getattr(config, 'request_type', 'frame')
         # if hasattr(config, 'streaming') and hasattr(config.streaming, 'request_type'):
@@ -303,6 +271,23 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
         self.accumulated_timestamps = []
         self.prev_sentences_asr = []
         self.prev_sentences_translated = []
+        self.prev_partial_translation = ""
+
+    def reset_stream_state(self):
+        self.buffer = StreamingBatchedAudioBuffer(
+            batch_size=1,
+            context_samples=self.context_samples,
+            dtype=torch.float32,
+            device=self.asr_model.device,
+        )
+        self.decoding_state = None
+        self.prev_tokens_rc = []
+        self.prev_timestamps_rc = []
+        self.accumulated_tokens = []
+        self.accumulated_timestamps = []
+        self.prev_sentences_asr = []
+        self.prev_sentences_translated = []
+        self.prev_partial_translation = ""
 
     @classmethod
     def load_model(cls, config: SimpleNamespace):
@@ -322,10 +307,11 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
         cfg = OmegaConf.create(cls._namespace_to_dict(config))
 
         # setup LLM
-        # cls.nmt_model = get_llm_model(
-        #     cfg.nmt.model_name, model_params=OmegaConf.to_container(cfg.nmt.llm_params, resolve=True)
-        # )
+        cls.nmt_model = get_llm_model(
+            cfg.nmt.model_name, model_params=OmegaConf.to_container(cfg.nmt.llm_params, resolve=True)
+        )
         cls.nmt_sampling_params = SamplingParams(**OmegaConf.to_container(cfg.nmt.sampling_params))
+        cls.prompt_template = EuroLLMTranslatorPromptTemplateV2()
         cls.asr_model = get_asr_model(cfg.asr)
         cls.asr_device = cls.asr_model.device
         # TODO: fix chunk masking
@@ -336,6 +322,10 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
             raise NotImplementedError
 
         cls.detailed_log_path = getattr(config, "detailed_log_path", None)
+        if cls.detailed_log_path is not None:
+            # rewrite
+            with open(cls.detailed_log_path, "w", encoding="utf-8") as f:
+                f.write("")
 
         # Output manifest path (optional, but enabled by default when metrics_log_file is available).
         cls.output_manifest_path = getattr(config, 'output_manifest_file', None) or getattr(
@@ -429,6 +419,20 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
             else:
                 text_repr += f" [{text_rc}]"
         return text_repr
+
+    def get_translation(self, text: str):
+        llm_input = self.prompt_template.format(
+            self.src_lang,
+            self.tgt_lang,
+            src_prefix=text,
+            tgt_prefix="",
+            src_context=" ".join(self.prev_sentences_asr[-5:]),
+            tgt_context=" ".join(self.prev_sentences_translated[-5:]),
+        )
+        llm_output = self.nmt_model.generate([llm_input], self.nmt_sampling_params, use_tqdm=False)
+        output_text = llm_output[0].outputs[0].text
+        output_text = self.prompt_template.extract(output_text).strip()
+        return output_text
 
     def process_chunk(self, audio: np.ndarray) -> "IncrementalOutput":
         """
@@ -536,7 +540,7 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
                 timestamps_rc = []
                 text_rc = ""
 
-        logging.info(f"Text: {self.get_hyp_repr_with_temp(text, text_rc)}")
+        # logging.info(f"Text: {self.get_hyp_repr_with_temp(text, text_rc)}")
         self.accumulated_tokens += tokens
         self.accumulated_timestamps += timestamps
 
@@ -558,64 +562,78 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
                 fixed_part = ""
 
         non_fixed_part = self.asr_model.tokenizer.ids_to_text(self.accumulated_tokens + tokens_rc)
-        logging.info(f"Split for translation: {self.get_hyp_repr_with_temp(fixed_part, non_fixed_part)}")
+        # logging.info(f"Split for translation: {self.get_hyp_repr_with_temp(fixed_part, non_fixed_part)}")
 
+        if fixed_part:
+            fixed_part_translated = self.get_translation(fixed_part)
+            self.prev_sentences_asr.append(fixed_part)
+            self.prev_sentences_translated.append(fixed_part_translated)
+        else:
+            fixed_part_translated = ""
 
-        # if self.get_num_sentences(accumulated_text) > 0:
-        #
-        # if rightest_punct_idx == -1 and asr_segment.endswith((".", "!", "?")):
-        #     rightest_punct_idx = len(asr_segment) - 1
-        # find_end_time_result = find_end_time(asr_outputs[0].time_stamps, rightest_punct_idx, asr_hypo)
-        # if find_end_time_result is None:
-        #     return None, False
-        # utt_end_time = int(find_end_time_result * SAMPLE_RATE) + state.utt_timestamps[-1]
-        # utt_end_time = min(utt_end_time, len(state.source))
-        # state.utt_timestamps.append(utt_end_time)
-        # state.utt_sources.append(asr_segment[: rightest_punct_idx + 1])
-        # state.asr_hypotheses = [asr_hypo[rightest_punct_idx + 1:].strip()]
-        # asr_to_translate = " ".join(state.utt_sources[-1 - self.max_history_utterances:])
+        if non_fixed_part:
+            non_fixed_part_translated = self.get_translation(non_fixed_part)
+        else:
+            non_fixed_part_translated = ""
+        # logging.info(f"Translation: {self.get_hyp_repr_with_temp(fixed_part_translated, non_fixed_part_translated)}")
 
-        return IncrementalOutput(
-            new_tokens=[],
-            new_string="",
-            deleted_tokens=[],
-            deleted_string="",
-        )
+        full_translation_to_output = ""
+        if fixed_part_translated:
+            full_translation_to_output = fixed_part_translated
+        if non_fixed_part_translated:
+            if not full_translation_to_output:
+                full_translation_to_output = non_fixed_part_translated
+            else:
+                full_translation_to_output += " " + non_fixed_part_translated
 
-        # Track final and latest partial outputs to write a NeMo-style prediction manifest line.
-        self._final_transcript_acc += step_output.final_transcript or ""
-        self._final_translation_acc += step_output.final_translation or ""
-        self._last_partial_transcript = step_output.partial_transcript or ""
-        if step_output.final_translation:
-            self._last_partial_translation = step_output.final_translation
-        elif step_output.partial_translation:
-            self._last_partial_translation = step_output.partial_translation
+        prev_tokens = self._tokenize_text(full_translation_to_output)
+        curr_tokens = self._tokenize_text(self.prev_partial_translation)
+        common_prefix_len = 0
+        for i in range(min(len(prev_tokens), len(curr_tokens))):
+            if prev_tokens[i] == curr_tokens[i]:
+                common_prefix_len += 1
+            else:
+                break
 
-        # Convert NeMo's output to simulstream's IncrementalOutput
-        result = self._convert_to_incremental_output(step_output)
+        # Calculate deleted and generated token lists
+        deleted_tokens = prev_tokens[common_prefix_len:]  # Tokens removed from previous
+        generated_tokens = curr_tokens[common_prefix_len:]  # Tokens added in current
 
-        self.is_first_chunk = False
-        self.frame_count += 1
+        # Construct strings from token lists
+        deleted_string = self._join_tokens(deleted_tokens)
+        generated_string = self._join_tokens(generated_tokens)
+
+        self.prev_partial_translation = non_fixed_part_translated
 
         if self.detailed_log_path is not None:
             with open(self.detailed_log_path, "a", encoding="utf-8") as f:
                 print(
                     json.dumps(
                         {
-                            "final_transcript": step_output.final_transcript,
-                            "partial_transcript": step_output.partial_transcript,
-                            "final_translation": step_output.final_translation,
-                            "partial_translation": step_output.partial_translation,
-                            "new_tokens": result.new_tokens,
-                            "new_string": result.new_string,
-                            "deleted_tokens": result.deleted_tokens,
-                            "deleted_string": result.deleted_string,
+                            "step_asr_text": text,
+                            "step_asr_text_rc": text_rc,
+                            "fixed_asr_text": fixed_part,
+                            "non_fixed_asr_text": non_fixed_part,
+                            "fixed_part_translated": fixed_part_translated,
+                            "non_fixed_part_translated": non_fixed_part_translated,
+                            "new_tokens": generated_tokens,
+                            "new_string": generated_string,
+                            "deleted_tokens": deleted_tokens,
+                            "deleted_string": deleted_string,
                         }
                     ),
                     file=f,
                 )
 
-        return result
+        self.is_first_chunk = False
+        self.frame_count += 1
+
+        return IncrementalOutput(
+            new_tokens=generated_tokens,  # List of string tokens added
+            new_string=generated_string,
+            deleted_tokens=deleted_tokens,  # List of string tokens removed
+            deleted_string=deleted_string,
+        )
 
     def _convert_to_incremental_output(self, step_output) -> "IncrementalOutput":
         """
@@ -686,9 +704,9 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
         Returns:
             IncrementalOutput: Empty output in most cases
         """
-        pred_text = (self._final_transcript_acc + self._last_partial_transcript).strip()
-        pred_translation = (self._final_translation_acc + self._last_partial_translation).strip()
-        self._write_prediction_manifest_line(pred_text, pred_translation)
+        # pred_text = (self._final_transcript_acc + self._last_partial_transcript).strip()
+        # pred_translation = (self._final_translation_acc + self._last_partial_translation).strip()
+        # self._write_prediction_manifest_line(pred_text, pred_translation)
 
         # NOTE: Last chunk was already processed with is_last=False in process_chunk().
         # We only finalize stream state and emit empty incremental output here.
@@ -713,18 +731,12 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
         self.stream_id += 1
         self.frame_count = 0
         self.is_first_chunk = True
-        self._final_transcript_acc = ""
-        self._final_translation_acc = ""
-        self._last_partial_transcript = ""
-        self._last_partial_translation = ""
+        # self._final_transcript_acc = ""
+        # self._final_translation_acc = ""
+        # self._last_partial_transcript = ""
+        # self._last_partial_translation = ""
 
-        self.buffer = StreamingBatchedAudioBuffer(
-            batch_size=1,
-            context_samples=self.context_samples,
-            dtype=torch.float32,
-            device=self.asr_model.device,
-        )
-        self.decoding_state = None
+        self.reset_stream_state()
 
     def _write_prediction_manifest_line(self, pred_text: str, pred_translation: str) -> None:
         """Write one NeMo-style manifest line with model predictions."""
