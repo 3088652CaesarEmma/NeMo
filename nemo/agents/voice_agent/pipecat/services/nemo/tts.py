@@ -885,7 +885,17 @@ class EasyMagpieTTSService(BaseNemoTTSService):
 
     def _setup_model(self):
         if "EASYMAGPIE_LT_BACKEND" not in os.environ:
-            os.environ["EASYMAGPIE_LT_BACKEND"] = "compile"
+            os.environ["EASYMAGPIE_LT_BACKEND"] = "trt"
+
+        # TRT requires libcudart and libnvinfer to be loaded before tensorrt is imported.
+        # We preload the CUDA 12 runtime and TRT libs (from nvidia/cuda_runtime package)
+        # using RTLD_GLOBAL so that tensorrt_libs/__init__.py finds them already in memory
+        # and uses these cu12 builds rather than any cu13 builds that may be on disk.
+        import ctypes
+        _site_packages = os.path.join(os.path.dirname(os.__file__), "site-packages")
+        _cudart12_so = os.path.join(_site_packages, "nvidia", "cuda_runtime", "lib", "libcudart.so.12")
+        if os.path.isfile(_cudart12_so):
+            ctypes.CDLL(_cudart12_so, mode=ctypes.RTLD_GLOBAL)
 
         from nemo.collections.tts.models import AudioCodecModel
         from nemo.collections.tts.models.easy_magpietts_inference import EasyMagpieTTSInferenceModel
@@ -960,6 +970,11 @@ class EasyMagpieTTSService(BaseNemoTTSService):
         with torch.inference_mode():
             self._base_streaming_state = self._call_streaming_init(model, device_type=_device_type)
         logger.info("Cached base streaming_init state")
+
+        # Thread pool for overlapping codec decoding with autoregressive generation.
+        # max_workers=1 ensures only one decode runs at a time (GPU memory safety).
+        self._decode_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        logger.info("Decode executor initialized")
 
         return model
 

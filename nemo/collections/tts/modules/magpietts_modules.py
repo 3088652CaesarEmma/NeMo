@@ -14,8 +14,9 @@
 
 from __future__ import annotations
 
+import os
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import torch
@@ -408,6 +409,200 @@ class CodecHelper:
             return audio, audio_len, codes
 
 
+class _LocalTransformerOutputWrapper(torch.nn.Module):
+    """Wrapper that returns only tensor output for compiler backends."""
+
+    def __init__(self, local_transformer: torch.nn.Module):
+        super().__init__()
+        self.local_transformer = local_transformer
+
+    def forward(self, x: torch.Tensor, x_mask: torch.Tensor) -> torch.Tensor:
+        return self.local_transformer(x, x_mask)['output']
+
+
+class _LocalTransformerTRTEngine:  # kept for import compatibility
+    """Deprecated — use LocalTransformerHelper._run_local_transformer with lt_backend='trt'."""
+
+    def __init__(self, *args, **kwargs):
+        raise RuntimeError(
+            "_LocalTransformerTRTEngine is deprecated. "
+            "Set EASYMAGPIE_LT_BACKEND=trt to enable per-shape torch.compile acceleration."
+        )
+
+
+class _LocalTransformerTRTEngine_UNUSED:
+    """torch_tensorrt dynamo-compiled BF16 engine for the local transformer.
+
+    Uses ``torch_tensorrt.compile(ir="dynamo", enabled_precisions={torch.bfloat16})``
+    to compile the local transformer directly from a PyTorch FX graph, preserving
+    BF16 precision that exactly matches the ``torch.autocast(bfloat16)`` inference
+    context used during streaming decoding.
+
+    Why dynamo over ONNX:
+      ONNX→TRT with BF16 flag causes TRT to use FP16 for BF16 ops internally
+      (different exponent range → overflow at large T).  FP32 ONNX→TRT is numerically
+      close but diverges enough at codebook-3 (T=4) to sample wrong codes → EOS after
+      1 audio frame.  The dynamo path compiles the exact same BF16 FX ops that PyTorch
+      autocast would execute, so precision is byte-for-byte compatible.
+
+    Serialization: compiled model is saved as a TorchScript archive to
+    ``~/.cache/easymagpie_trt/`` keyed by model+TRT version, so subsequent server
+    starts skip re-compilation (~60 s build).
+
+    Args:
+        wrapper: _LocalTransformerOutputWrapper around the local transformer.
+        device: CUDA device the model lives on.
+        d_model: Hidden dimension of the local transformer.
+        max_seq_len: Maximum sequence length (C*S + 1).
+        batch_size: Batch size (typically 1 for inference).
+    """
+
+    def __init__(
+        self,
+        wrapper: "_LocalTransformerOutputWrapper",
+        device,
+        d_model: int,
+        max_seq_len: int = 12,
+        batch_size: int = 1,
+    ):
+        self._wrapper = wrapper
+        self._device = device
+        self._d_model = d_model
+        self._max_seq_len = max_seq_len
+        self._batch_size = batch_size
+        self._compiled_model = None
+
+    @staticmethod
+    def _device_index(device) -> int:
+        """Return integer GPU index from a torch.device or string like 'cuda:1'."""
+        if isinstance(device, torch.device):
+            return device.index if device.index is not None else 0
+        s = str(device)
+        return int(s.split(":")[1]) if ":" in s else 0
+
+    def _build_engine(self):
+        """Compile the local transformer wrapper with torch.compile(dynamic=True).
+
+        Uses BF16 autocast to exactly match the precision of the default eager
+        inference path.  ``dynamic=True`` allows variable sequence lengths without
+        retracing.  The compiled callable is cached on self._compiled_model.
+        """
+        logging.info("Compiling local transformer with torch.compile(dynamic=True, mode='reduce-overhead')...")
+        self._wrapper.eval().to(self._device)
+        self._compiled_model = torch.compile(self._wrapper, dynamic=True, mode="reduce-overhead")
+        logging.info("torch.compile ready.")
+
+    def _build_engine_onnx(self):
+        """Fallback: export FP32 ONNX and build a TRT FP32 engine."""
+        import hashlib
+        import io
+        import tensorrt as trt
+
+        B, T, H = self._batch_size, self._max_seq_len, self._d_model
+        dev = self._device
+
+        self._wrapper.eval().to(dev)
+        x_dummy    = torch.zeros(B, T, H, dtype=torch.float32, device=dev)
+        mask_dummy = torch.ones(B, T,    dtype=torch.float32, device=dev)
+
+        buf = io.BytesIO()
+        with torch.no_grad(), torch.amp.autocast(device_type="cuda", enabled=False):
+            torch.onnx.export(
+                self._wrapper,
+                (x_dummy, mask_dummy),
+                buf,
+                input_names=["x", "x_mask"],
+                output_names=["output"],
+                opset_version=14,
+            )
+        onnx_bytes = buf.getvalue()
+        logging.info(f"ONNX export complete ({len(onnx_bytes)//1024}KB).")
+
+        trt_ver   = getattr(trt, "__version__", "unknown")
+        onnx_hash = hashlib.sha256(onnx_bytes).hexdigest()[:16]
+        cache_dir  = os.path.expanduser("~/.cache/easymagpie_trt")
+        os.makedirs(cache_dir, exist_ok=True)
+        engine_path = os.path.join(cache_dir, f"lt_fp32_T{T}_d{H}_trt{trt_ver}_{onnx_hash}.engine")
+
+        logger_trt = trt.Logger(trt.Logger.WARNING)
+
+        if os.path.isfile(engine_path):
+            logging.info(f"Loading cached TRT FP32 engine from {engine_path} ...")
+            with open(engine_path, "rb") as f:
+                engine_bytes = f.read()
+        else:
+            logging.info("Building TRT FP32 engine (first run, ~60 s)...")
+            builder = trt.Builder(logger_trt)
+            network = builder.create_network(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)
+            parser  = trt.OnnxParser(network, logger_trt)
+            if not parser.parse(onnx_bytes):
+                for i in range(parser.num_errors):
+                    logging.error(f"TRT ONNX parse error {i}: {parser.get_error(i)}")
+                raise RuntimeError("TRT ONNX parsing failed")
+            config = builder.create_builder_config()
+            config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 1 << 30)
+            serialized = builder.build_serialized_network(network, config)
+            if serialized is None:
+                raise RuntimeError("TRT engine build failed")
+            engine_bytes = bytes(serialized)
+            with open(engine_path, "wb") as f:
+                f.write(engine_bytes)
+            logging.info(f"TRT FP32 engine cached to {engine_path}")
+
+        runtime = trt.Runtime(logger_trt)
+        engine  = runtime.deserialize_cuda_engine(engine_bytes)
+        context = engine.create_execution_context()
+        stream  = torch.cuda.Stream(device=dev)
+
+        # io_dtype="fp32" so __call__ passes FP32 tensors.
+        self._compiled_model = ("onnx_trt", engine, context, stream, "fp32")
+        logging.info("TRT FP32 (ONNX fallback) engine ready.")
+
+    def __call__(self, x: torch.Tensor, x_mask: torch.Tensor) -> torch.Tensor:
+        """Run inference; pads to max_seq_len, calls compiled model, slices output."""
+        T = x.shape[1]
+        T_max = self._max_seq_len
+
+        if self._compiled_model is None:
+            self._build_engine()
+
+        if T > T_max:
+            return None  # signal caller to fall back to PyTorch
+
+        if T < T_max:
+            pad = T_max - T
+            B, _, H = x.shape
+            x_in = torch.cat([x, x.new_zeros(B, pad, H)], dim=1)
+            m_in = torch.cat([x_mask, x_mask.new_ones(B, pad)], dim=1)
+        else:
+            x_in, m_in = x, x_mask
+
+        # --- ONNX/TRT path ---
+        if isinstance(self._compiled_model, tuple) and self._compiled_model[0] == "onnx_trt":
+            _, engine, context, stream, io_dtype = self._compiled_model  # noqa: F841
+            # Convert to the engine's I/O dtype (bf16 for main engine, fp32 for fallback).
+            trt_dtype = torch.bfloat16 if io_dtype == "bf16" else torch.float32
+            with torch.cuda.device(self._device):
+                xt  = x_in.to(trt_dtype).contiguous()
+                mt  = m_in.to(trt_dtype).contiguous()
+                out = torch.empty_like(xt)
+                context.set_tensor_address("x",      xt.data_ptr())
+                context.set_tensor_address("x_mask", mt.data_ptr())
+                context.set_tensor_address("output", out.data_ptr())
+                ok = context.execute_async_v3(stream.cuda_stream)
+                stream.synchronize()
+                if not ok:
+                    raise RuntimeError("TRT execute_async_v3 returned False")
+            return out[:, :T, :].to(x.dtype)
+
+        # --- torch_tensorrt dynamo path ---
+        with torch.cuda.device(self._device):
+            x_bf16 = x_in.bfloat16().contiguous()
+            m_bf16 = m_in.bfloat16().contiguous()
+            out = self._compiled_model(x_bf16, m_bf16)
+        return out[:, :T, :].to(x.dtype)
+
+
 class LocalTransformerHelper:
     """Orchestrates local-transformer forward passes and sampling.
 
@@ -455,6 +650,209 @@ class LocalTransformerHelper:
         self.audio_eos_id = audio_eos_id
         self.mask_token_id = mask_token_id
         self.codebook_size = codebook_size
+        self.lt_backend = os.getenv("EASYMAGPIE_LT_BACKEND", "torch").strip().lower()
+        self._lt_trt_logged = False
+        self._lt_trt_wrapper = _LocalTransformerOutputWrapper(self.local_transformer)
+        # Per-static-shape cache: (B, T, D, dtype_str, device_str) -> (engine, context, stream)
+        self._lt_trt_cache: Dict[tuple, Any] = {}
+        # Shapes that failed TRT validation — fall back to PyTorch for these.
+        self._lt_trt_fallback_keys: set = set()
+
+    def _build_lt_trt_engine(self, x: torch.Tensor, x_mask: torch.Tensor) -> tuple:
+        """Build a per-static-shape TRT engine for the local transformer.
+
+        Exports FP32 ONNX with the old trace-based exporter (``dynamo=False``) at
+        the exact input shape ``(B, T, H)`` — no padding.  One engine is built per
+        unique (B, T, H, dtype, device) combination encountered at runtime, matching
+        the reference implementation's per-static-shape compilation strategy.
+
+        Returns ``(engine, context, stream)`` ready for ``execute_async_v3``.
+        """
+        import ctypes
+        import hashlib
+        import io
+        import sys
+
+        # Preload CUDA 12 runtime so TRT can initialize (must happen before trt.Builder).
+        _sp = os.path.join(os.path.dirname(sys.executable), "..", "lib", "python3.10", "site-packages")
+        _sp = os.path.normpath(_sp)
+        _cudart = os.path.join(_sp, "nvidia", "cuda_runtime", "lib", "libcudart.so.12")
+        if os.path.isfile(_cudart):
+            try:
+                ctypes.CDLL(_cudart, mode=ctypes.RTLD_GLOBAL)
+            except OSError:
+                pass
+
+        import tensorrt as trt
+
+        B, T, H = x.shape
+        dev = x.device
+        self._lt_trt_wrapper.eval().to(dev)
+
+        # --- ONNX export (trace-based, no dynamo) ---
+        x_fp32 = torch.zeros(B, T, H, dtype=torch.float32, device=dev)
+        m_fp32 = torch.ones(B, T, dtype=torch.float32, device=dev)
+        buf = io.BytesIO()
+        with torch.no_grad(), torch.amp.autocast(device_type="cuda", enabled=False):
+            self.local_transformer.reset_cache(use_cache=False)
+            torch.onnx.export(
+                self._lt_trt_wrapper,
+                (x_fp32, m_fp32),
+                buf,
+                dynamo=False,
+                input_names=["x", "x_mask"],
+                output_names=["output"],
+                opset_version=17,
+            )
+        onnx_bytes = buf.getvalue()
+
+        trt_ver = getattr(trt, "__version__", "unknown")
+        onnx_hash = hashlib.sha256(onnx_bytes).hexdigest()[:16]
+        cache_dir = os.path.expanduser("~/.cache/easymagpie_trt")
+        os.makedirs(cache_dir, exist_ok=True)
+        # "perT_v2" suffix distinguishes from older padded/BF16-flag engines.
+        engine_path = os.path.join(cache_dir, f"lt_fp32perT_v2_B{B}_T{T}_H{H}_trt{trt_ver}_{onnx_hash}.engine")
+        logging.info(f"Building TRT FP32 engine for LT (B={B}, T={T}, H={H})...")
+
+        logger_trt = trt.Logger(trt.Logger.WARNING)
+
+        # Set CUDA device so TRT builder and runtime use the correct GPU.
+        dev_idx = dev.index if dev.index is not None else 0
+        torch.cuda.set_device(dev_idx)
+
+        if os.path.isfile(engine_path):
+            logging.info(f"Loading cached TRT engine from {engine_path}")
+            with open(engine_path, "rb") as f:
+                engine_bytes = f.read()
+        else:
+            with torch.cuda.device(dev_idx):
+                builder = trt.Builder(logger_trt)
+                network = builder.create_network(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)
+                parser = trt.OnnxParser(network, logger_trt)
+                if not parser.parse(onnx_bytes):
+                    for i in range(parser.num_errors):
+                        logging.error(f"ONNX parse error {i}: {parser.get_error(i)}")
+                    raise RuntimeError("TRT ONNX parsing failed")
+                config = builder.create_builder_config()
+                # Pure FP32 — no BF16 flag.  BF16 precision flags cause Cast-kernel
+                # failures on sm_86 (A6000) with TRT 10.x; pure FP32 avoids this.
+                config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 1 << 30)
+                serialized = builder.build_serialized_network(network, config)
+            if serialized is None:
+                raise RuntimeError("TRT engine build failed")
+            engine_bytes = bytes(serialized)
+            with open(engine_path, "wb") as f:
+                f.write(engine_bytes)
+            logging.info(f"TRT engine cached to {engine_path}")
+
+        with torch.cuda.device(dev_idx):
+            runtime = trt.Runtime(logger_trt)
+            engine = runtime.deserialize_cuda_engine(engine_bytes)
+            context = engine.create_execution_context()
+        stream = torch.cuda.Stream(device=dev)
+
+        # Post-build validation: compare TRT vs PyTorch on a test input.
+        engine_info = (engine, context, stream)
+        torch.manual_seed(0)
+        x_val = torch.randn(B, T, H, dtype=torch.float32, device=dev)
+        m_val = torch.ones(B, T, dtype=torch.float32, device=dev)
+        self.local_transformer.reset_cache(use_cache=False)
+        with torch.no_grad(), torch.amp.autocast(device_type="cuda", enabled=False):
+            pt_ref = self._lt_trt_wrapper(x_val, m_val)
+        trt_out = self._run_lt_trt_engine(engine_info, x_val, m_val)
+        max_diff = (pt_ref - trt_out).abs().max().item()
+        if max_diff > 5.0:
+            logging.warning(
+                f"TRT engine for B={B}, T={T}, H={H} failed validation "
+                f"(max_diff={max_diff:.2f} > 5.0). Deleting cached engine and "
+                f"falling back to PyTorch for this shape."
+            )
+            if os.path.isfile(engine_path):
+                os.remove(engine_path)
+            raise RuntimeError(f"TRT validation failed for T={T}: max_diff={max_diff:.2f}")
+
+        logging.info(f"TRT engine ready for T={T}.")
+        return (engine, context, stream)
+
+    def _run_lt_trt_engine(
+        self,
+        engine_info: tuple,
+        x: torch.Tensor,
+        x_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """Execute a cached TRT engine; returns output in the same dtype as ``x``."""
+        engine, context, stream = engine_info
+        with torch.cuda.device(x.device):
+            xf = x.float().contiguous()
+            mf = x_mask.float().contiguous()
+            out = torch.empty_like(xf)
+            # Ensure PyTorch ops on the default stream complete before TRT reads the tensors.
+            stream.wait_stream(torch.cuda.current_stream(x.device))
+            context.set_tensor_address("x", xf.data_ptr())
+            context.set_tensor_address("x_mask", mf.data_ptr())
+            context.set_tensor_address("output", out.data_ptr())
+            ok = context.execute_async_v3(stream.cuda_stream)
+            # Make the default stream wait for TRT to finish writing `out`.
+            torch.cuda.current_stream(x.device).wait_stream(stream)
+            stream.synchronize()
+        if not ok:
+            raise RuntimeError("TRT execute_async_v3 returned False")
+        return out.to(x.dtype)
+
+    def _run_local_transformer(
+        self,
+        local_transformer_input: torch.Tensor,
+        local_transformer_mask: torch.Tensor,
+        use_kv_cache: bool = False,
+    ) -> torch.Tensor:
+        """Run the local transformer using the backend selected by EASYMAGPIE_LT_BACKEND.
+
+        "torch"   — plain PyTorch eager (default).
+        "compile" — torch.compile with mode='reduce-overhead'.
+        "trt"     — TRT engine per static input shape (ONNX export + trt.Builder).
+                    One engine is built per unique (B, T, D) shape encountered at
+                    runtime — no padding, exact shape match.  Falls back to PyTorch
+                    when use_kv_cache=True.
+        """
+        lt_backend = self.lt_backend
+
+        if lt_backend == "compile" and not use_kv_cache:
+            return self.local_transformer(local_transformer_input, local_transformer_mask)['output']
+
+        if lt_backend == "trt" and not use_kv_cache:
+            compile_key = (
+                int(local_transformer_input.size(0)),
+                int(local_transformer_input.size(1)),
+                int(local_transformer_input.size(2)),
+                str(local_transformer_input.dtype),
+                str(local_transformer_input.device),
+            )
+            if compile_key in self._lt_trt_fallback_keys:
+                # Previously failed validation — use PyTorch for this shape.
+                return self.local_transformer(local_transformer_input, local_transformer_mask)['output']
+            if compile_key not in self._lt_trt_cache:
+                if not self._lt_trt_logged:
+                    logging.info(
+                        "Using TRT per-static-shape FP32 backend for local transformer "
+                        "(EASYMAGPIE_LT_BACKEND=trt)."
+                    )
+                    self._lt_trt_logged = True
+                try:
+                    self._lt_trt_cache[compile_key] = self._build_lt_trt_engine(
+                        local_transformer_input, local_transformer_mask
+                    )
+                except RuntimeError as e:
+                    logging.warning(f"TRT build/validation failed ({e}); using PyTorch fallback for shape {compile_key}.")
+                    self._lt_trt_fallback_keys.add(compile_key)
+                    return self.local_transformer(local_transformer_input, local_transformer_mask)['output']
+            return self._run_lt_trt_engine(
+                self._lt_trt_cache[compile_key],
+                local_transformer_input,
+                local_transformer_mask,
+            )
+
+        # Default: plain PyTorch eager
+        return self.local_transformer(local_transformer_input, local_transformer_mask)['output']
 
     def create_random_mask(self, codes):
         """Creates a mask where True indicates positions that should be replaced with MASK_TOKEN."""
@@ -578,7 +976,9 @@ class LocalTransformerHelper:
             _mask = torch.ones(
                 local_transformer_input.size(0), local_transformer_input.size(1), device=local_transformer_input.device
             )
-            local_transformer_output = self.local_transformer(local_transformer_input, _mask)['output']
+            local_transformer_output = self._run_local_transformer(
+                local_transformer_input, _mask, use_kv_cache=use_kv_cache
+            )
 
             lt_out_for_proj = self.local_transformer_audio_out_projection(local_transformer_output[:, -1, :])
             codebook_logits = self.local_transformer_out_projections[codebook_num](lt_out_for_proj)
