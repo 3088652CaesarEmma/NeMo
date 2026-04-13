@@ -586,8 +586,8 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
             else:
                 full_translation_to_output += " " + non_fixed_part_translated
 
-        prev_tokens = self._tokenize_text(full_translation_to_output)
-        curr_tokens = self._tokenize_text(self.prev_partial_translation)
+        curr_tokens = self._tokenize_text(full_translation_to_output)
+        prev_tokens = self._tokenize_text(self.prev_partial_translation)
         common_prefix_len = 0
         for i in range(min(len(prev_tokens), len(curr_tokens))):
             if prev_tokens[i] == curr_tokens[i]:
