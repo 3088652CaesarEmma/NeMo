@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 import torch
-from lhotse.cut import Cut, CutSet, MixedCut, MonoCut, MultiCut
+from lhotse.cut import Cut, CutSet, MixedCut, MultiCut
 from lhotse.dataset import AudioSamples
 from lhotse.dataset.collation import collate_vectors
 from omegaconf import DictConfig, ListConfig, open_dict
@@ -485,7 +485,7 @@ def maybe_convert_cuts_to_mono(cuts: CutSet) -> CutSet:
     for cut in cuts:
         try:
             resolved_cuts.append(cut.move_to_memory())
-        except:
+        except Exception:
             if isinstance(cut, MixedCut):
                 cut.first_non_padding_cut.recording.sources[0].channel_ids = [0, 1]
                 cut.first_non_padding_cut = MultiCut.from_dict(cut.first_non_padding_cut.to_dict())
