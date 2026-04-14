@@ -70,6 +70,16 @@ os.environ["HF_HOME"] = "/home/vbataev/hf_models"
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
 
+LANGUAGE_CODES = {
+    "en": "English",
+    "ru": "Russian",
+    "da": "Danish",
+    "it": "Italian",
+    "de": "German",
+    "zh": "Chinese",
+}
+
+
 def make_divisible_by(num, factor: int) -> int:
     """Make num divisible by factor"""
     return (num // factor) * factor
@@ -448,8 +458,8 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
 
     def get_translation(self, text: str, translation_lcp="", verbose=False):
         llm_input = self.prompt_template.format(
-            self.src_lang,
-            self.tgt_lang,
+            LANGUAGE_CODES[self.src_lang],
+            LANGUAGE_CODES[self.tgt_lang],
             src_prefix=text,
             tgt_prefix=translation_lcp,
             src_context=" ".join(self.prev_sentences_asr[-self.num_prev_sentences_for_translation :]),
