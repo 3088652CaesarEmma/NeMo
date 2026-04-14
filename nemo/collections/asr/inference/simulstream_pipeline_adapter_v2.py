@@ -568,7 +568,7 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
                 prev_batched_state=self.decoding_state,
                 multi_biasing_ids=multi_biasing_ids,
             )
-        # merge hyps with previous hyps
+        # get hyp for current chunk
         hyp_len = batched_hyps_chunk.current_lengths[0].cpu().item()
         if hyp_len:
             tokens = batched_hyps_chunk.transcript[0, :hyp_len].cpu().tolist()
@@ -579,10 +579,12 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
             timestamps = []
             text = ""
 
+        # get hypothesis from right context (temporary ASR hypothesis part)
         text_rc = ""
         tokens_rc = []
         timestamps_rc = []
         if not is_last_chunk:
+            # decode right context
             with torch.inference_mode(), torch.no_grad():
                 decoded_len = encoder_output_len_to_decode[0].item()
                 encoder_output = encoder_output[:, decoded_len:]
@@ -607,9 +609,12 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
                 text_rc = ""
 
         # logging.info(f"Text: {self.get_hyp_repr_with_temp(text, text_rc)}")
+        # add fixed part to accumulated ASR hypothesis (will not change in future)
         self.accumulated_tokens += tokens
         self.accumulated_timestamps += timestamps
 
+        # split accumulated ASR hypothesis into fixed part (complete sentence) and non-fixed (incomplete sentence)
+        # accumulated tokens should contain only non-fixed hypothesis
         accumulated_text = self.asr_model.tokenizer.ids_to_text(self.accumulated_tokens)
         if accumulated_text.endswith(".") or accumulated_text.endswith("?") or accumulated_text.endswith("!"):
             fixed_part = self.asr_model.tokenizer.ids_to_text(self.accumulated_tokens)
@@ -637,6 +642,7 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
         if fixed_part or non_fixed_part:
             prev_partial_translation_initial = self.prev_partial_translation
             if fixed_part:
+                # translate fixed part (will not be changed in future)
                 fixed_part_translated = join_texts(
                     [
                         self.prev_partial_translation_lcp,
@@ -651,6 +657,7 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
                 fixed_part_translated = ""
 
             if non_fixed_part:
+                # translate non-fixed part, can be changed in future, but keep longest common prefix (lcp)
                 non_fixed_part_translated = join_texts(
                     [
                         self.prev_partial_translation_lcp,
@@ -672,6 +679,7 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
                 non_fixed_part_translated = ""
             # logging.info(f"Translation: {self.get_hyp_repr_with_temp(fixed_part_translated, non_fixed_part_translated)}")
 
+            # delete old invalid, emit new tokens
             full_translation_to_output = join_texts([fixed_part_translated, non_fixed_part_translated])
             curr_tokens = self._tokenize_text(full_translation_to_output)
             prev_tokens = self._tokenize_text(prev_partial_translation_initial)
