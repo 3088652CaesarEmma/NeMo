@@ -244,6 +244,7 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
     per_stream_boosting_requests: list[BiasingRequestItemConfig] | None = None
     detailed_log_path: str | None = None
     use_lcp: bool = True
+    num_prev_sentences_for_translation: int = 1
 
     def __init__(self, config: SimpleNamespace):
         """
@@ -451,8 +452,8 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
             self.tgt_lang,
             src_prefix=text,
             tgt_prefix=translation_lcp,
-            src_context=" ".join(self.prev_sentences_asr[-5:]),
-            tgt_context=" ".join(self.prev_sentences_translated[-5:]),
+            src_context=" ".join(self.prev_sentences_asr[-self.num_prev_sentences_for_translation:]),
+            tgt_context=" ".join(self.prev_sentences_translated[-self.num_prev_sentences_for_translation:]),
         )
         llm_output = self.nmt_model.generate([llm_input], self.nmt_sampling_params, use_tqdm=False)
         output_text = llm_output[0].outputs[0].text
@@ -618,6 +619,7 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
                 )
 
                 if self.use_lcp and non_fixed_part_translated and self.prev_partial_translation:
+                    # update lcp
                     tokens_non_fixed = self._tokenize_text(non_fixed_part_translated)
                     tokens_previous_partial = self._tokenize_text(self.prev_partial_translation)
                     common_non_fixed_prefix_len = get_common_prefix(tokens_non_fixed, tokens_previous_partial)
