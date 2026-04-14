@@ -357,6 +357,15 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
         if cls.context_samples.chunk != cls.context_samples.right:
             raise NotImplementedError
 
+        # unified ASR model: use the att_context_size as chunk size (important for extra-low latency)
+        if cls.asr_model.cfg.encoder.att_context_style == "chunked_limited_with_rc":
+            cls.asr_model.encoder.set_default_att_context_size(
+                att_context_size=[
+                    cls.context_encoder_frames.left,
+                    cls.context_encoder_frames.chunk,
+                    cls.context_encoder_frames.right,
+                ]
+            )
         cls.detailed_log_path = getattr(config, "detailed_log_path", None)
         if cls.detailed_log_path is not None:
             # rewrite
@@ -789,6 +798,8 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
         # Finalize current stream if we've processed anything
         if not self.is_first_chunk:
             self.end_of_stream()
+
+        logging.info(f"Finished transcribing stream {self.stream_id}")
 
         # Reset for next stream
         self.stream_id += 1
