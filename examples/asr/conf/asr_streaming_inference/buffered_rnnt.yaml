@@ -157,3 +157,11 @@ metrics:
     ignore_capitalization: false                # Whether to ignore capitalization
     ignore_punctuation: false                   # Whether to ignore punctuation
     strip_punc_space: false                     # Whether to strip punctuation and space
+
+# ========================
+# Pipeline V2 Params
+# ========================
+pipeline_v2:
+  att_context_size_as_chunk: false
+  num_prev_sentences_for_translation: 5
+  use_lcp: true

@@ -358,7 +358,10 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
             raise NotImplementedError
 
         # unified ASR model: use the att_context_size as chunk size (important for extra-low latency)
-        if cls.asr_model.cfg.encoder.att_context_style == "chunked_limited_with_rc":
+        if (
+            cls.asr_model.cfg.encoder.att_context_style == "chunked_limited_with_rc"
+            and cfg.pipeline_v2.att_context_size_as_chunk
+        ):
             cls.asr_model.encoder.set_default_att_context_size(
                 att_context_size=[
                     cls.context_encoder_frames.left,
@@ -366,6 +369,9 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
                     cls.context_encoder_frames.right,
                 ]
             )
+
+        cls.num_prev_sentences_for_translation = cfg.pipeline_v2.get("num_prev_sentences_for_translation", 5)
+        cls.use_lcp = cfg.pipeline_v2.get("use_lcp", True)
         cls.detailed_log_path = getattr(config, "detailed_log_path", None)
         if cls.detailed_log_path is not None:
             # rewrite
