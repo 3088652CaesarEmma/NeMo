@@ -30,6 +30,8 @@ jobs:
         run: |
           BUILD_ARGS=$(cat << EOF
           BASE_IMAGE=$(cat requirements/manifest.json | jq -r '."ngc-pytorch"')
+          TRTLLM_REPO=$(cat requirements/manifest.json | jq -r '."vcs-dependencies"."trt-llm".repo')
+          TRTLLM_TAG=$(cat requirements/manifest.json | jq -r '."vcs-dependencies"."trt-llm".ref')
           EOF
           )
 

@@ -5,6 +5,7 @@ set -exou pipefail
 # This also defines the order in which they will be installed by --libraries "all"
 
 ALL_LIBRARIES=(
+  "trtllm"
   "vllm"
   "extra"
 )
@@ -15,8 +16,143 @@ export INSTALL_DIR=${INSTALL_DIR:-"/opt"}
 export CURR=$(pwd)
 export WHEELS_DIR=${WHEELS_DIR:-"$INSTALL_DIR/wheels"}
 export PIP=pip
+export TRTLLM_REPO=${TRTLLM_REPO:-$(cat "$CURR/requirements/manifest.json" | jq -r '."vcs-dependencies"."trt-llm".repo')}
+export TRTLLM_TAG=${TRTLLM_TAG:-$(cat "$CURR/requirements/manifest.json" | jq -r '."vcs-dependencies"."trt-llm".ref')}
+export TRTLLM_DIR="$INSTALL_DIR/TensorRT-LLM"
 export NVIDIA_PYTORCH_VERSION=${NVIDIA_PYTORCH_VERSION:-""}
 export CONDA_PREFIX=${CONDA_PREFIX:-""}
+
+trt() {
+  local mode="$1"
+  local WHEELS_DIR=$WHEELS_DIR/trt/
+  mkdir -p $WHEELS_DIR
+
+  # Skip TRT installation on macOS ARM
+  if [[ "$(uname)" == "Darwin" ]] && [[ "$(uname -m)" == "arm64" ]]; then
+    echo "Skipping TRT installation on macOS ARM"
+    return
+  fi
+
+  if [ "$(id -u)" -ne 0 ]; then
+    if ! command -v sudo &>/dev/null; then
+      echo "Not running as root and sudo is not available, skipping TRT installation"
+      return
+    fi
+  fi
+
+  if [ "$(id -u)" -eq 0 ]; then
+    # Already root, run directly
+    curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | bash
+    apt-get install git-lfs
+    git lfs install
+    apt-get clean
+  else
+    # Need to gain sudo
+    curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | sudo bash
+    sudo apt-get install git-lfs
+    git lfs install
+    sudo apt-get clean
+  fi
+
+  if [ ! -d "$TRTLLM_DIR/.git" ]; then
+    rm -rf "$TRTLLM_DIR"
+    cd $(dirname "$TRTLLM_DIR")
+    git clone ${TRTLLM_REPO}
+  fi
+
+  pushd $TRTLLM_DIR
+  git checkout -f $TRTLLM_TAG
+  git submodule update --init --recursive
+  sed -i "/torch/d" requirements.txt
+  git lfs pull
+  patch -p1 < $CURR/external/patches/trt_llm.patch
+  popd
+
+  if [[ "$mode" == "install" ]]; then
+    if [[ "${NVIDIA_PYTORCH_VERSION}" != "" ]]; then
+      cd $TRTLLM_DIR
+      set +u
+
+      bash docker/common/install_base.sh
+      bash docker/common/install_cmake.sh
+      bash docker/common/install_ccache.sh
+
+      . docker/common/install_tensorrt.sh \
+        --TRT_VER="10.10.0.31" \
+        --CUDA_VER="12.9" \
+        --CUDNN_VER="9.9.0.52-1" \
+        --NCCL_VER="2.26.5-1+cuda12.9" \
+        --CUBLAS_VER="12.9.0.13-1" \
+        --NVRTC_VER="12.9.41-1"
+      set -u
+    fi
+  fi
+}
+
+trtllm() {
+  local mode="$1"
+  local WHEELS_DIR=$WHEELS_DIR/trtllm/
+  mkdir -p $WHEELS_DIR
+
+  # Skip TRT installation on macOS ARM
+  if [[ "$(uname)" == "Darwin" ]] && [[ "$(uname -m)" == "arm64" ]]; then
+    echo "Skipping TRT installation on macOS ARM"
+    return
+  fi
+
+  if [ "$(id -u)" -ne 0 ]; then
+    if ! command -v sudo &>/dev/null; then
+      echo "Not running as root and sudo is not available, skipping TRT installation"
+      return
+    fi
+  fi
+
+  if [ "$(id -u)" -eq 0 ]; then
+    # Already root, run directly
+    curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | bash
+    apt-get install git-lfs
+    git lfs install
+    apt-get clean
+  else
+    # Need to gain sudo
+    curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | sudo bash
+    sudo apt-get install git-lfs
+    git lfs install
+    sudo apt-get clean
+  fi
+
+  if [ ! -d "$TRTLLM_DIR/.git" ]; then
+    rm -rf "$TRTLLM_DIR"
+    cd $(dirname "$TRTLLM_DIR")
+    git clone ${TRTLLM_REPO}
+  fi
+  pushd $TRTLLM_DIR
+  git checkout -f $TRTLLM_TAG
+  git submodule update --init --recursive
+  sed -i "/torch/d" requirements.txt
+  git lfs pull
+  patch -p1 < $CURR/external/patches/trt_llm.patch
+  popd
+
+  build() {
+    if [[ "${NVIDIA_PYTORCH_VERSION}" != "" ]]; then
+      # CONDA_PREFIX causes an error in trt-llm's build script
+      unset CONDA_PREFIX
+      cd $TRTLLM_DIR
+      TORCH_CXX_FLAGS="-D_GLIBCXX_USE_CXX11_ABI=1" python3 ./scripts/build_wheel.py --job_count $(nproc) --clean --trt_root /usr/local/tensorrt --dist_dir $WHEELS_DIR --python_bindings --benchmarks
+    fi
+  }
+
+  if [[ "$mode" == "build" ]]; then
+    build
+  else
+    if [ -d "$WHEELS_DIR" ] && [ -z "$(ls -A "$WHEELS_DIR")" ]; then
+      build
+    fi
+
+    pip install --no-cache-dir $WHEELS_DIR/tensorrt_llm*.whl --extra-index-url https://pypi.nvidia.com || true
+  fi
+}
 
 vllm() {
   local mode="$1"
@@ -163,6 +299,12 @@ else
 
   # Validate each library is supported
   for lib in "${LIBRARIES[@]}"; do
+    # "trt" is a valid option but not in ALL_LIBRARIES
+    # It does not get installed at the same time as the rest
+    if [[ "$lib" == "trt" ]]; then
+      continue
+    fi
+
     if [[ ! " ${ALL_LIBRARIES[@]} " =~ " ${lib} " ]]; then
       echo "Error: Unsupported library '$lib'"
       exit 1
