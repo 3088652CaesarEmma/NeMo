@@ -165,3 +165,4 @@ pipeline_v2:
   att_context_size_as_chunk: false
   num_prev_sentences_for_translation: 5
   use_lcp: true
+  from_asr_manifest: none  # manifest with timestamps to check

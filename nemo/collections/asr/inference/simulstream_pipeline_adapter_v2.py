@@ -55,6 +55,7 @@ from nemo.collections.asr.parts.submodules.rnnt_decoding import RNNTDecodingConf
 from nemo.collections.asr.parts.utils.streaming_utils import ContextSize, StreamingBatchedAudioBuffer
 from nemo.collections.asr.parts.utils.transcribe_utils import get_inference_device, get_inference_dtype, setup_model
 from nemo.utils import logging
+from nemo.collections.asr.parts.utils.manifest_utils import read_manifest
 
 try:
     from simulstream.server.speech_processors import SAMPLE_RATE, SpeechProcessor
@@ -255,6 +256,7 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
     detailed_log_path: str | None = None
     use_lcp: bool = True
     num_prev_sentences_for_translation: int = 5
+    precomputed_asr_output: list[dict[str, Any]] | None = None
 
     def __init__(self, config: SimpleNamespace):
         """
@@ -307,6 +309,8 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
         self.prev_sentences_translated = []
         self.prev_partial_translation = ""
         self.prev_partial_translation_lcp = ""
+        self.received_samples = 0
+        self.precomputed_words_index = 0
 
     def reset_stream_state(self):
         self.buffer = StreamingBatchedAudioBuffer(
@@ -324,6 +328,8 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
         self.prev_sentences_translated = []
         self.prev_partial_translation = ""
         self.prev_partial_translation_lcp = ""
+        self.received_samples = 0
+        self.precomputed_words_index = 0
 
     @classmethod
     def load_model(cls, config: SimpleNamespace):
@@ -348,6 +354,14 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
         )
         cls.nmt_sampling_params = SamplingParams(**OmegaConf.to_container(cfg.nmt.sampling_params))
         cls.prompt_template = EuroLLMTranslatorPromptTemplate()
+
+        if cfg.pipeline_v2.from_asr_manifest:
+            cls.precomputed_asr_output = []
+            manifest = read_manifest(cfg.pipeline_v2.from_asr_manifest)
+            for record in manifest:
+                cls.precomputed_asr_output.append(record["word"])
+
+        # setup ASR model
         cls.asr_model = get_asr_model(cfg.asr)
         cls.asr_device = cls.asr_model.device
         # TODO: fix chunk masking
@@ -492,25 +506,29 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
             print(f"Output: {output_text}")
         return output_text
 
-    def process_chunk(self, audio: np.ndarray) -> "IncrementalOutput":
-        """
-        Process audio chunk using NeMo's native streaming API.
+    def _next_precomputed_asr_step(self, audio: np.ndarray):
+        # time_start = self.received_samples / SAMPLE_RATE
+        time_end = (self.received_samples + len(audio)) / SAMPLE_RATE
+        words = []
+        last_timestamp = 0
+        while self.precomputed_words_index < len(self.precomputed_asr_output[self.stream_id]):
+            word = self.precomputed_asr_output[self.stream_id][self.precomputed_words_index]
+            if word["end"] > time_end:  # end - in seconds
+                break
+            words.append(word["word"])
+            last_timestamp = word["end_offset"]  # end_offset - in frames
+            self.precomputed_words_index += 1
 
-        This creates a Frame or FeatureBuffer request (depending on config) and
-        calls pipeline.transcribe_step(), which internally handles all buffering,
-        feature extraction, and decoding.
+        text = " ".join(words)
+        tokens = self.asr_model.tokenizer.text_to_ids(text)
+        # timestamps - currently not used
+        # we are using here simple heuristic of assigning the last timestamps to all tokens,
+        # since timestamps for tokens are not in manifest, unrecoverable
+        timestamps = [last_timestamp for _ in range(len(tokens))]
+        self.received_samples += len(audio)
+        return (text, tokens, timestamps), ("", [], [])
 
-        Auto-detects the last chunk by comparing chunk size to expected size.
-        If chunk is smaller than expected, it's treated as the last chunk.
-        NOTE: works only with batch size 1 (so does SimulStream).
-
-        Args:
-            audio: Audio chunk (numpy array, float32, mono, 16kHz)
-
-        Returns:
-            IncrementalOutput: Streaming results (partial/final ASR + translation)
-        """
-        # import pdb; pdb.set_trace()
+    def _next_asr_step(self, audio: np.ndarray):
         if audio.ndim > 1:
             raise ValueError("Simulstream processes only one audio at a time (batch size 1).")
 
@@ -607,7 +625,33 @@ class NeMoStreamingPipelineAdapterV2(SpeechProcessor):
                 tokens_rc = []
                 timestamps_rc = []
                 text_rc = ""
+        return (text, tokens, timestamps), (text_rc, tokens_rc, timestamps_rc)
 
+    def process_chunk(self, audio: np.ndarray) -> "IncrementalOutput":
+        """
+        Process audio chunk using NeMo's native streaming API.
+
+        This creates a Frame or FeatureBuffer request (depending on config) and
+        calls pipeline.transcribe_step(), which internally handles all buffering,
+        feature extraction, and decoding.
+
+        Auto-detects the last chunk by comparing chunk size to expected size.
+        If chunk is smaller than expected, it's treated as the last chunk.
+        NOTE: works only with batch size 1 (so does SimulStream).
+
+        Args:
+            audio: Audio chunk (numpy array, float32, mono, 16kHz)
+
+        Returns:
+            IncrementalOutput: Streaming results (partial/final ASR + translation)
+        """
+        # import pdb; pdb.set_trace()
+        if self.precomputed_asr_output is not None:
+            (text, tokens, timestamps), (text_rc, tokens_rc, timestamps_rc) = self._next_precomputed_asr_step(
+                audio=audio
+            )
+        else:
+            (text, tokens, timestamps), (text_rc, tokens_rc, timestamps_rc) = self._next_asr_step(audio=audio)
         # logging.info(f"Text: {self.get_hyp_repr_with_temp(text, text_rc)}")
         # add fixed part to accumulated ASR hypothesis (will not change in future)
         self.accumulated_tokens += tokens
