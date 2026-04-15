@@ -6,17 +6,21 @@ NEMO_CONFIG="$(realpath "$NEMO_CONFIG")"
 SRC_LANG_CODE=en
 NMT_MODEL="Qwen/Qwen3-4B-Instruct-2507"
 ASR_MODEL="/home/vbataev/code/checkpoints/asr/parakeet-unified-en-0.6b_cleaned.nemo"
+RESULTS_DIR_BASE="_checks/pipeline_v2/asr-unified-096-096/nmt-q3-4b"
 
 TGT_LANG_CODES=(de it zh)
+#TGT_LANG_CODES=(de it)
 
 for TGT_LANG_CODE in "${TGT_LANG_CODES[@]}"; do
-  RESULTS_DIR="_checks/pipeline_v2/asr-unified-096-096/nmt-q3-4b/en-${TGT_LANG_CODE}/baseline"
+  RESULTS_DIR="${RESULTS_DIR_BASE}/en-${TGT_LANG_CODE}/baseline"
   mkdir -p $RESULTS_DIR
   RESULTS_DIR="$(realpath "$RESULTS_DIR")"
 
   EVAL_CONFIG="${RESULTS_DIR}/buffered_rnnt_simulstream.yaml"
   METRICS_LOG_FILE="${RESULTS_DIR}/simulstream_output.jsonl"
   DETAILED_LOG_FILE="${RESULTS_DIR}/detailed_log.jsonl"
+
+  . .venv/bin/activate
 
   python nemo/collections/asr/inference/run_nemo_simulstream.py \
       --config "$NEMO_CONFIG" \
@@ -34,10 +38,9 @@ for TGT_LANG_CODE in "${TGT_LANG_CODES[@]}"; do
       detailed_log_path=${DETAILED_LOG_FILE} \
       asr.model_name=${ASR_MODEL} \
       nmt.model_name=${NMT_MODEL}
-
-
-  #per_stream_boosting.phrases_file=${DATA_DIR}/boosting_phrases_abstract_v1.json \
-  #per_stream_boosting.alpha=0.3 \
+#      \
+#      per_stream_boosting.phrases_file=${DATA_DIR}/boosting_phrases_abstract_v1.json \
+#      per_stream_boosting.alpha=0.3
 
   . .evaluation/bin/activate
 
