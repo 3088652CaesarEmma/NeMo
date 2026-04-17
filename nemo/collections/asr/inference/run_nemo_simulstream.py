@@ -241,6 +241,7 @@ def main():
             overrides,
             reference_manifest=args.manifest,
             output_manifest=args.output_manifest,
+            use_adapter_v2=args.use_adapter_v2,
         )
 
         simulstream_cmd = shutil.which('simulstream_inference')
