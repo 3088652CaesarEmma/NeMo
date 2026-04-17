@@ -69,6 +69,7 @@ def add_simulstream_fields(
     overrides: list = None,
     reference_manifest: str | None = None,
     output_manifest: str | None = None,
+    use_adapter_v2: bool = False,
 ) -> str:
     """
     Load NeMo config and add simulstream-required fields.
