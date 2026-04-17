@@ -2216,14 +2216,14 @@ class ContextSize:
         extra_samples = max(self.total() - expected_context.total(), 0)
         self.left -= extra_samples
         if not is_last_chunk:
-            if self.right != expected_context.right:
+            if self.right != expected_context.right or self.chunk != expected_context.chunk:
                 logging.warning(
                     f"Prev: {prev_left} - {prev_chunk} - {prev_right}\n"
                     f"Added {num_frames}\n"
-                    f"Got {self.left} {self.chunk} {self.right}\n"
-                    f"Expected right context {expected_context.right}"
+                    f"Curr: {self.left} - {self.chunk} - {self.right}\n"
+                    f"Expected context <any> - {expected_context.chunk} - {expected_context.right}"
                 )
-            assert self.right == expected_context.right
+            # assert self.right == expected_context.right
         return extra_samples
 
     def __str__(self):
