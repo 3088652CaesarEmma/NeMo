@@ -56,6 +56,8 @@ from nemo.collections.asr.parts.utils.streaming_utils import ContextSize, Stream
 from nemo.collections.asr.parts.utils.transcribe_utils import get_inference_device, get_inference_dtype, setup_model
 from nemo.utils import logging
 from nemo.collections.asr.parts.utils.manifest_utils import read_manifest
+from huggingface_hub import snapshot_download
+from huggingface_hub.errors import LocalEntryNotFoundError
 
 try:
     from simulstream.server.speech_processors import SAMPLE_RATE, SpeechProcessor
@@ -85,6 +87,15 @@ def make_divisible_by(num, factor: int) -> int:
     """Make num divisible by factor"""
     return (num // factor) * factor
 
+def get_local_model_path(repo_id):
+    try:
+        return snapshot_download(
+            repo_id=repo_id,
+            local_files_only=True,
+        )
+    except LocalEntryNotFoundError:
+        return None
+
 
 def get_llm_model(model_name: str = "Qwen/Qwen3-4B-Instruct-2507", model_params: dict[str, Any] | None = None):
     # os.environ["CUDA_VISIBLE_DEVICES"] = "0"
@@ -95,7 +106,12 @@ def get_llm_model(model_name: str = "Qwen/Qwen3-4B-Instruct-2507", model_params:
             "gpu_memory_utilization": 0.5,
             "max_model_len": 8192,
         }
-    llm = LLM(model_name, **model_params)
+    local_model_path = get_local_model_path(model_name)
+    if local_model_path:
+        logging.info(f"Found model in local path {local_model_path}, will not download")
+    else:
+        logging.info(f"Will download model from HF: {model_name}")
+    llm = LLM(local_model_path or model_name, **model_params)
     return llm
 
 
@@ -108,8 +124,10 @@ def get_asr_model(asr_cfg: DictConfig):
 
     if asr_cfg.model_name.lower().endswith(".nemo"):
         asr_cfg.model_path = asr_cfg.model_name
+        asr_cfg.pretrained_name = None
     else:
         asr_cfg.pretrained_name = asr_cfg.model_name
+        asr_cfg.model_path = None
     asr_model, model_name = setup_model(asr_cfg, map_location)
 
     model_cfg = copy.deepcopy(asr_model._cfg)
