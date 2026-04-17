@@ -215,10 +215,11 @@ echo 'Uninstalling stuff'
 ${PIP} uninstall -y nemo_toolkit sacrebleu nemo_asr nemo_nlp nemo_tts
 
 echo 'Upgrading tools'
-# wheel is installed via debian without a RECORD file in pytorch:26.03-py3, so pip
-# can't uninstall it during -U. Use --ignore-installed so pip puts a newer version
-# in the higher-priority /usr/local site-packages directory.
-${PIP} install --no-cache-dir --ignore-installed wheel
+# Some packages in pytorch:26.03-py3 are debian-installed without a RECORD file,
+# so pip cannot uninstall them during dependency resolution. Pre-install them
+# with --ignore-installed so pip places pip-managed copies in the higher-priority
+# /usr/local site-packages directory, shadowing the debian versions.
+${PIP} install --no-cache-dir --ignore-installed wheel PyYAML
 ${PIP} install -U --no-cache-dir "setuptools==76.0.0" pybind11 ${PIP}
 
 if [ "${NVIDIA_PYTORCH_VERSION}" != "" ]; then
