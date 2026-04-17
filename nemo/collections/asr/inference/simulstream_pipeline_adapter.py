@@ -113,6 +113,7 @@ class NeMoStreamingPipelineAdapter(SpeechProcessor):
     pipeline = None  # Class-level pipeline (shared across instances)
     output_manifest_path: Optional[str] = None
     wav_names: list[str] = []
+    per_stream_boosting_requests: list[BiasingRequestItemConfig] | None = None
     
     def __init__(self, config: SimpleNamespace):
         """
