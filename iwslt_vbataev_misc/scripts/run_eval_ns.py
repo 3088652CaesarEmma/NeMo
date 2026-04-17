@@ -29,7 +29,7 @@ from pathlib import Path
 from nemo_skills.pipeline.cli import wrap_arguments
 from nemo_skills.pipeline.run_cmd import run_cmd
 
-DEFAULT_CONTAINER_TAG = "893f2f9384_iwslt26"
+DEFAULT_CONTAINER_TAG = "8df994f69b_iwslt26"
 DEFAULT_NGC_REGISTRY = "nvcr.io/nvidian/ac-aiapps/nemo_vb"
 # DEFAULT_GITLAB_REGISTRY = "gitlab-master.nvidia.com/vbataev/nemo_containers"
 
@@ -72,6 +72,7 @@ def main():
     cluster = args.cluster
     left_context, chunk, right_context = 10, 0.96, 0.96
     nmt_model = "Qwen/Qwen3-4B-Instruct-2507"
+    # nmt_model = "Qwen/Qwen3.5-4B"
     asr_model = "nvidia/parakeet-unified-en-0.6b"
     exp_name = f"{args.name}--asr_unified_{left_context:.2g}_{chunk:.2g}_{right_context:.2g}--qwen3_4b--en-de--base"
 
@@ -113,6 +114,7 @@ def main():
         && printenv \
         && nvidia-smi \
         && export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True" \
+        && export PYTHONPATH="{nemo_dir}/.:\\$PYTHONPATH" \
         && mkdir -p {exp_dir} \
         && cd {exp_dir} \
         && {script_env} python {script_path} \
