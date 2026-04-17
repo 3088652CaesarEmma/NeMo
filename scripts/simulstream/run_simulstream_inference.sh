@@ -225,6 +225,7 @@ cd "$NEMO_ROOT"
 INPUT_ABS="$(realpath "$INPUT_PATH")"
 OUTPUT_DIR_ABS="$(realpath "$OUTPUT_DIR")"
 HYPOTHESIS_JSON="$OUTPUT_DIR_ABS/simulstream_output.json"
+PRED_MANIFEST_JSONL="$OUTPUT_DIR_ABS/simulstream_output_pred_manifest.jsonl"
 INFERENCE_DONE_MARKER="$OUTPUT_DIR_ABS/.simulstream_inference_done"
 
 echo "========== Run NeMo simulstream =========="
@@ -259,6 +260,7 @@ if [[ -n "$MANIFEST" ]]; then
     --src-lang "$SRC_LANG" \
     --tgt-lang "$TGT_LANG" \
     --metrics-log "$HYPOTHESIS_JSON" \
+    --output-manifest "$PRED_MANIFEST_JSONL" \
     "nmt.model_name=$LLM_MODEL" \
     "asr.model_name=$ASR_MODEL" \
     "${EXTRA_OVERRIDES[@]}"
@@ -269,12 +271,14 @@ else
     --src-lang "$SRC_LANG" \
     --tgt-lang "$TGT_LANG" \
     --metrics-log "$HYPOTHESIS_JSON" \
+    --output-manifest "$PRED_MANIFEST_JSONL" \
     "nmt.model_name=$LLM_MODEL" \
     "asr.model_name=$ASR_MODEL" \
     "${EXTRA_OVERRIDES[@]}"
 fi
 touch "$INFERENCE_DONE_MARKER"
 echo "Simulstream output written to: $HYPOTHESIS_JSON"
+echo "Prediction manifest written to: $PRED_MANIFEST_JSONL"
 
 echo ""
 echo "Done. Output directory: $OUTPUT_DIR_ABS"

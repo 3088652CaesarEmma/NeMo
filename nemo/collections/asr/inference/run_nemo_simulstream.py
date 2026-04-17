@@ -61,7 +61,15 @@ def get_latency_unit(code: str) -> str:
     return LANGUAGE_CODE_TO_LATENCY_UNIT.get(code, "word")
 
 
-def add_simulstream_fields(cfg_path: str, output_dir: str, src_lang: str = None, tgt_lang: str = None, overrides: list = None) -> str:
+def add_simulstream_fields(
+    cfg_path: str,
+    output_dir: str,
+    src_lang: str = None,
+    tgt_lang: str = None,
+    overrides: list = None,
+    reference_manifest: str | None = None,
+    output_manifest: str | None = None,
+) -> str:
     """
     Load NeMo config and add simulstream-required fields.
 
@@ -118,6 +126,10 @@ def add_simulstream_fields(cfg_path: str, output_dir: str, src_lang: str = None,
             'detokenizer_type': 'simuleval',  # For metrics evaluation
             'latency_unit': get_latency_unit(tgt_lang),  # For metrics evaluation
         })
+        if output_manifest:
+            simulstream_fields.output_manifest_file = str(Path(output_manifest).resolve())
+        if reference_manifest:
+            simulstream_fields.reference_manifest = str(Path(reference_manifest).resolve())
         
         # Merge (simulstream fields first, then original config)
         cfg = OmegaConf.merge(simulstream_fields, cfg)
@@ -178,6 +190,11 @@ def main():
         default='metrics.jsonl',
         help='Path to output metrics log file (default: metrics.jsonl)'
     )
+    parser.add_argument(
+        '--output-manifest',
+        default=None,
+        help='Path to output prediction manifest JSONL (contains pred_text/pred_translation)'
+    )
     args, unknown_args = parser.parse_known_args()
 
     # Unknown args of the form key=value are passed as config overrides
@@ -208,7 +225,13 @@ def main():
 
         metrics_log_dir = str(Path(args.metrics_log).parent)
         config_path = add_simulstream_fields(
-            args.config, metrics_log_dir, args.src_lang, args.tgt_lang, overrides
+            args.config,
+            metrics_log_dir,
+            args.src_lang,
+            args.tgt_lang,
+            overrides,
+            reference_manifest=args.manifest,
+            output_manifest=args.output_manifest,
         )
 
         simulstream_cmd = shutil.which('simulstream_inference')
