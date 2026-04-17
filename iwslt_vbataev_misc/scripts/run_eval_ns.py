@@ -29,7 +29,7 @@ from pathlib import Path
 from nemo_skills.pipeline.cli import wrap_arguments
 from nemo_skills.pipeline.run_cmd import run_cmd
 
-DEFAULT_CONTAINER_TAG = "3b3c6da8aa_iwslt26"
+DEFAULT_CONTAINER_TAG = "893f2f9384_iwslt26"
 DEFAULT_NGC_REGISTRY = "nvcr.io/nvidian/ac-aiapps/nemo_vb"
 # DEFAULT_GITLAB_REGISTRY = "gitlab-master.nvidia.com/vbataev/nemo_containers"
 
@@ -82,20 +82,28 @@ def main():
     data_dir = workspace_mnt / "iwslt26/data"
     exp_dir = workspace_mnt / f"exp/{exp_name}"
     nemo_dir = workspace_mnt / "iwslt26/nemo"
-    nemo_config = nemo_dir / "examples/asr/conf/asr_streaming_inference/buffered_rnnt.yaml"
-    EVAL_CONFIG = exp_dir / "buffered_rnnt_simulstream.yaml"
-    METRICS_LOG_FILE = exp_dir / "en-de_output.jsonl"
-    detailed_log_file = exp_dir / "detailed_log.jsonl"
-    REFERENCE_FILE = data_dir / f"mcif/raw/ref/{tgt_lang_code}.txt"
-    TRANSCRIPT_FILE = data_dir / "mcif/raw/ref/en.txt"
-    AUDIO_DEFINITION = data_dir / "mcif/raw/audio-segments.yaml"
-    wav_list = data_dir / "mcif/wav_list.txt"
-    SACREBLEU_TOKENIZER = "13a"
-    MOSES_TOKENIZER = "13a"
-    CHAR_LEVEL_FLAG = "--word_level"
 
     script_path = nemo_dir / "nemo/collections/asr/inference/run_nemo_simulstream.py"
+    nemo_config = nemo_dir / "examples/asr/conf/asr_streaming_inference/buffered_rnnt.yaml"
 
+    simulstream_out_config = exp_dir / "buffered_rnnt_simulstream.yaml"
+    simulstream_out_file = exp_dir / "en-de_output.jsonl"
+    detailed_log_file = exp_dir / "detailed_log.jsonl"
+    scoring_dir = exp_dir / "scoring"
+
+    reference_file = data_dir / f"mcif/raw/ref/{tgt_lang_code}.txt"
+    transcript_file = data_dir / "mcif/raw/ref/en.txt"
+    audio_segments = data_dir / "mcif/raw/audio-segments.yaml"
+    wav_list = data_dir / "mcif/wav_list.txt"
+
+    if tgt_lang_code == "zh":
+        sacrebleu_tokenizer = "zh"
+        moses_tokenizer = "zh"
+        omnisteval_level_flag = "--char_level"
+    else:
+        sacrebleu_tokenizer = "13a"
+        moses_tokenizer = "13a"
+        omnisteval_level_flag = "--word_level"
 
     # per_stream_boosting.phrases_file = {DATA_DIR} / boosting_phrases_v2.json \
     #         per_stream_boosting.alpha = 0.4 \
@@ -108,38 +116,36 @@ def main():
         && mkdir -p {exp_dir} \
         && cd {exp_dir} \
         && {script_env} python {script_path} \
-        --config "{nemo_config}" \
-        --wav-list {wav_list} \
-        --src-lang "en" \
-        --tgt-lang "{tgt_lang_code}" \
-        --metrics-log "{METRICS_LOG_FILE}" \
-        --use-adapter-v2 \
-        streaming.left_padding_size={left_context:.2g} \
-        streaming.chunk_size={chunk:.2g} \
-        streaming.right_padding_size={right_context:.2g} \
-        streaming.decode_temporary=true \
-        endpointing.stop_history_eou=1200 \
-        pipeline_v2.num_prev_sentences_for_translation=5 \
-        detailed_log_path={detailed_log_file} \
-        asr.model_name={asr_model} \
-        nmt.model_name={nmt_model} \
+            --config "{nemo_config}" \
+            --wav-list {wav_list} \
+            --src-lang "en" \
+            --tgt-lang "{tgt_lang_code}" \
+            --metrics-log "{simulstream_out_file}" \
+            --use-adapter-v2 \
+            streaming.left_padding_size={left_context:.2g} \
+            streaming.chunk_size={chunk:.2g} \
+            streaming.right_padding_size={right_context:.2g} \
+            streaming.decode_temporary=true \
+            endpointing.stop_history_eou=1200 \
+            pipeline_v2.num_prev_sentences_for_translation=5 \
+            detailed_log_path={detailed_log_file} \
+            asr.model_name={asr_model} \
+            nmt.model_name={nmt_model} \
         && . .evaluation/bin/activate \
         && omnisteval longform \
-            --speech_segmentation "{AUDIO_DEFINITION}" \
-            --source_sentences_file "{TRANSCRIPT_FILE}" \
-            --ref_sentences_file "{REFERENCE_FILE}" \
-            --hypothesis_file "{METRICS_LOG_FILE}" \
-            --simulstream_config_file "{EVAL_CONFIG}" \
+            --speech_segmentation "{audio_segments}" \
+            --source_sentences_file "{transcript_file}" \
+            --ref_sentences_file "{reference_file}" \
+            --hypothesis_file "{simulstream_out_file}" \
+            --simulstream_config_file "{simulstream_out_config}" \
             --hypothesis_format simulstream \
             --comet \
             --comet_model Unbabel/XCOMET-XL \
-            --lang "{MOSES_TOKENIZER}" \
-            {CHAR_LEVEL_FLAG} \
-            --bleu_tokenizer "{SACREBLEU_TOKENIZER}" \
-            --output_folder "{exp_dir /'segmentation_output'}"
+            --lang "{moses_tokenizer}" \
+            {omnisteval_level_flag} \
+            --bleu_tokenizer "{sacrebleu_tokenizer}" \
+            --output_folder "{scoring_dir}"
         """
-    # NB: create_tensorboard_logger=false since tensorboard is broken in container
-    # TODO: fix tensorboard
     cmd = clean_cmd(cmd)  # remove newline breaks, extra whitespaces
 
     image = args.image or f"{DEFAULT_NGC_REGISTRY}:{DEFAULT_CONTAINER_TAG}"
