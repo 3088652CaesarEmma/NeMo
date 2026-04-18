@@ -216,8 +216,11 @@ jobs:
         with:
           path: ${{ github.run_id }}
 
+      - name: Checkout action
+        uses: actions/checkout@v6
+
       - name: main
-        uses: NVIDIA/NeMo/.github/actions/test-template@main
+        uses: ./.github/actions/test-template
         with:
           runner: ${{ runner.name }}
           script: L0_Setup_Test_Data_And_Models
