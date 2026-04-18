@@ -46,7 +46,12 @@ RUN \
   # with stable PyPI builds when resolving transitive torch>=X.Y constraints,
   # breaking torchvision (which pins the exact NGC torch build). Pin the NV
   # stack for this install so pip keeps the pre-installed builds.
-  pip freeze --all | grep -E '^(torch|torchvision|torchaudio|triton|pytorch-triton)==' > /tmp/nv-pinned.txt
+  # `|| true` guards against grep exit 1 when no match, which would abort
+  # the heredoc under bash -e.
+  pip freeze --all | grep -E '^(torch|torchvision|torchaudio|triton|pytorch-triton)==' > /tmp/nv-pinned.txt || true
+  echo "=== Pinning NV torch stack ==="
+  cat /tmp/nv-pinned.txt
+  echo "==============================="
   PIP_CONSTRAINT=/tmp/nv-pinned.txt pip install --no-cache-dir ".[all,cu13]"
 EOF
 
