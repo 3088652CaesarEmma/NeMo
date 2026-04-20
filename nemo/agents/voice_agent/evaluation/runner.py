@@ -185,12 +185,12 @@ async def run_dynamic_evaluation(
             logger.info(f"  P95 latency: {latency_stats['p95_ms']:.1f}ms")
 
     # Save detailed results
-    results_file = os.path.join(output_dir, f"all_metrics.json")
+    results_file = os.path.join(output_dir, "all_metrics.json")
     with open(results_file, "w") as f:
         json.dump(all_results, f, indent=2)
 
     # Save CSV with latency details
-    latency_csv_file = os.path.join(output_dir, f"all_latencies.csv")
+    latency_csv_file = os.path.join(output_dir, "all_latencies.csv")
     with open(latency_csv_file, "w") as f:
         f.write("Scenario,User_Transcript,Agent_Transcript,Latency_ms\n")
         for result in all_results:
@@ -201,11 +201,11 @@ async def run_dynamic_evaluation(
                 f.write(f'"{scenario_name}","{user_text}","{agent_text}",{latency["latency_ms"]:.1f}\n')
 
     # Save summary
-    summary_file = os.path.join(output_dir, f"all_summary.txt")
+    summary_file = os.path.join(output_dir, "all_summary.txt")
     success_rate = sum(success_results) / len(success_results) if len(success_results) > 0 else 0
     all_latencies = []
     for result in all_results:
-        all_latencies.extend([l["latency_ms"] for l in result["latencies"]])
+        all_latencies.extend([lat["latency_ms"] for lat in result["latencies"]])
     all_latencies.sort()
     overall_latency_stats = {
         "count": len(all_latencies),
@@ -245,7 +245,7 @@ async def run_dynamic_evaluation(
                 f.write(f"    Max: {stats['max_ms']:.1f}ms\n")
 
         # Overall latency statistics
-        f.write(f"\n\nOverall Latency Statistics:\n")
+        f.write("\n\nOverall Latency Statistics:\n")
         f.write("-" * 80 + "\n")
         f.write(f"  Total Measurements: {overall_latency_stats['count']}\n")
         f.write(f"  Mean: {overall_latency_stats['mean_ms']:.1f}ms\n")
@@ -257,7 +257,7 @@ async def run_dynamic_evaluation(
         f.write(f"\n\nOverall Success Rate: {success_rate*100:.2f}%\n")
 
     logger.info(f"{'='*80}")
-    logger.info(f"Evaluation Complete!")
+    logger.info("Evaluation Complete!")
     logger.info(f"{'='*80}")
     logger.info(f"Overall Success Rate: {success_rate*100:.2f}%")
     logger.info(f"Overall Latency P95: {overall_latency_stats['p95_ms']:.1f}ms")
@@ -265,7 +265,7 @@ async def run_dynamic_evaluation(
     logger.info(f"Results saved to: {results_file}")
     logger.info(f"Latencies saved to: {latency_csv_file}")
     logger.info(f"Summary saved to: {summary_file}")
-    logger.info(f"\nScenario directories:")
+    logger.info("\nScenario directories:")
     for result in all_results:
         logger.info(f"  {result['scenario_name']}: {result['scenario_directory']}")
     logger.info(f"\nTotal: {len(scenarios)} scenarios, {total_turns} turns, {total_duration:.1f}s")

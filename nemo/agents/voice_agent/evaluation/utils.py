@@ -200,7 +200,8 @@ def check_if_task_success(
       - For each dictionary in the reference, there should be a dictionary in the prediction that matches it
         according to the criteria in Situation 1.
       - The order of the dictionaries in the reference/prediction is not important.
-      - All dictionaries in the reference should be matched with a dictionary in the prediction to be considered as a success.
+      - All dictionaries in the reference should be matched with a dictionary in the prediction
+        to be considered as a success.
 
     Args:
         reference: The path to the reference json file.

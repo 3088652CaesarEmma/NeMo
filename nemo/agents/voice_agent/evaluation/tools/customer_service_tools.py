@@ -99,7 +99,10 @@ class ModifyAccountTool(StandardSchemaTool):
     def __init__(self, *, shared_state: Optional[dict] = None, description: Optional[str] = None):
         super().__init__(
             description=description
-            or "Modify a customer account by updating a specific field. Use this to change plan, status, or other account details.",
+            or (
+                "Modify a customer account by updating a specific field. "
+                "Use this to change plan, status, or other account details."
+            ),
         )
         self.state = shared_state if shared_state is not None else {}
         self.state.setdefault("accounts", {})
@@ -161,7 +164,10 @@ class ResolveTicketTool(SendScenarioSummaryTool):
     ):
         super().__init__(
             description=description
-            or "Resolve the customer's issue and log the resolution. Use this after the issue has been fully resolved.",
+            or (
+                "Resolve the customer's issue and log the resolution. "
+                "Use this after the issue has been fully resolved."
+            ),
             rtvi=rtvi,
         )
         self.state = shared_state if shared_state is not None else {}
@@ -179,7 +185,10 @@ class ResolveTicketTool(SendScenarioSummaryTool):
             },
             "resolution_type": {
                 "type": "string",
-                "description": "Type of resolution applied, for example: refund, replacement, information, escalation, or account_change.",
+                "description": (
+                    "Type of resolution applied, for example: refund, replacement, "
+                    "information, escalation, or account_change."
+                ),
             },
             "resolution_details": {
                 "type": "string",

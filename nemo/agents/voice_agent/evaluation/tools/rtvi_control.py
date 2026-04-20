@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Scenario definitions contain long prose strings (personas, instructions, account data);
+# wrapping every one hurts readability without improving correctness.
+# pylint: disable=line-too-long
+# flake8: noqa: E501
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
@@ -130,10 +134,11 @@ class SendExitMessageTool(SendRTVIMessageTool):
 
     def __init__(self, rtvi: RTVIProcessor, description: Optional[str] = None):
         if description is None:
-            description = """
-            Send an "Exit" message to the orchestrator to indicate that the task is finished, and it's safe to stop the pipeline.
-            This tool should only be used when the user has no more requests and the agent has answered all the user's questions.
-            """
+            description = (
+                'Send an "Exit" message to the orchestrator to indicate that the task is finished, '
+                "and it's safe to stop the pipeline. This tool should only be used when the user "
+                "has no more requests and the agent has answered all the user's questions."
+            )
         super().__init__(description=description, rtvi=rtvi)
 
     @property

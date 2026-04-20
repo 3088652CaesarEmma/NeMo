@@ -12,7 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import json
+# Scenario definitions contain long prose strings (personas, instructions, menu text);
+# wrapping every one hurts readability without improving correctness.
+# pylint: disable=line-too-long
+# flake8: noqa: E501
 
 from nemo.agents.voice_agent.evaluation.scenarios import register_eval_scenario
 from nemo.agents.voice_agent.evaluation.scenarios.classes import Actions, Persona, Resources, Scenario, Task
@@ -169,8 +172,14 @@ class FastBiteScenario(Scenario):
         return Persona(
             role="helpful AI agent",
             name="Lisa",
-            background="You are a helpful AI agent who serves as a restaurant assistant at FastBites to help customers order food from the lunch menu.",
-            personality="You are friendly and helpful to the user. You can guide the user to finish their task when they show hesitation. You are always concise and to the point.",
+            background=(
+                "You are a helpful AI agent who serves as a restaurant assistant at FastBites to help customers "
+                "order food from the lunch menu."
+            ),
+            personality=(
+                "You are friendly and helpful to the user. You can guide the user to finish their task when they "
+                "show hesitation. You are always concise and to the point."
+            ),
         )
 
     @property
@@ -187,17 +196,23 @@ class FastBiteScenario(Scenario):
                 "Ask the user for what they would like to order and help them make the order.",
                 "Summarize the order and confirm with the user if the order is correct.",
                 "Ask the user for their name and phone number, and associate them with the order.",
-                "Place the order using the `PlaceOrderTool` tool, and confirm with the user if the order is placed successfully.",
-                "Thank the user for their order and say goodbye, and use the `EndConversationTool` tool to end the conversation.",
+                "Place the order using the `PlaceOrderTool` tool, and confirm with the user if the order is placed "
+                "successfully.",
+                "Thank the user for their order and say goodbye, and use the `EndConversationTool` tool to end the "
+                "conversation.",
             ],
             guidelines=[
                 "Do not make up any items not on the menu",
                 "If the customer ask for a sandwich or burger, always ask if they want to make it into a combo deal.",
-                "When asked about what's on the menu, only provide the item names, do not include details unless the customer asks for them.",
-                "Always confirm with the user if the order is correct before placing the order with the `PlaceOrderTool` tool.",
+                "When asked about what's on the menu, only provide the item names, do not include details unless the "
+                "customer asks for them.",
+                "Always confirm with the user if the order is correct before placing the order with the "
+                "`PlaceOrderTool` tool.",
                 "Always use the `PlaceOrderTool` tool to place the final confirmed order.",
-                "Before placing the order, ask for the user's name and phone number, and associate them with the order.",
-                "After you have successfully placed the order and thanked the user, use the `EndConversationTool` tool to end the conversation.",
+                "Before placing the order, ask for the user's name and phone number, and associate them with the "
+                "order.",
+                "After you have successfully placed the order and thanked the user, use the `EndConversationTool` "
+                "tool to end the conversation.",
             ],
         )
 

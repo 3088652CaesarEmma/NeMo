@@ -19,10 +19,18 @@ Evaluate a voice agent by having a simulated user (another voice agent) talk to 
 ```
 
 - **Two independent WebSocket bot servers.** Each runs its own Pipecat pipeline (NeMo ASR → LLM → TTS) and speaks RTVI.
-- **Bridge process.** Opens a WebSocket client to each bot, runs two threads (one per bot), and shuttles audio between them via thread-safe queues. Resamples audio at the source to match each bot's sample rate. Monitors RTVI events for transcripts, turn timing, `<final_response>` (structured result), and `<exit>` (early termination signal).
+- **Bridge process.** Opens a WebSocket client to each bot, runs two threads (one per bot), and shuttles audio between them via thread-safe queues. Resamples audio at the source to match each bot's sample rate. Monitors RTVI events for transcripts, turn timing, `<final_response>` (structured result), and `<exit>` (graceful termination signal).
 - **Control plane.** The bridge uses RTVI `update_system_prompt` (inject scenario prompts and tool configs), `reset` (clear context between scenarios), and `get_context_history` (retrieve LLM context + server logs at scenario end).
 
 ## Quick Start
+
+### 0. Install dependencies
+```bash
+cd examples/voice_agent/
+uv sync
+```
+
+Then you can activate the environment via `source .venv/bin/activate`.
 
 ### 1. Start the two bot servers
 
@@ -33,6 +41,7 @@ cd examples/voice_agent/evaluation
 export PYTHONPATH=/path/to/NeMo:$PYTHONPATH
 export SERVER_CONFIG_PATH=server_configs/user.yaml
 export WEBSOCKET_PORT=8766
+export CUDA_VISIBLE_DEVICES=0
 python bot_websocket_user.py
 ```
 
@@ -43,6 +52,7 @@ cd examples/voice_agent/evaluation
 export PYTHONPATH=/path/to/NeMo:$PYTHONPATH
 export SERVER_CONFIG_PATH=server_configs/agent.yaml
 export WEBSOCKET_PORT=8765
+export CUDA_VISIBLE_DEVICES=1
 python bot_websocket_agent.py
 ```
 

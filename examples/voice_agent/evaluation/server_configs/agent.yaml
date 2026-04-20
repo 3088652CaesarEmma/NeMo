@@ -30,7 +30,8 @@ stt:
   device: "cuda"
   att_context_size: [70,1] # left and right attention context sizes for streaming ASR
   frame_len_in_secs: 0.08  # default for FastConformer, do not change unless using other architechtures
-  ignore_eou_eob: true
+  buffer_size: 5 # 16ms * 5 = 80ms, run STT for every 80ms audio
+  ignore_eou_eob: true  # Ignore EOU prediction, only use VAD to trigger EOU
 
 diar:
   type: nemo
@@ -63,11 +64,6 @@ llm:
   ##############################
   ## Common generation config ##
   ##############################
-  # temperature: 0.7  # LLM sampling params
-  # top_k: 20  # LLM sampling params
-  # top_p: 0.8  # LLM sampling params
-  # min_p: 0.0  # LLM sampling params
-  # max_new_tokens: 256  # max num of output tokens from LLM
   temperature: 0.6  # LLM sampling params
   top_k: 20  # LLM sampling params, NO effect for vllm
   top_p: 0.95  # LLM sampling params

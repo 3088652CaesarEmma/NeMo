@@ -30,7 +30,8 @@ stt:
   device: "cuda"
   att_context_size: [70,1] # left and right attention context sizes for streaming ASR
   frame_len_in_secs: 0.08  # default for FastConformer, do not change unless using other architechtures
-  ignore_eou_eob: true  # Use VAD to detect EOU so that user doesn't interrupt agent
+  buffer_size: 5 # 16ms * 5 = 80ms, run STT for every 80ms audio
+  ignore_eou_eob: true  # Ignore EOU prediction, only use VAD to trigger EOU
 
 diar:
   type: nemo
@@ -49,7 +50,8 @@ llm:
   type: vllm  # choices in ['auto', 'hf', 'vllm'], if `auto`, it will try to use vllm and fall back to hf if vllm not available
   # model: "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16"  # model name for HF models, will be used via `AutoModelForCausalLM.from_pretrained()`
   # model: "nvidia/NVIDIA-Nemotron-Nano-9B-v2"
-  model: "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-FP8"
+  # model: "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-FP8"
+  model: "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4"
   # model: Qwen/Qwen2.5-7B-Instruct
   dtype: bfloat16  # torch.dtype for LLM
   device: "cuda"
@@ -63,11 +65,6 @@ llm:
   ##############################
   ## Common generation config ##
   ##############################
-  # temperature: 0.7  # LLM sampling params
-  # top_k: 20  # LLM sampling params
-  # top_p: 0.8  # LLM sampling params
-  # min_p: 0.0  # LLM sampling params
-  # max_new_tokens: 256  # max num of output tokens from LLM
   temperature: 0.6  # LLM sampling params
   top_k: 20  # LLM sampling params, NO effect for vllm
   top_p: 0.95  # LLM sampling params

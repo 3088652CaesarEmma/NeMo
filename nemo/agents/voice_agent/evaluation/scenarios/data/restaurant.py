@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Scenario definitions contain long prose strings (personas, instructions, menu text);
+# wrapping every one hurts readability without improving correctness.
+# pylint: disable=line-too-long
+# flake8: noqa: E501
+
 import json
 
 from nemo.agents.voice_agent.evaluation.scenarios import register_eval_scenario
@@ -244,7 +249,10 @@ class RestaurantBaseScenario(Scenario):
             role="helpful AI agent",
             name="Lisa",
             background="You are a helpful AI restaurant assistant who helps customers place food orders.",
-            personality="You are friendly and helpful to the user. You can guide the user to finish their task when they show hesitation. You are always concise and to the point.",
+            personality=(
+                "You are friendly and helpful to the user. You can guide the user to finish "
+                "their task when they show hesitation. You are always concise and to the point."
+            ),
         )
 
     @property
@@ -285,7 +293,10 @@ class PizzaPepperoni(RestaurantBaseScenario):
             role="human user",
             name="Charlie",
             background="You work as a graphic designer at a tech startup. Your phone number is 314-527-8960.",
-            personality="You are communicative and positive, with clear needs, friendly demeanor, and prompt decision-making.",
+            personality=(
+                "You are communicative and positive, with clear needs, "
+                "friendly demeanor, and prompt decision-making."
+            ),
         )
 
     @property
@@ -318,14 +329,17 @@ class PizzaPepperoni(RestaurantBaseScenario):
                 "Ask the user what they would like to order and help them make the order.",
                 "Summarize the order and confirm with the user if the order is correct.",
                 "Ask the user for their name and phone number, and associate them with the order.",
-                "Place the order using the `PlaceOrderTool` tool, and confirm with the user if the order is placed successfully.",
-                "Thank the user for their order and say goodbye, and use the `EndConversationTool` tool to end the conversation.",
+                "Place the order using the `PlaceOrderTool` tool, "
+                "and confirm with the user if the order is placed successfully.",
+                "Thank the user for their order and say goodbye, "
+                "and use the `EndConversationTool` tool to end the conversation.",
             ],
             guidelines=[
                 "Do not make up any items not on the menu.",
                 "Always use the `PlaceOrderTool` tool to place the final confirmed order.",
                 "Always confirm with the user if the order is correct before placing the order.",
-                "Use the `EndConversationTool` tool to end the conversation when the user says goodbye or has no other questions.",
+                "Use the `EndConversationTool` tool to end the conversation when "
+                "the user says goodbye or has no other questions.",
             ],
         )
 
@@ -339,7 +353,8 @@ class PizzaPepperoni(RestaurantBaseScenario):
             },
             information=[
                 "You can use the `GetMenuTool` tool to retrieve the restaurant menu.",
-                f"When placing an order, the total price should be calculated based on the unit price and quantity of the items. "
+                "When placing an order, the total price should be calculated based on the unit price "
+                "and quantity of the items. "
                 f"The expected order format is: {EXPECTED_ORDER_FORMAT}.",
             ],
         )
@@ -368,7 +383,10 @@ class PizzaVeggieCombo(RestaurantBaseScenario):
             role="human user",
             name="Diana",
             background="You are a yoga instructor who prefers vegetarian food. Your phone number is 629-381-4075.",
-            personality="You are calm, health-conscious, and polite. You know exactly what you want and communicate it clearly.",
+            personality=(
+                "You are calm, health-conscious, and polite. "
+                "You know exactly what you want and communicate it clearly."
+            ),
         )
 
     @property
@@ -401,14 +419,17 @@ class PizzaVeggieCombo(RestaurantBaseScenario):
                 "Ask the user what they would like to order and help them make the order.",
                 "Summarize the order and confirm with the user if the order is correct.",
                 "Ask the user for their name and phone number, and associate them with the order.",
-                "Place the order using the `PlaceOrderTool` tool, and confirm with the user if the order is placed successfully.",
-                "Thank the user for their order and say goodbye, and use the `EndConversationTool` tool to end the conversation.",
+                "Place the order using the `PlaceOrderTool` tool, "
+                "and confirm with the user if the order is placed successfully.",
+                "Thank the user for their order and say goodbye, "
+                "and use the `EndConversationTool` tool to end the conversation.",
             ],
             guidelines=[
                 "Do not make up any items not on the menu.",
                 "Always use the `PlaceOrderTool` tool to place the final confirmed order.",
                 "Always confirm with the user if the order is correct before placing the order.",
-                "Use the `EndConversationTool` tool to end the conversation when the user says goodbye or has no other questions.",
+                "Use the `EndConversationTool` tool to end the conversation when "
+                "the user says goodbye or has no other questions.",
             ],
         )
 
@@ -422,7 +443,8 @@ class PizzaVeggieCombo(RestaurantBaseScenario):
             },
             information=[
                 "You can use the `GetMenuTool` tool to retrieve the restaurant menu.",
-                f"When placing an order, the total price should be calculated based on the unit price and quantity of the items. "
+                "When placing an order, the total price should be calculated based on the unit price "
+                "and quantity of the items. "
                 f"The expected order format is: {EXPECTED_ORDER_FORMAT}.",
             ],
         )
@@ -450,7 +472,10 @@ class PizzaPartyOrder(RestaurantBaseScenario):
         return Persona(
             role="human user",
             name="Marcus",
-            background="You are a college student ordering pizza for a small study group. Your phone number is 847-502-9163.",
+            background=(
+                "You are a college student ordering pizza for a small study group. "
+                "Your phone number is 847-502-9163."
+            ),
             personality="You are upbeat and social, a bit chatty but decisive when it comes to food choices.",
         )
 
@@ -484,14 +509,17 @@ class PizzaPartyOrder(RestaurantBaseScenario):
                 "Ask the user what they would like to order and help them make the order.",
                 "Summarize the order and confirm with the user if the order is correct.",
                 "Ask the user for their name and phone number, and associate them with the order.",
-                "Place the order using the `PlaceOrderTool` tool, and confirm with the user if the order is placed successfully.",
-                "Thank the user for their order and say goodbye, and use the `EndConversationTool` tool to end the conversation.",
+                "Place the order using the `PlaceOrderTool` tool, "
+                "and confirm with the user if the order is placed successfully.",
+                "Thank the user for their order and say goodbye, "
+                "and use the `EndConversationTool` tool to end the conversation.",
             ],
             guidelines=[
                 "Do not make up any items not on the menu.",
                 "Always use the `PlaceOrderTool` tool to place the final confirmed order.",
                 "Always confirm with the user if the order is correct before placing the order.",
-                "Use the `EndConversationTool` tool to end the conversation when the user says goodbye or has no other questions.",
+                "Use the `EndConversationTool` tool to end the conversation when "
+                "the user says goodbye or has no other questions.",
             ],
         )
 
@@ -505,7 +533,8 @@ class PizzaPartyOrder(RestaurantBaseScenario):
             },
             information=[
                 "You can use the `GetMenuTool` tool to retrieve the restaurant menu.",
-                f"When placing an order, the total price should be calculated based on the unit price and quantity of the items. "
+                "When placing an order, the total price should be calculated based on the unit price "
+                "and quantity of the items. "
                 f"The expected order format is: {EXPECTED_ORDER_FORMAT}.",
             ],
         )
@@ -533,7 +562,9 @@ class BurgerClassic(RestaurantBaseScenario):
             role="human user",
             name="Ethan",
             background="You are a high school teacher on your lunch break. Your phone number is 736-290-5814.",
-            personality="You are straightforward and efficient. You prefer to keep things simple and don't waste time.",
+            personality=(
+                "You are straightforward and efficient. " "You prefer to keep things simple and don't waste time."
+            ),
         )
 
     @property
@@ -568,15 +599,18 @@ class BurgerClassic(RestaurantBaseScenario):
                 "Ask the user if they would like to upgrade to a combo deal.",
                 "Summarize the order and confirm with the user if the order is correct.",
                 "Ask the user for their name and phone number, and associate them with the order.",
-                "Place the order using the `PlaceOrderTool` tool, and confirm with the user if the order is placed successfully.",
-                "Thank the user for their order and say goodbye, and use the `EndConversationTool` tool to end the conversation.",
+                "Place the order using the `PlaceOrderTool` tool, "
+                "and confirm with the user if the order is placed successfully.",
+                "Thank the user for their order and say goodbye, "
+                "and use the `EndConversationTool` tool to end the conversation.",
             ],
             guidelines=[
                 "Do not make up any items not on the menu.",
                 "When a customer orders a burger, ask if they want a combo deal.",
                 "Always use the `PlaceOrderTool` tool to place the final confirmed order.",
                 "Always confirm with the user if the order is correct before placing the order.",
-                "Use the `EndConversationTool` tool to end the conversation when the user says goodbye or has no other questions.",
+                "Use the `EndConversationTool` tool to end the conversation when "
+                "the user says goodbye or has no other questions.",
             ],
         )
 
@@ -590,7 +624,8 @@ class BurgerClassic(RestaurantBaseScenario):
             },
             information=[
                 "You can use the `GetMenuTool` tool to retrieve the restaurant menu.",
-                f"When placing an order, the total price should be calculated based on the unit price and quantity of the items. "
+                "When placing an order, the total price should be calculated based on the unit price "
+                "and quantity of the items. "
                 f"The expected order format is: {EXPECTED_ORDER_FORMAT}.",
             ],
         )
@@ -617,8 +652,13 @@ class BurgerBaconCombo(RestaurantBaseScenario):
         return Persona(
             role="human user",
             name="Sophia",
-            background="You are a nurse who just finished a long shift at the hospital. Your phone number is 918-374-6205.",
-            personality="You are warm and friendly, but tired. You want a filling meal and are happy to go for a combo deal to save time.",
+            background=(
+                "You are a nurse who just finished a long shift at the hospital. " "Your phone number is 918-374-6205."
+            ),
+            personality=(
+                "You are warm and friendly, but tired. You want a filling meal "
+                "and are happy to go for a combo deal to save time."
+            ),
         )
 
     @property
@@ -653,14 +693,17 @@ class BurgerBaconCombo(RestaurantBaseScenario):
                 "If the user orders a milkshake, ask which flavor they would like.",
                 "Summarize the order and confirm with the user if the order is correct.",
                 "Ask the user for their name and phone number, and associate them with the order.",
-                "Place the order using the `PlaceOrderTool` tool, and confirm with the user if the order is placed successfully.",
-                "Thank the user for their order and say goodbye, and use the `EndConversationTool` tool to end the conversation.",
+                "Place the order using the `PlaceOrderTool` tool, "
+                "and confirm with the user if the order is placed successfully.",
+                "Thank the user for their order and say goodbye, "
+                "and use the `EndConversationTool` tool to end the conversation.",
             ],
             guidelines=[
                 "Do not make up any items not on the menu.",
                 "Always use the `PlaceOrderTool` tool to place the final confirmed order.",
                 "Always confirm with the user if the order is correct before placing the order.",
-                "Use the `EndConversationTool` tool to end the conversation when the user says goodbye or has no other questions.",
+                "Use the `EndConversationTool` tool to end the conversation when "
+                "the user says goodbye or has no other questions.",
             ],
         )
 
@@ -674,7 +717,8 @@ class BurgerBaconCombo(RestaurantBaseScenario):
             },
             information=[
                 "You can use the `GetMenuTool` tool to retrieve the restaurant menu.",
-                f"When placing an order, the total price should be calculated based on the unit price and quantity of the items. "
+                "When placing an order, the total price should be calculated based on the unit price "
+                "and quantity of the items. "
                 f"The expected order format is: {EXPECTED_ORDER_FORMAT}.",
             ],
         )
@@ -704,7 +748,9 @@ class BurgerSpicyFeast(RestaurantBaseScenario):
             role="human user",
             name="Jake",
             background="You are a firefighter who loves spicy food. Your phone number is 462-819-3057.",
-            personality="You are bold and adventurous with food. You like to order a lot and enjoy trying spicy options.",
+            personality=(
+                "You are bold and adventurous with food. " "You like to order a lot and enjoy trying spicy options."
+            ),
         )
 
     @property
@@ -726,7 +772,8 @@ class BurgerSpicyFeast(RestaurantBaseScenario):
             ],
             guidelines=[
                 "If asked about whether to get a combo deal, say 'No, I want to order the items separately.'",
-                "Do not order any items other than one spicy jalapeno burger, one french fries, one onion rings, and one lemonade.",
+                "Do not order any items other than one spicy jalapeno burger, one french fries, "
+                "one onion rings, and one lemonade.",
                 "Provide your name and phone number when asked.",
             ],
         )
@@ -740,15 +787,18 @@ class BurgerSpicyFeast(RestaurantBaseScenario):
                 "Ask the user if they would like to upgrade to a combo deal.",
                 "Summarize the order and confirm with the user if the order is correct.",
                 "Ask the user for their name and phone number, and associate them with the order.",
-                "Place the order using the `PlaceOrderTool` tool, and confirm with the user if the order is placed successfully.",
-                "Thank the user for their order and say goodbye, and use the `EndConversationTool` tool to end the conversation.",
+                "Place the order using the `PlaceOrderTool` tool, "
+                "and confirm with the user if the order is placed successfully.",
+                "Thank the user for their order and say goodbye, "
+                "and use the `EndConversationTool` tool to end the conversation.",
             ],
             guidelines=[
                 "Do not make up any items not on the menu.",
                 "When a customer orders a burger, ask if they want a combo deal.",
                 "Always use the `PlaceOrderTool` tool to place the final confirmed order.",
                 "Always confirm with the user if the order is correct before placing the order.",
-                "Use the `EndConversationTool` tool to end the conversation when the user says goodbye or has no other questions.",
+                "Use the `EndConversationTool` tool to end the conversation when "
+                "the user says goodbye or has no other questions.",
             ],
         )
 
@@ -762,7 +812,8 @@ class BurgerSpicyFeast(RestaurantBaseScenario):
             },
             information=[
                 "You can use the `GetMenuTool` tool to retrieve the restaurant menu.",
-                f"When placing an order, the total price should be calculated based on the unit price and quantity of the items. "
+                "When placing an order, the total price should be calculated based on the unit price "
+                "and quantity of the items. "
                 f"The expected order format is: {EXPECTED_ORDER_FORMAT}.",
             ],
         )
@@ -823,14 +874,17 @@ class DeliTurkeyClub(RestaurantBaseScenario):
                 "Ask the user what they would like to order and help them make the order.",
                 "Summarize the order and confirm with the user if the order is correct.",
                 "Ask the user for their name and phone number, and associate them with the order.",
-                "Place the order using the `PlaceOrderTool` tool, and confirm with the user if the order is placed successfully.",
-                "Thank the user for their order and say goodbye, and use the `EndConversationTool` tool to end the conversation.",
+                "Place the order using the `PlaceOrderTool` tool, "
+                "and confirm with the user if the order is placed successfully.",
+                "Thank the user for their order and say goodbye, "
+                "and use the `EndConversationTool` tool to end the conversation.",
             ],
             guidelines=[
                 "Do not make up any items not on the menu.",
                 "Always use the `PlaceOrderTool` tool to place the final confirmed order.",
                 "Always confirm with the user if the order is correct before placing the order.",
-                "Use the `EndConversationTool` tool to end the conversation when the user says goodbye or has no other questions.",
+                "Use the `EndConversationTool` tool to end the conversation when "
+                "the user says goodbye or has no other questions.",
             ],
         )
 
@@ -844,7 +898,8 @@ class DeliTurkeyClub(RestaurantBaseScenario):
             },
             information=[
                 "You can use the `GetMenuTool` tool to retrieve the restaurant menu.",
-                f"When placing an order, the total price should be calculated based on the unit price and quantity of the items. "
+                "When placing an order, the total price should be calculated based on the unit price "
+                "and quantity of the items. "
                 f"The expected order format is: {EXPECTED_ORDER_FORMAT}.",
             ],
         )
@@ -874,7 +929,10 @@ class DeliItalianSubLunch(RestaurantBaseScenario):
             role="human user",
             name="Tony",
             background="You are a construction worker on your lunch break. Your phone number is 273-940-8162.",
-            personality="You are direct and no-nonsense. You know exactly what you want and don't like to waste time browsing.",
+            personality=(
+                "You are direct and no-nonsense. "
+                "You know exactly what you want and don't like to waste time browsing."
+            ),
         )
 
     @property
@@ -893,7 +951,8 @@ class DeliItalianSubLunch(RestaurantBaseScenario):
                 "Provide your name and phone number when asked.",
             ],
             guidelines=[
-                "Do not order any items other than one Italian sub, one tomato soup, one potato chips, and one fresh squeezed OJ.",
+                "Do not order any items other than one Italian sub, one tomato soup, "
+                "one potato chips, and one fresh squeezed OJ.",
                 "Provide your name and phone number when asked.",
             ],
         )
@@ -906,14 +965,17 @@ class DeliItalianSubLunch(RestaurantBaseScenario):
                 "Ask the user what they would like to order and help them make the order.",
                 "Summarize the order and confirm with the user if the order is correct.",
                 "Ask the user for their name and phone number, and associate them with the order.",
-                "Place the order using the `PlaceOrderTool` tool, and confirm with the user if the order is placed successfully.",
-                "Thank the user for their order and say goodbye, and use the `EndConversationTool` tool to end the conversation.",
+                "Place the order using the `PlaceOrderTool` tool, "
+                "and confirm with the user if the order is placed successfully.",
+                "Thank the user for their order and say goodbye, "
+                "and use the `EndConversationTool` tool to end the conversation.",
             ],
             guidelines=[
                 "Do not make up any items not on the menu.",
                 "Always use the `PlaceOrderTool` tool to place the final confirmed order.",
                 "Always confirm with the user if the order is correct before placing the order.",
-                "Use the `EndConversationTool` tool to end the conversation when the user says goodbye or has no other questions.",
+                "Use the `EndConversationTool` tool to end the conversation when "
+                "the user says goodbye or has no other questions.",
             ],
         )
 
@@ -927,7 +989,8 @@ class DeliItalianSubLunch(RestaurantBaseScenario):
             },
             information=[
                 "You can use the `GetMenuTool` tool to retrieve the restaurant menu.",
-                f"When placing an order, the total price should be calculated based on the unit price and quantity of the items. "
+                "When placing an order, the total price should be calculated based on the unit price "
+                "and quantity of the items. "
                 f"The expected order format is: {EXPECTED_ORDER_FORMAT}.",
             ],
         )
@@ -977,7 +1040,8 @@ class DeliGrilledCheeseSoup(RestaurantBaseScenario):
                 "Confirm the order and ask for the total price.",
             ],
             guidelines=[
-                "Do not order any items other than one grilled cheese, one chicken noodle soup, and one bottled water.",
+                "Do not order any items other than one grilled cheese, "
+                "one chicken noodle soup, and one bottled water.",
                 "Provide your name and phone number when asked.",
             ],
         )
@@ -990,14 +1054,17 @@ class DeliGrilledCheeseSoup(RestaurantBaseScenario):
                 "Ask the user what they would like to order and help them make the order.",
                 "Summarize the order and confirm with the user if the order is correct.",
                 "Ask the user for their name and phone number, and associate them with the order.",
-                "Place the order using the `PlaceOrderTool` tool, and confirm with the user if the order is placed successfully.",
-                "Thank the user for their order and say goodbye, and use the `EndConversationTool` tool to end the conversation.",
+                "Place the order using the `PlaceOrderTool` tool, "
+                "and confirm with the user if the order is placed successfully.",
+                "Thank the user for their order and say goodbye, "
+                "and use the `EndConversationTool` tool to end the conversation.",
             ],
             guidelines=[
                 "Do not make up any items not on the menu.",
                 "Always use the `PlaceOrderTool` tool to place the final confirmed order.",
                 "Always confirm with the user if the order is correct before placing the order.",
-                "Use the `EndConversationTool` tool to end the conversation when the user says goodbye or has no other questions.",
+                "Use the `EndConversationTool` tool to end the conversation when "
+                "the user says goodbye or has no other questions.",
             ],
         )
 
@@ -1011,7 +1078,8 @@ class DeliGrilledCheeseSoup(RestaurantBaseScenario):
             },
             information=[
                 "You can use the `GetMenuTool` tool to retrieve the restaurant menu.",
-                f"When placing an order, the total price should be calculated based on the unit price and quantity of the items. "
+                "When placing an order, the total price should be calculated based on the unit price "
+                "and quantity of the items. "
                 f"The expected order format is: {EXPECTED_ORDER_FORMAT}.",
             ],
         )
@@ -1039,7 +1107,10 @@ class BurgerVeggieMilkshake(RestaurantBaseScenario):
             role="human user",
             name="Priya",
             background="You are a software engineer who follows a vegetarian diet. Your phone number is 350-816-2947.",
-            personality="You are friendly and inquisitive. You like to confirm details and make sure you understand the options before ordering.",
+            personality=(
+                "You are friendly and inquisitive. You like to confirm details "
+                "and make sure you understand the options before ordering."
+            ),
         )
 
     @property
@@ -1074,14 +1145,17 @@ class BurgerVeggieMilkshake(RestaurantBaseScenario):
                 "If the user orders a milkshake, ask which flavor they would like.",
                 "Summarize the order and confirm with the user if the order is correct.",
                 "Ask the user for their name and phone number, and associate them with the order.",
-                "Place the order using the `PlaceOrderTool` tool, and confirm with the user if the order is placed successfully.",
-                "Thank the user for their order and say goodbye, and use the `EndConversationTool` tool to end the conversation.",
+                "Place the order using the `PlaceOrderTool` tool, "
+                "and confirm with the user if the order is placed successfully.",
+                "Thank the user for their order and say goodbye, "
+                "and use the `EndConversationTool` tool to end the conversation.",
             ],
             guidelines=[
                 "Do not make up any items not on the menu.",
                 "Always use the `PlaceOrderTool` tool to place the final confirmed order.",
                 "Always confirm with the user if the order is correct before placing the order.",
-                "Use the `EndConversationTool` tool to end the conversation when the user says goodbye or has no other questions.",
+                "Use the `EndConversationTool` tool to end the conversation when "
+                "the user says goodbye or has no other questions.",
             ],
         )
 
@@ -1095,7 +1169,8 @@ class BurgerVeggieMilkshake(RestaurantBaseScenario):
             },
             information=[
                 "You can use the `GetMenuTool` tool to retrieve the restaurant menu.",
-                f"When placing an order, the total price should be calculated based on the unit price and quantity of the items. "
+                "When placing an order, the total price should be calculated based on the unit price "
+                "and quantity of the items. "
                 f"The expected order format is: {EXPECTED_ORDER_FORMAT}.",
             ],
         )
@@ -1158,14 +1233,21 @@ class WaitlistJoinThenDrop(RestaurantBaseScenario):
         return Persona(
             role="human user",
             name="Sam",
-            background="You are a software engineer. Your phone number is 483-926-1057. You are here with a friend, so your party size is 2. You are hungry but impatient.",
+            background=(
+                "You are a software engineer. Your phone number is 483-926-1057. "
+                "You are here with a friend, so your party size is 2. "
+                "You are hungry but impatient."
+            ),
             personality="You are friendly but practical. You don't like waiting too long for a table.",
         )
 
     @property
     def user_task(self) -> Task:
         return Task(
-            goal="Join the waitlist at the restaurant, then decide to leave when you find out how many people are ahead of you.",
+            goal=(
+                "Join the waitlist at the restaurant, then decide to leave "
+                "when you find out how many people are ahead of you."
+            ),
             background="You arrived at a popular restaurant called Pizza Palace and it's very busy.",
         )
 
@@ -1176,7 +1258,8 @@ class WaitlistJoinThenDrop(RestaurantBaseScenario):
                 "Tell the agent you'd like to join the waitlist.",
                 "Provide your name and phone number when asked.",
                 "After joining, ask how many people are ahead of you on the waitlist.",
-                "When you hear there are many people ahead of you, say that's too long and ask to be removed from the waitlist.",
+                "When you hear there are many people ahead of you, "
+                "say that's too long and ask to be removed from the waitlist.",
                 "After being removed, thank the agent and say goodbye.",
             ],
             guidelines=[
@@ -1207,9 +1290,11 @@ class WaitlistJoinThenDrop(RestaurantBaseScenario):
                 "Greet the customer by saying 'Welcome to Pizza Palace! I'm Lisa, the host. How can I help you?'.",
                 "If the customer wants to join the waitlist, ask for their name, phone number, and party size.",
                 "Use the `JoinWaitListTool` to add them to the waitlist.",
-                "If the customer asks about the waitlist, use the `GetWaitlistTool` to check and tell them their position.",
+                "If the customer asks about the waitlist, "
+                "use the `GetWaitlistTool` to check and tell them their position.",
                 "If the customer wants to leave the waitlist, use the `DropWaitListTool` to remove them.",
-                "After the customer's request is handled and they say goodbye, use the `EndConversationTool` to end the conversation.",
+                "After the customer's request is handled and they say goodbye, "
+                "use the `EndConversationTool` to end the conversation.",
             ],
             guidelines=[
                 "Always use the `JoinWaitListTool` to add customers to the waitlist.",

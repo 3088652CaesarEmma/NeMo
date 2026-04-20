@@ -19,7 +19,13 @@ from typing import Any, Dict, List, Optional, Union
 
 from nemo.agents.voice_agent.utils.audio import NoiseConfig
 
-GENERAL_PROMPT = "Keep your responses concise and conversational since they will be spoken aloud. Avoid special characters. Use only simple, plain text sentences. Always punctuate your responses using standard sentence punctuation: commas, periods, question marks, exclamation points, etc. Always spell out numbers as words. Avoid using emojis."
+GENERAL_PROMPT = (
+    "Keep your responses concise and conversational since they will be spoken aloud. "
+    "Avoid special characters. Use only simple, plain text sentences. "
+    "Always punctuate your responses using standard sentence punctuation: "
+    "commas, periods, question marks, exclamation points, etc. "
+    "Always spell out numbers as words. Avoid using emojis."
+)
 
 
 @dataclass
@@ -30,20 +36,29 @@ class Persona:
     Attributes:
         role: The role of the persona, e.g., "human user" or "helpful AI agent".
         name: The name of the persona, e.g. "Bob", "Lisa", "Charlie", etc.
-              The name and role will be combined to a sentence like "You are a {role} named {name}." in the system prompt.
+              The name and role will be combined to a sentence like
+              "You are a {role} named {name}." in the system prompt.
         background: The background of the persona, e.g.,
-            - For user: "You are a student who is studying at the university. You like to play basketball in your free time"
+            - For user: "You are a student who is studying at the university.
+              You like to play basketball in your free time"
             - For agent: "You are a helpful AI agent who can help the user with their questions and tasks."
         personality: Detailed description on the personality of the persona.
             For example:
             - For user:
               - "You are determined and straightforward, but sometime you make mistakes."
-              - "You are Passive in communication, unclearneeds, repeatedly seeks confirmation, and slow in decision-making."
+              - "You are passive in communication, unclear in needs, repeatedly seeks confirmation,
+                and slow in decision-making."
             - For agent:
-              - "You have a great sense of humor while being helpful and friendly to the user. Your responses are concise and conversational."
-              - "You are friendly and helpful to the user. You can guide the user to finish their task when they show hesitation."
-        language: The language used by the persona, e.g. "English", "Chinese", "Spanish", etc. Only used for TTS generation. If provided, the prompt will have additional information about the language.
-        accent: The accent of the persona if any, e.g. "American", "British", "Australian", etc. Only used for TTS generation. If provided, the prompt will have additional information about the accent.
+              - "You have a great sense of humor while being helpful and friendly to the user.
+                Your responses are concise and conversational."
+              - "You are friendly and helpful to the user. You can guide the user to finish
+                their task when they show hesitation."
+        language: The language used by the persona, e.g. "English", "Chinese", "Spanish", etc.
+            Only used for TTS generation. If provided, the prompt will have additional information
+            about the language.
+        accent: The accent of the persona if any, e.g. "American", "British", "Australian", etc.
+            Only used for TTS generation. If provided, the prompt will have additional information
+            about the accent.
     """
 
     role: str
@@ -54,8 +69,12 @@ class Persona:
     accent: Optional[str] = None
 
     def to_prompt_section(self) -> str:
+        """Render this persona as a prompt section."""
         lines = [f"You are a {self.role} named {self.name}."]
-        general_prompt = f"You need to stick to your designated role and complete your task by following the information below. {GENERAL_PROMPT}"
+        general_prompt = (
+            "You need to stick to your designated role and complete your task "
+            f"by following the information below. {GENERAL_PROMPT}"
+        )
         if self.background:
             lines.append(self.background)
         if self.personality:
@@ -76,9 +95,12 @@ class Resources:
     Resources configuration for the scenario.
 
     Attributes:
-        tools: A dictionary of available tools, where the key is the tool name and the value is a dictionary of tool arguments to be passed to the tool constructor.
-        documents: A dictionary of available documents, where the key is the document name and the value is a file path. The file can be read by using a `read_file` tool.
-        information: A list of additional information strings. For example, the agent will have some FAQs or other information that is relevant to the scenario.
+        tools: A dictionary of available tools, where the key is the tool name and the value is
+            a dictionary of tool arguments to be passed to the tool constructor.
+        documents: A dictionary of available documents, where the key is the document name and
+            the value is a file path. The file can be read by using a `read_file` tool.
+        information: A list of additional information strings. For example, the agent will have
+            some FAQs or other information that is relevant to the scenario.
     """
 
     tools: Dict[str, Dict[str, str]] = field(default_factory=dict)
@@ -86,6 +108,7 @@ class Resources:
     information: List[str] = field(default_factory=list)
 
     def to_prompt_section(self) -> str:
+        """Render this resource set as a prompt section."""
         sections = ["# Resources"]
         if self.documents:
             doc_list = "\n".join(f"- {name}: {path}" for name, path in self.documents.items())
@@ -95,14 +118,12 @@ class Resources:
         if self.information:
             info_list = "\n".join(f"- {info}" for info in self.information)
             sections.append(
-                f"## Additional Information\nYou can use the following information for reference:\n{info_list}"
+                "## Additional Information\n" f"You can use the following information for reference:\n{info_list}"
             )
         return "\n\n".join(sections)
 
     def to_tools_json_string(self) -> str:
-        """
-        Get the tools for the scenario in a json string.
-        """
+        """Get the tools for the scenario as a JSON string."""
         return json.dumps(self.tools) if self.tools else "{}"
 
 
@@ -116,14 +137,16 @@ class Task:
             - For user: "Order a chicken sandwich and a side salad"
             - For agent: "Help the user to order food at the restaurant."
         background: The background of the task for user/agent. For example:
-            - For user: "You are hungry and just arrived at a pizza restaurant. "
-            - For agent: "You are a restaurant assistant who wants to help the user to order food at the restaurant."
+            - For user: "You are hungry and just arrived at a pizza restaurant."
+            - For agent: "You are a restaurant assistant who wants to help the user to order food
+              at the restaurant."
     """
 
     goal: str
     background: str = field(default="")
 
     def to_prompt_section(self) -> str:
+        """Render this task as a prompt section."""
         prompt = "# Task\n\n"
         if self.background:
             prompt += self.background + "\n"
@@ -137,20 +160,22 @@ class Actions:
     Actions configuration for the scenario.
 
     Attributes:
-        instructions: An itemized list of instructions for the user/agent must follow step by step in order to complete the task.
-        For example, for a task of ordering a pizza:
+        instructions: An itemized list of instructions for the user/agent must follow step by step
+            in order to complete the task. For example, for a task of ordering a pizza:
             - For user: [
                             "Ask the agent for the available pizza options",
-                            "Order a pepperoni pizza and ask for the prize",
+                            "Order a pepperoni pizza and ask for the price",
                             "Ask the agent if extra cheese is available and add it if available",
-                            "Finish the order and ask for the prize",
+                            "Finish the order and ask for the price",
                         ]
             - For agent: [
-                            "Greet the user by saying 'welcome to the pizza restaurant! How can I help you today?'",
+                            "Greet the user by saying 'welcome to the pizza restaurant! "
+                            "How can I help you today?'",
                             "Ask the user for what they would like to order and help them make the order",
                             "Summarize the order and confirm with the user if the order is correct",
                             "Ask the user for their name and associate it with the order",
-                            "Place the order using the `PlaceOrderTool` tool, and confirm with the user if the order is placed successfully",
+                            "Place the order using the `PlaceOrderTool` tool, and confirm with the user "
+                            "if the order is placed successfully",
                             "Thank the user for their order and say goodbye",
                         ]
 
@@ -169,9 +194,13 @@ class Actions:
     guidelines: List[str] = field(default_factory=list)
 
     def to_prompt_section(self) -> str:
+        """Render these actions as a prompt section."""
         sections = ["# Actions"]
         if self.instructions:
-            header = "You must follow the following instructions step by step in the given order to complete the task, do not perform multiple instructions in a single turn:\n"
+            header = (
+                "You must follow the following instructions step by step in the given order "
+                "to complete the task, do not perform multiple instructions in a single turn:\n"
+            )
             numbered = "\n".join(f"Step {i+1}: {inst}" for i, inst in enumerate(self.instructions))
             sections.append(f"## Instructions\n{header}{numbered}")
         if self.guidelines:
@@ -206,9 +235,12 @@ class Scenario:
             description: The description of the scenario.
             max_duration: The max duration of the scenario in seconds.
             reference_answer: The reference answer for the scenario, must be able to be converted to a json string.
-            ignore_capitalization: Whether to ignore capitalization when comparing the reference answer and the final agent response.
-            ignore_punctuation: Whether to ignore punctuation when comparing the reference answer and the final agent response.
-            clean_text: Whether to clean the text when comparing the reference answer and the final agent response.
+            ignore_capitalization: Whether to ignore capitalization when comparing the reference answer
+                and the final agent response.
+            ignore_punctuation: Whether to ignore punctuation when comparing the reference answer
+                and the final agent response.
+            clean_text: Whether to clean the text when comparing the reference answer
+                and the final agent response.
         """
         if not hasattr(self, "name"):
             self.name = name
@@ -297,34 +329,42 @@ class Scenario:
 
     @property
     def user_task(self) -> Task:
+        """The Task for the simulated user. Override in subclasses."""
         raise NotImplementedError("Subclasses must implement this method to return the user task.")
 
     @property
     def agent_task(self) -> Task:
+        """The Task for the agent under test. Override in subclasses."""
         raise NotImplementedError("Subclasses must implement this method to return the agent task.")
 
     @property
     def user_resources(self) -> Resources:
+        """Resources (tools, documents, information) available to the user. Override in subclasses."""
         raise NotImplementedError("Subclasses must implement this method to return the user resources.")
 
     @property
     def agent_resources(self) -> Resources:
+        """Resources (tools, documents, information) available to the agent. Override in subclasses."""
         raise NotImplementedError("Subclasses must implement this method to return the agent resources.")
 
     @property
     def user_actions(self) -> Actions:
+        """Instructions and guidelines for the user. Override in subclasses."""
         raise NotImplementedError("Subclasses must implement this method to return the user actions.")
 
     @property
     def agent_actions(self) -> Actions:
+        """Instructions and guidelines for the agent. Override in subclasses."""
         raise NotImplementedError("Subclasses must implement this method to return the agent actions.")
 
     @property
     def user_persona(self) -> Persona:
+        """Persona for the simulated user. Override in subclasses."""
         raise NotImplementedError("Subclasses must implement this method to return the user persona.")
 
     @property
     def agent_persona(self) -> Persona:
+        """Persona for the agent under test. Override in subclasses."""
         raise NotImplementedError("Subclasses must implement this method to return the agent persona.")
 
     def save(self, output_dir: str):

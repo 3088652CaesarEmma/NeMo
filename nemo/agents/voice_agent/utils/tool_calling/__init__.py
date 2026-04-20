@@ -15,6 +15,15 @@
 from typing import List
 from nemo.agents.voice_agent.utils.tool_calling.base import StandardSchemaTool, register_schema_tools_to_llm
 
+__all__ = [
+    "StandardSchemaTool",
+    "register_schema_tools_to_llm",
+    "ALL_STANDARD_SCHEMA_TOOLS",
+    "register_standard_schema_tool",
+    "get_standard_schema_tool",
+    "list_standard_schema_tools",
+]
+
 ALL_STANDARD_SCHEMA_TOOLS = {}
 
 

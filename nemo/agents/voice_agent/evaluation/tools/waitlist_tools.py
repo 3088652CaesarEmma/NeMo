@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Scenario definitions contain long prose strings (personas, instructions, account data);
+# wrapping every one hurts readability without improving correctness.
+# pylint: disable=line-too-long
+# flake8: noqa: E501
 import json
 from typing import Any, Dict, List, Optional
 
@@ -38,7 +42,10 @@ class JoinWaitListTool(SendScenarioSummaryTool):
     ):
         super().__init__(
             description=description
-            or "Add a customer to the restaurant waitlist. Requires the customer's name, phone number, and party size.",
+            or (
+                "Add a customer to the restaurant waitlist. "
+                "Requires the customer's name, phone number, and party size."
+            ),
             rtvi=rtvi,
         )
         self.state = shared_state if shared_state is not None else {}
@@ -90,7 +97,7 @@ class JoinWaitListTool(SendScenarioSummaryTool):
 
 @register_schema_tool_for_eval
 class DropWaitListTool(SendScenarioSummaryTool):
-    """Remove a customer from the restaurant waitlist. Sends updated waitlist to evaluator via <final_response> tags."""
+    """Remove a customer from the waitlist; sends updated waitlist via <final_response> tags."""
 
     def __init__(
         self,
@@ -101,7 +108,10 @@ class DropWaitListTool(SendScenarioSummaryTool):
     ):
         super().__init__(
             description=description
-            or "Remove a customer from the restaurant waitlist by name. Use this when a customer decides to leave the waitlist.",
+            or (
+                "Remove a customer from the restaurant waitlist by name. "
+                "Use this when a customer decides to leave the waitlist."
+            ),
             rtvi=rtvi,
         )
         self.state = shared_state if shared_state is not None else {}

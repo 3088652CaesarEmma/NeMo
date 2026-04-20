@@ -135,7 +135,7 @@ class EvaluationMetrics:
                 "max_ms": 0,
             }
 
-        latencies_sorted = sorted([l.latency_ms for l in self.latencies])
+        latencies_sorted = sorted([lat.latency_ms for lat in self.latencies])
         count = len(latencies_sorted)
 
         return {
@@ -223,8 +223,10 @@ class VoiceAgentEvaluationBridge:
             output_sample_rate: Sample rate of the output
             audio_chunk_in_seconds: Duration of the audio chunk in seconds
             use_burst_mode: Whether to use burst mode, default to steady mode with fixed interval
-            burst_size_range: Range of the random burst size, used to simulate the irregular sending pattern of a browser.
-            burst_delay_ms: Delay between the frames in the random burst, used to simulate the irregular sending pattern of a browser.
+            burst_size_range: Range of the random burst size, used to simulate the irregular sending pattern
+                of a browser.
+            burst_delay_ms: Delay between the frames in the random burst, used to simulate the irregular
+                sending pattern of a browser.
             grace_period: Grace period after the main duration, used to drain the websocket
             turn_start_offset_secs: Offset added to turn start times in conversation log and segLST,
                 so that the latency by BOT_STARTED_SPEAKING event is mitigated. This is a workaround to the fact
@@ -300,7 +302,8 @@ class VoiceAgentEvaluationBridge:
         # Log burst mode configuration
         if self.use_burst_mode:
             logger.info(
-                f"Random burst mode enabled: {self.burst_size_range[0]}-{self.burst_size_range[1]} frames per burst, {self.burst_delay_ms}ms between frames"
+                f"Random burst mode enabled: {self.burst_size_range[0]}-{self.burst_size_range[1]} "
+                f"frames per burst, {self.burst_delay_ms}ms between frames"
             )
             min_pause = (self.burst_size_range[0] * self.audio_chunk_in_seconds * 1000) - (
                 (self.burst_size_range[0] - 1) * self.burst_delay_ms
@@ -902,7 +905,8 @@ class VoiceAgentEvaluationBridge:
 
                     # if has_speech:
                     #     logger.debug(
-                    #         f"[{direction}] Sent {len(audio_to_send)} bytes ({idx+1}/{burst_size}, has_speech: {has_speech})"
+                    #         f"[{direction}] Sent {len(audio_to_send)} bytes "
+                    #         f"({idx+1}/{burst_size}, has_speech: {has_speech})"
                     #     )
 
                 # Time-based scheduling: increment target time from previous burst
@@ -916,7 +920,8 @@ class VoiceAgentEvaluationBridge:
 
                 # if self.use_burst_mode:
                 #     logger.debug(
-                #         f"[{direction}] Burst complete ({burst_size} frames), waiting {wait_duration*1000:.1f}ms (target: {target_time:.3f}s)"
+                #         f"[{direction}] Burst complete ({burst_size} frames), "
+                #         f"waiting {wait_duration*1000:.1f}ms (target: {target_time:.3f}s)"
                 #     )
                 await asyncio.sleep(wait_duration)
 
@@ -1196,7 +1201,8 @@ class VoiceAgentEvaluationBridge:
             raise RuntimeError("[RUN SCENARIO] Bridge is not ready, please call `bridge.prepare_for_scenario()` first")
         if self.needs_reset:
             raise RuntimeError(
-                "Bridge needs reset before running a new scenario, please call `bridge.reset()` or `bridge.prepare_for_scenario()` first"
+                "Bridge needs reset before running a new scenario, "
+                "please call `bridge.reset()` or `bridge.prepare_for_scenario()` first"
             )
 
         logger.info(f"[RUN SCENARIO] Running scenario for {duration} seconds...")
@@ -1630,7 +1636,7 @@ class VoiceAgentEvaluationBridge:
         if print_stats:
             latency_stats = self.metrics.get_latency_stats()
             if latency_stats['count'] > 0:
-                logger.info(f"\nFinal Latency Statistics:")
+                logger.info("\nFinal Latency Statistics:")
                 logger.info(f"  Measurements: {latency_stats['count']}")
                 logger.info(f"  Mean: {latency_stats['mean_ms']:.1f}ms")
                 logger.info(f"  P50: {latency_stats['p50_ms']:.1f}ms")
@@ -1653,10 +1659,10 @@ class VoiceAgentEvaluationBridge:
             "latency_stats": latency_stats,
             "latencies": [
                 {
-                    "user_transcript": l.user_transcript,
-                    "agent_transcript": l.agent_transcript,
-                    "latency_ms": l.latency_ms,
+                    "user_transcript": lat.user_transcript,
+                    "agent_transcript": lat.agent_transcript,
+                    "latency_ms": lat.latency_ms,
                 }
-                for l in self.metrics.latencies
+                for lat in self.metrics.latencies
             ],
         }

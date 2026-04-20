@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Scenario definitions contain long prose strings (personas, instructions, account data);
+# wrapping every one hurts readability without improving correctness.
+# pylint: disable=line-too-long
+# flake8: noqa: E501
+
 import json
 
 from nemo.agents.voice_agent.evaluation.scenarios import register_eval_scenario
@@ -36,14 +41,23 @@ class CustomerServiceBaseScenario(Scenario):
         return Persona(
             role="customer service agent",
             name="Alex",
-            background="You are a customer service agent for TechCorp, a technology company that sells laptops, phones, and accessories.",
-            personality="You are patient, professional, and empathetic. You listen carefully to the customer's issue and work to resolve it efficiently.",
+            background=(
+                "You are a customer service agent for TechCorp, a technology company that sells laptops, phones, and "
+                "accessories."
+            ),
+            personality=(
+                "You are patient, professional, and empathetic. You listen carefully to the customer's issue and "
+                "work to resolve it efficiently."
+            ),
         )
 
     @property
     def agent_task(self) -> Task:
         return Task(
-            goal="Help the customer resolve their issue, log the resolution using `ResolveTicketTool`, and end the conversation using `EndConversationTool`.",
+            goal=(
+                "Help the customer resolve their issue, log the resolution using `ResolveTicketTool`, and end the "
+                "conversation using `EndConversationTool`."
+            ),
             background="You are handling incoming customer service requests for TechCorp.",
         )
 
@@ -51,11 +65,13 @@ class CustomerServiceBaseScenario(Scenario):
     def agent_actions(self) -> Actions:
         return Actions(
             instructions=[
-                "Greet the customer by saying 'Hello, thank you for contacting TechCorp support. I'm Alex, how can I help you today?'.",
+                "Greet the customer by saying 'Hello, thank you for contacting TechCorp support. "
+                "I'm Alex, how can I help you today?'.",
                 "Listen to the customer's issue and ask clarifying questions if needed.",
                 "Look up the customer's account using the `LookupAccountTool` tool if applicable.",
                 "Resolve the customer's issue and explain the resolution clearly.",
-                "Use the `ModifyAccountTool` tool to update customer account details when needed before resolving the ticket.",
+                "Use the `ModifyAccountTool` tool to update customer account details "
+                "when needed before resolving the ticket.",
                 "Use the `ResolveTicketTool` tool to log the resolution.",
                 "Thank the customer and use the `EndConversationTool` tool to end the conversation.",
             ],
@@ -63,7 +79,8 @@ class CustomerServiceBaseScenario(Scenario):
                 "Always be polite and professional.",
                 "Always use the `ResolveTicketTool` tool to log resolutions before ending the conversation.",
                 "Always use the `EndConversationTool` tool to end the conversation after the issue is resolved.",
-                "Use the `ModifyAccountTool` tool to update customer account details when needed before resolving the ticket.",
+                "Use the `ModifyAccountTool` tool to update customer account details "
+                "when needed before resolving the ticket.",
                 "Do not make promises that TechCorp cannot fulfill.",
                 "If you cannot resolve the issue, escalate it and inform the customer.",
             ],
@@ -135,7 +152,10 @@ class CustomerServiceBillingDispute(CustomerServiceBaseScenario):
     reference_answer = {
         "issue_summary": "Customer was charged $49.99 for an extended warranty they did not authorize.",
         "resolution_type": "refund",
-        "resolution_details": "Refund of $49.99 for the unauthorized extended warranty charge issued to the customer's original payment method.",
+        "resolution_details": (
+            "Refund of $49.99 for the unauthorized extended warranty charge issued to the customer's original "
+            "payment method."
+        ),
         "account_id": "TC-98765",
         "account": {
             "name": "Sarah",
@@ -154,15 +174,25 @@ class CustomerServiceBillingDispute(CustomerServiceBaseScenario):
         return Persona(
             role="customer",
             name="Sarah",
-            background="You are a graphic designer who bought a TechCorp Pro Laptop last month. Your account ID is TC-98765. You noticed an unexpected charge of $49.99 labeled 'Extended Warranty' on your latest statement that you never authorized.",
-            personality="You are frustrated but polite. You want a clear explanation and a refund for the unauthorized charge.",
+            background=(
+                "You are a graphic designer who bought a TechCorp Pro Laptop last month. Your account ID is "
+                "TC-98765. You noticed an unexpected charge of $49.99 labeled 'Extended Warranty' on your latest "
+                "statement that you never authorized."
+            ),
+            personality=(
+                "You are frustrated but polite. You want a clear explanation and a refund for the unauthorized "
+                "charge."
+            ),
         )
 
     @property
     def user_task(self) -> Task:
         return Task(
             goal="Dispute the unauthorized $49.99 extended warranty charge and get a refund.",
-            background="You checked your bank statement and found a charge from TechCorp for $49.99 that you did not authorize.",
+            background=(
+                "You checked your bank statement and found a charge from TechCorp for $49.99 that you did not "
+                "authorize."
+            ),
         )
 
     @property
@@ -227,7 +257,10 @@ class CustomerServiceOrderDelay(CustomerServiceBaseScenario):
     name = "customer_service__order_delay"
     description = "Customer contacts support to inquire about a delayed order and requests an estimated delivery date."
     reference_answer = {
-        "issue_summary": "Customer's order ORD-54321 for a TechCorp Pro Laptop is delayed and they want an updated delivery estimate.",
+        "issue_summary": (
+            "Customer's order ORD-54321 for a TechCorp Pro Laptop is delayed and they want an updated delivery "
+            "estimate."
+        ),
         "resolution_type": "information",
         "resolution_details": "Informed customer that order ORD-54321 is in transit and estimated to arrive within 2 business days.",
         "account_id": "TC-11234",
@@ -244,8 +277,15 @@ class CustomerServiceOrderDelay(CustomerServiceBaseScenario):
         return Persona(
             role="customer",
             name="Marcus",
-            background="You are a college professor who ordered a TechCorp Pro Laptop two weeks ago. Your account ID is TC-11234 and your order number is ORD-54321. The original delivery estimate was last week but you still have not received it.",
-            personality="You are concerned and want a clear answer about when your laptop will arrive. You are patient but expect accurate information.",
+            background=(
+                "You are a college professor who ordered a TechCorp Pro Laptop two weeks ago. Your account ID is "
+                "TC-11234 and your order number is ORD-54321. The original delivery estimate was last week but you "
+                "still have not received it."
+            ),
+            personality=(
+                "You are concerned and want a clear answer about when your laptop will arrive. You are patient but "
+                "expect accurate information."
+            ),
         )
 
     @property
@@ -323,7 +363,10 @@ class CustomerServiceDefectiveReplacement(CustomerServiceBaseScenario):
     reference_answer = {
         "issue_summary": "Customer received a TechCorp Pro Laptop with a cracked screen out of the box.",
         "resolution_type": "replacement",
-        "resolution_details": "Replacement TechCorp Pro Laptop to be shipped to customer within 3 to 5 business days. Customer will receive a return label for the defective unit.",
+        "resolution_details": (
+            "Replacement TechCorp Pro Laptop to be shipped to customer within 3 to 5 business days. Customer will "
+            "receive a return label for the defective unit."
+        ),
         "account_id": "TC-20456",
         "account": {
             "name": "Linda",
@@ -338,15 +381,24 @@ class CustomerServiceDefectiveReplacement(CustomerServiceBaseScenario):
         return Persona(
             role="customer",
             name="Linda",
-            background="You are a freelance photographer who bought a TechCorp Pro Laptop for photo editing. Your account ID is TC-20456 and order number is ORD-67890. When you opened the box, the screen was cracked.",
-            personality="You are disappointed but remain calm. You want a replacement, not a refund, because you need the laptop for your work.",
+            background=(
+                "You are a freelance photographer who bought a TechCorp Pro Laptop for photo editing. Your account "
+                "ID is TC-20456 and order number is ORD-67890. When you opened the box, the screen was cracked."
+            ),
+            personality=(
+                "You are disappointed but remain calm. You want a replacement, not a refund, because you need the "
+                "laptop for your work."
+            ),
         )
 
     @property
     def user_task(self) -> Task:
         return Task(
             goal="Report the defective laptop with a cracked screen and get a replacement unit.",
-            background="You just received your TechCorp Pro Laptop and discovered the screen is cracked right out of the box.",
+            background=(
+                "You just received your TechCorp Pro Laptop and discovered the screen is cracked right out of the "
+                "box."
+            ),
         )
 
     @property
@@ -416,7 +468,10 @@ class CustomerServiceDefectiveRefund(CustomerServiceBaseScenario):
     reference_answer = {
         "issue_summary": "Customer's TechCorp SmartPhone X has a battery that drains within 2 hours of a full charge.",
         "resolution_type": "refund",
-        "resolution_details": "Full refund of $899.00 for the defective TechCorp SmartPhone X. Customer will receive a return label and refund will be processed within 5 to 7 business days after the item is received.",
+        "resolution_details": (
+            "Full refund of $899.00 for the defective TechCorp SmartPhone X. Customer will receive a return label "
+            "and refund will be processed within 5 to 7 business days after the item is received."
+        ),
         "account_id": "TC-33210",
         "account": {
             "name": "James",
@@ -431,15 +486,25 @@ class CustomerServiceDefectiveRefund(CustomerServiceBaseScenario):
         return Persona(
             role="customer",
             name="James",
-            background="You are a real estate agent who relies heavily on your phone for work. Your account ID is TC-33210 and order number is ORD-11223. You bought the TechCorp SmartPhone X for $899.00 two weeks ago and the battery drains completely within 2 hours.",
-            personality="You are upset and want a refund because you have lost trust in the product. You do not want a replacement.",
+            background=(
+                "You are a real estate agent who relies heavily on your phone for work. Your account ID is TC-33210 "
+                "and order number is ORD-11223. You bought the TechCorp SmartPhone X for $899.00 two weeks ago and "
+                "the battery drains completely within 2 hours."
+            ),
+            personality=(
+                "You are upset and want a refund because you have lost trust in the product. You do not want a "
+                "replacement."
+            ),
         )
 
     @property
     def user_task(self) -> Task:
         return Task(
             goal="Report the battery defect in your TechCorp SmartPhone X and get a full refund.",
-            background="Your new phone's battery dies within 2 hours despite full charges. You have tried restarting and factory resetting but the problem persists.",
+            background=(
+                "Your new phone's battery dies within 2 hours despite full charges. You have tried restarting and "
+                "factory resetting but the problem persists."
+            ),
         )
 
     @property
@@ -509,9 +574,15 @@ class CustomerServicePlanUpgrade(CustomerServiceBaseScenario):
     name = "customer_service__plan_upgrade"
     description = "Customer contacts support to upgrade their account plan from Standard to Premium."
     reference_answer = {
-        "issue_summary": "Customer wants to upgrade their TechCorp account plan from Standard to Premium for extended warranty benefits.",
+        "issue_summary": (
+            "Customer wants to upgrade their TechCorp account plan from Standard to Premium for extended warranty "
+            "benefits."
+        ),
         "resolution_type": "account_change",
-        "resolution_details": "Customer's account TC-44567 upgraded from Standard plan to Premium plan. Monthly billing will change from $9.99 to $19.99 starting next billing cycle.",
+        "resolution_details": (
+            "Customer's account TC-44567 upgraded from Standard plan to Premium plan. Monthly billing will change "
+            "from $9.99 to $19.99 starting next billing cycle."
+        ),
         "account_id": "TC-44567",
         "account": {
             "name": "Priya",
@@ -527,7 +598,11 @@ class CustomerServicePlanUpgrade(CustomerServiceBaseScenario):
         return Persona(
             role="customer",
             name="Priya",
-            background="You are a software developer who has been a TechCorp Standard plan customer for a year. Your account ID is TC-44567. You want to upgrade to Premium because you heard it includes extended warranty and priority support.",
+            background=(
+                "You are a software developer who has been a TechCorp Standard plan customer for a year. Your "
+                "account ID is TC-44567. You want to upgrade to Premium because you heard it includes extended "
+                "warranty and priority support."
+            ),
             personality="You are friendly and decisive. You have already researched the plan options and know what you want.",
         )
 
@@ -558,16 +633,19 @@ class CustomerServicePlanUpgrade(CustomerServiceBaseScenario):
     def agent_actions(self) -> Actions:
         return Actions(
             instructions=[
-                "Greet the customer by saying 'Hello, thank you for contacting TechCorp support. I'm Alex, how can I help you today?'.",
+                "Greet the customer by saying 'Hello, thank you for contacting TechCorp support. "
+                "I'm Alex, how can I help you today?'.",
                 "Listen to the customer's issue and ask clarifying questions if needed.",
                 "Look up the customer's account using the `LookupAccountTool` tool if applicable.",
-                "Use the `ModifyAccountTool` tool to change the customer's plan to 'Premium' and monthly_rate to '$19.99'.",
+                "Use the `ModifyAccountTool` tool to change the customer's plan to 'Premium' and monthly_rate to "
+                "'$19.99'.",
                 "Use the `ResolveTicketTool` tool to log the resolution.",
                 "Thank the customer and use the `EndConversationTool` tool to end the conversation.",
             ],
             guidelines=[
                 "Always be polite and professional.",
-                "Use the `ModifyAccountTool` tool to update the customer's plan and monthly_rate before resolving the ticket.",
+                "Use the `ModifyAccountTool` tool to update the customer's plan and monthly_rate before resolving "
+                "the ticket.",
                 "Always use the `ResolveTicketTool` tool to log resolutions before ending the conversation.",
                 "Always use the `EndConversationTool` tool to end the conversation after the issue is resolved.",
                 "Do not make promises that TechCorp cannot fulfill.",
@@ -597,7 +675,8 @@ class CustomerServicePlanUpgrade(CustomerServiceBaseScenario):
             },
             information=[
                 "TechCorp Standard plan costs $9.99 per month and includes basic support.",
-                "TechCorp Premium plan costs $19.99 per month and includes extended warranty coverage and priority support.",
+                "TechCorp Premium plan costs $19.99 per month and includes extended warranty coverage and priority "
+                "support.",
                 "Plan changes take effect at the start of the next billing cycle.",
                 "Customers can upgrade or downgrade their plan at any time without penalty.",
             ],
@@ -616,7 +695,10 @@ class CustomerServiceAccountAccess(CustomerServiceBaseScenario):
     reference_answer = {
         "issue_summary": "Customer is locked out of their TechCorp online account after multiple failed login attempts.",
         "resolution_type": "information",
-        "resolution_details": "Guided customer through the account recovery process. A password reset link has been sent to the verified email address on file. Account lockout will be lifted within 15 minutes.",
+        "resolution_details": (
+            "Guided customer through the account recovery process. A password reset link has been sent to the "
+            "verified email address on file. Account lockout will be lifted within 15 minutes."
+        ),
         "account_id": "TC-55678",
         "account": {
             "name": "David",
@@ -633,8 +715,15 @@ class CustomerServiceAccountAccess(CustomerServiceBaseScenario):
         return Persona(
             role="customer",
             name="David",
-            background="You are a high school teacher. Your account ID is TC-55678. You have been trying to log in to your TechCorp account to check your order status but the account is now locked after several failed password attempts. Your email on file is david@school.edu.",
-            personality="You are anxious and a bit embarrassed about forgetting your password. You need step-by-step guidance.",
+            background=(
+                "You are a high school teacher. Your account ID is TC-55678. You have been trying to log in to your "
+                "TechCorp account to check your order status but the account is now locked after several failed "
+                "password attempts. Your email on file is david@school.edu."
+            ),
+            personality=(
+                "You are anxious and a bit embarrassed about forgetting your password. You need step-by-step "
+                "guidance."
+            ),
         )
 
     @property
@@ -664,17 +753,20 @@ class CustomerServiceAccountAccess(CustomerServiceBaseScenario):
     def agent_actions(self) -> Actions:
         return Actions(
             instructions=[
-                "Greet the customer by saying 'Hello, thank you for contacting TechCorp support. I'm Alex, how can I help you today?'.",
+                "Greet the customer by saying 'Hello, thank you for contacting TechCorp support. "
+                "I'm Alex, how can I help you today?'.",
                 "Listen to the customer's issue and ask clarifying questions if needed.",
                 "Look up the customer's account using the `LookupAccountTool` tool if applicable.",
-                "Use the `ModifyAccountTool` tool to change account_status to 'Active' and failed_login_attempts to '0'.",
+                "Use the `ModifyAccountTool` tool to change account_status to 'Active' and failed_login_attempts to "
+                "'0'.",
                 "Guide the customer through the account recovery process.",
                 "Use the `ResolveTicketTool` tool to log the resolution.",
                 "Thank the customer and use the `EndConversationTool` tool to end the conversation.",
             ],
             guidelines=[
                 "Always be polite and professional.",
-                "Use the `ModifyAccountTool` tool to unlock the account by setting account_status to 'Active' and failed_login_attempts to '0' before resolving the ticket.",
+                "Use the `ModifyAccountTool` tool to unlock the account by setting account_status to 'Active' and "
+                "failed_login_attempts to '0' before resolving the ticket.",
                 "Always use the `ResolveTicketTool` tool to log resolutions before ending the conversation.",
                 "Always use the `EndConversationTool` tool to end the conversation after the issue is resolved.",
                 "Do not make promises that TechCorp cannot fulfill.",
@@ -723,9 +815,15 @@ class CustomerServiceWarrantyClaim(CustomerServiceBaseScenario):
     name = "customer_service__warranty_claim"
     description = "Customer contacts support to file a warranty claim for a laptop with a faulty keyboard."
     reference_answer = {
-        "issue_summary": "Customer's TechCorp UltraBook keyboard has multiple non-responsive keys after 8 months of use, covered under warranty.",
+        "issue_summary": (
+            "Customer's TechCorp UltraBook keyboard has multiple non-responsive keys after 8 months of use, covered "
+            "under warranty."
+        ),
         "resolution_type": "replacement",
-        "resolution_details": "Warranty claim approved for TechCorp UltraBook. Replacement unit will be shipped within 5 to 7 business days. Customer will receive a prepaid return label for the defective unit.",
+        "resolution_details": (
+            "Warranty claim approved for TechCorp UltraBook. Replacement unit will be shipped within 5 to 7 business "
+            "days. Customer will receive a prepaid return label for the defective unit."
+        ),
         "account_id": "TC-66789",
         "account": {
             "name": "Mei",
@@ -740,15 +838,25 @@ class CustomerServiceWarrantyClaim(CustomerServiceBaseScenario):
         return Persona(
             role="customer",
             name="Mei",
-            background="You are an accountant who uses your TechCorp UltraBook daily for work. Your account ID is TC-66789. You purchased the laptop 8 months ago with order number ORD-33445. Several keys on the keyboard have stopped responding and it is affecting your productivity.",
-            personality="You are professional and matter-of-fact. You expect the warranty to cover this issue since the laptop is less than a year old.",
+            background=(
+                "You are an accountant who uses your TechCorp UltraBook daily for work. Your account ID is TC-66789. "
+                "You purchased the laptop 8 months ago with order number ORD-33445. Several keys on the keyboard "
+                "have stopped responding and it is affecting your productivity."
+            ),
+            personality=(
+                "You are professional and matter-of-fact. You expect the warranty to cover this issue since the "
+                "laptop is less than a year old."
+            ),
         )
 
     @property
     def user_task(self) -> Task:
         return Task(
             goal="File a warranty claim for your TechCorp UltraBook with a faulty keyboard and get a replacement.",
-            background="Multiple keys on your 8-month-old TechCorp UltraBook have stopped working. You believe this should be covered under warranty.",
+            background=(
+                "Multiple keys on your 8-month-old TechCorp UltraBook have stopped working. You believe this should "
+                "be covered under warranty."
+            ),
         )
 
     @property
@@ -818,9 +926,15 @@ class CustomerServiceSubscriptionCancel(CustomerServiceBaseScenario):
     name = "customer_service__subscription_cancel"
     description = "Customer contacts support to cancel their Premium subscription plan."
     reference_answer = {
-        "issue_summary": "Customer wants to cancel their TechCorp Premium subscription because they no longer need the premium features.",
+        "issue_summary": (
+            "Customer wants to cancel their TechCorp Premium subscription because they no longer need the premium "
+            "features."
+        ),
         "resolution_type": "account_change",
-        "resolution_details": "Customer's Premium subscription on account TC-77890 has been canceled. Service will remain active until the end of the current billing period. No further charges will be applied.",
+        "resolution_details": (
+            "Customer's Premium subscription on account TC-77890 has been canceled. Service will remain active until "
+            "the end of the current billing period. No further charges will be applied."
+        ),
         "account_id": "TC-77890",
         "account": {
             "name": "Carlos",
@@ -837,7 +951,11 @@ class CustomerServiceSubscriptionCancel(CustomerServiceBaseScenario):
         return Persona(
             role="customer",
             name="Carlos",
-            background="You are a retired engineer who subscribed to TechCorp Premium a year ago. Your account ID is TC-77890. You no longer need the premium features and want to cancel to save money. You are paying $19.99 per month.",
+            background=(
+                "You are a retired engineer who subscribed to TechCorp Premium a year ago. Your account ID is "
+                "TC-77890. You no longer need the premium features and want to cancel to save money. You are paying "
+                "$19.99 per month."
+            ),
             personality="You are polite but firm about canceling. You are not interested in retention offers or discounts.",
         )
 
@@ -868,16 +986,19 @@ class CustomerServiceSubscriptionCancel(CustomerServiceBaseScenario):
     def agent_actions(self) -> Actions:
         return Actions(
             instructions=[
-                "Greet the customer by saying 'Hello, thank you for contacting TechCorp support. I'm Alex, how can I help you today?'.",
+                "Greet the customer by saying 'Hello, thank you for contacting TechCorp support. "
+                "I'm Alex, how can I help you today?'.",
                 "Listen to the customer's issue and ask clarifying questions if needed.",
                 "Look up the customer's account using the `LookupAccountTool` tool if applicable.",
-                "Use the `ModifyAccountTool` tool to change the customer's plan to 'Canceled' and monthly_rate to '$0.00'.",
+                "Use the `ModifyAccountTool` tool to change the customer's plan to 'Canceled' and monthly_rate to "
+                "'$0.00'.",
                 "Use the `ResolveTicketTool` tool to log the resolution.",
                 "Thank the customer and use the `EndConversationTool` tool to end the conversation.",
             ],
             guidelines=[
                 "Always be polite and professional.",
-                "Use the `ModifyAccountTool` tool to update the customer's plan to 'Canceled' and monthly_rate to '$0.00' before resolving the ticket.",
+                "Use the `ModifyAccountTool` tool to update the customer's plan to 'Canceled' and monthly_rate to "
+                "'$0.00' before resolving the ticket.",
                 "Always use the `ResolveTicketTool` tool to log resolutions before ending the conversation.",
                 "Always use the `EndConversationTool` tool to end the conversation after the issue is resolved.",
                 "Do not make promises that TechCorp cannot fulfill.",
@@ -927,7 +1048,10 @@ class CustomerServiceWrongItem(CustomerServiceBaseScenario):
     reference_answer = {
         "issue_summary": "Customer ordered TechCorp Wireless Earbuds Pro but received TechCorp Wireless Earbuds Basic instead.",
         "resolution_type": "replacement",
-        "resolution_details": "Correct item, TechCorp Wireless Earbuds Pro, will be shipped within 2 to 3 business days. Customer will receive a prepaid return label for the incorrect item.",
+        "resolution_details": (
+            "Correct item, TechCorp Wireless Earbuds Pro, will be shipped within 2 to 3 business days. Customer will "
+            "receive a prepaid return label for the incorrect item."
+        ),
         "account_id": "TC-88901",
         "account": {
             "name": "Anika",
@@ -942,15 +1066,28 @@ class CustomerServiceWrongItem(CustomerServiceBaseScenario):
         return Persona(
             role="customer",
             name="Anika",
-            background="You are a fitness instructor who ordered TechCorp Wireless Earbuds Pro for $149.99. Your account ID is TC-88901 and order number is ORD-44556. Instead you received TechCorp Wireless Earbuds Basic which is a cheaper model.",
-            personality="You are assertive and clear about what you need. You paid for the Pro version and expect to receive it.",
+            background=(
+                "You are a fitness instructor who ordered TechCorp Wireless Earbuds Pro for $149.99. Your account ID "
+                "is TC-88901 and order number is ORD-44556. Instead you received TechCorp Wireless Earbuds Basic "
+                "which is a cheaper model."
+            ),
+            personality=(
+                "You are assertive and clear about what you need. You paid for the Pro version and expect to receive "
+                "it."
+            ),
         )
 
     @property
     def user_task(self) -> Task:
         return Task(
-            goal="Report that you received the wrong earbuds and get the correct TechCorp Wireless Earbuds Pro shipped to you.",
-            background="You opened your package and found TechCorp Wireless Earbuds Basic instead of the Pro model you ordered.",
+            goal=(
+                "Report that you received the wrong earbuds and get the correct TechCorp Wireless Earbuds Pro "
+                "shipped to you."
+            ),
+            background=(
+                "You opened your package and found TechCorp Wireless Earbuds Basic instead of the Pro model you "
+                "ordered."
+            ),
         )
 
     @property
@@ -1019,9 +1156,16 @@ class CustomerServiceOutageComplaint(CustomerServiceBaseScenario):
     name = "customer_service__service_outage"
     description = "Customer reports recurring service outages on TechCorp Cloud and demands answers and escalation."
     reference_answer = {
-        "issue_summary": "Customer is experiencing recurring outages on TechCorp Cloud affecting their business operations for the past 3 days.",
+        "issue_summary": (
+            "Customer is experiencing recurring outages on TechCorp Cloud affecting their business operations for "
+            "the past 3 days."
+        ),
         "resolution_type": "escalation",
-        "resolution_details": "Informed customer about the known service disruption being investigated by the engineering team. Ticket has been escalated to the senior engineering team for priority resolution. Customer will receive email updates every 4 hours until the issue is resolved.",
+        "resolution_details": (
+            "Informed customer about the known service disruption being investigated by the engineering team. Ticket "
+            "has been escalated to the senior engineering team for priority resolution. Customer will receive email "
+            "updates every 4 hours until the issue is resolved."
+        ),
         "account_id": "TC-99012",
         "account": {
             "name": "Tomoko",
@@ -1037,15 +1181,28 @@ class CustomerServiceOutageComplaint(CustomerServiceBaseScenario):
         return Persona(
             role="customer",
             name="Tomoko",
-            background="You are a startup founder whose business relies on TechCorp Cloud services. Your account ID is TC-99012. For the past 3 days, you have experienced repeated outages lasting 30 minutes to 2 hours each, causing significant disruption to your business.",
-            personality="You are very frustrated and demand immediate answers. You want the issue escalated to a senior engineer and expect regular updates until it is resolved.",
+            background=(
+                "You are a startup founder whose business relies on TechCorp Cloud services. Your account ID is "
+                "TC-99012. For the past 3 days, you have experienced repeated outages lasting 30 minutes to 2 hours "
+                "each, causing significant disruption to your business."
+            ),
+            personality=(
+                "You are very frustrated and demand immediate answers. You want the issue escalated to a senior "
+                "engineer and expect regular updates until it is resolved."
+            ),
         )
 
     @property
     def user_task(self) -> Task:
         return Task(
-            goal="Report the recurring TechCorp Cloud outages, get information about the cause, and have the issue escalated.",
-            background="Your business has been significantly impacted by repeated TechCorp Cloud outages over the past 3 days.",
+            goal=(
+                "Report the recurring TechCorp Cloud outages, get information about the cause, and have the issue "
+                "escalated."
+            ),
+            background=(
+                "Your business has been significantly impacted by repeated TechCorp Cloud outages over the past 3 "
+                "days."
+            ),
         )
 
     @property

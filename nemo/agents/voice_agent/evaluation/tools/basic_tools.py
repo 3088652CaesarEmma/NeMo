@@ -153,7 +153,12 @@ class PlaceOrderTool(SendScenarioSummaryTool):
         return {
             "items": {
                 "type": "list",
-                "description": "A list of items to be ordered, each item is a dictionary with the following keys: name, unit_price, and quantity. For example, [{'name': 'xxx', 'unit_price': '1.00', 'quantity': '1'}, {'name': 'yyy', 'unit_price': '2.00', 'quantity': '2'}].",
+                "description": (
+                    "A list of items to be ordered, each item is a dictionary with the following "
+                    "keys: name, unit_price, and quantity. For example, "
+                    "[{'name': 'xxx', 'unit_price': '1.00', 'quantity': '1'}, "
+                    "{'name': 'yyy', 'unit_price': '2.00', 'quantity': '2'}]."
+                ),
             },
             "customer_name": {
                 "type": "string",
@@ -220,7 +225,8 @@ class PlaceOrderTool(SendScenarioSummaryTool):
             calculated_total_price += float(item["unit_price"]) * float(item["quantity"])
         if self.auto_validate and not np.isclose(calculated_total_price, float(total_price)):
             raise ValueError(
-                f"The total price is incorrect. The calculated total price is {calculated_total_price} but the expected total price is {total_price}."
+                f"The total price is incorrect. The calculated total price is "
+                f"{calculated_total_price} but the expected total price is {total_price}."
             )
 
         order_details = {
@@ -235,7 +241,10 @@ class PlaceOrderTool(SendScenarioSummaryTool):
         await self.send_scenario_summary(order_details)
         results = {
             "success": True,
-            "message": f"The order has been placed successfully for the customer {customer_name} with the total price {total_price}.",
+            "message": (
+                f"The order has been placed successfully for the customer "
+                f"{customer_name} with the total price {total_price}."
+            ),
             "order_details": order_details,
         }
         await params.result_callback(results)

@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Scenario definitions contain long prose strings (personas, instructions);
+# wrapping every one hurts readability without improving correctness.
+# pylint: disable=line-too-long
+# flake8: noqa: E501
+
 from nemo.agents.voice_agent.evaluation.scenarios import register_eval_scenario
 from nemo.agents.voice_agent.evaluation.scenarios.classes import Actions, Persona, Resources, Scenario, Task
 
@@ -57,7 +62,8 @@ class QABaseScenario(Scenario):
             ],
             guidelines=[
                 "Only ask the designated question to the agent, do not ask any other questions.",
-                "If your question is answered, and the agent is asking if you have any other questions, say 'No, that's all I have.'",
+                "If your question is answered, and the agent is asking if you have any other questions, say 'No, "
+                "that's all I have.'",
                 "Say 'Thank you for your answer, goodbye.' after the agent has answered your question.",
             ],
         )
@@ -78,22 +84,29 @@ class QABaseScenario(Scenario):
     @property
     def agent_task(self) -> Task:
         return Task(
-            goal="Answer the questions from user, save the answer to the question using the `SaveQuestionAnswerTool` tool, and end the conversation with the `EndConversationTool` tool.",
+            goal=(
+                "Answer the questions from user, save the answer to the question using the `SaveQuestionAnswerTool` "
+                "tool, and end the conversation with the `EndConversationTool` tool."
+            ),
         )
 
     @property
     def agent_actions(self) -> Actions:
         return Actions(
             instructions=[
-                "Greet the user by saying 'Hello, I'm Lisa, what can I help you with?', say it only once at the beginning of the conversation.",
+                "Greet the user by saying 'Hello, I'm Lisa, what can I help you with?', say it only once at the "
+                "beginning of the conversation.",
                 "Answer a question from the user.",
                 "Use the `SaveQuestionAnswerTool` tool to log your answer to the user's question.",
-                "Use the `EndConversationTool` tool to end the conversation when the user says goodbye or has no more questions.",
+                "Use the `EndConversationTool` tool to end the conversation when the user says goodbye or has no "
+                "more questions.",
             ],
             guidelines=[
                 "Always answer the questions from the user.",
-                "After answering a question, use the `SaveQuestionAnswerTool` tool to log the question and your answer.",
-                "When the user says goodbye or has no more questions, use the `EndConversationTool` tool to end the conversation.",
+                "After answering a question, use the `SaveQuestionAnswerTool` tool to log the question and your "
+                "answer.",
+                "When the user says goodbye or has no more questions, use the `EndConversationTool` tool to end the "
+                "conversation.",
             ],
         )
 
