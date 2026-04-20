@@ -274,7 +274,8 @@ class NemoSTTService(STTService):
 
                 if transcription:
                     logger.debug(
-                        f"ASR inference time: {end_time - start_time} seconds, delay: {delay}, transcription: `{transcription}`"
+                        f"ASR inference time: {end_time - start_time} seconds, "
+                        f"delay: {delay}, transcription: `{transcription}`"
                     )
 
                 if self._audio_logger is not None:

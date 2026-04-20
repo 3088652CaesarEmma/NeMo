@@ -173,6 +173,7 @@ class ReasoningBudgetLogitsProcessor(LogitsProcessor):
 
     @classmethod
     def validate_params(cls, sampling_params: SamplingParams):
+        """Validate thinking-budget-related extra_args on the provided sampling params."""
         if sampling_params.extra_args is None:
             return
         budget = sampling_params.extra_args.get("thinking_budget")
@@ -189,6 +190,7 @@ class ReasoningBudgetLogitsProcessor(LogitsProcessor):
                 raise ValueError(f"{key} must be a string, got {val!r}")
 
     def is_argmax_invariant(self) -> bool:
+        """Return whether this processor preserves argmax behavior (it does not)."""
         # This processor forces specific tokens, changing the argmax outcome.
         return False
 
@@ -240,7 +242,8 @@ class ReasoningBudgetLogitsProcessor(LogitsProcessor):
         # ensure grace is not greater than the budget
         if grace > budget:
             logger.warning(
-                f"thinking_budget_grace_period={grace} is greater than the thinking_budget={budget}, setting it to thinking_budget."
+                f"thinking_budget_grace_period={grace} is greater than the "
+                f"thinking_budget={budget}, setting it to thinking_budget."
             )
             grace = budget
 
@@ -282,6 +285,7 @@ class ReasoningBudgetLogitsProcessor(LogitsProcessor):
         return state
 
     def update_state(self, batch_update: BatchUpdate | None) -> None:
+        """Sync per-request thinking state with the batch update from vLLM."""
         process_dict_updates(self.req_states, batch_update, self._new_state)
 
         if not self.req_states:
@@ -340,6 +344,7 @@ class ReasoningBudgetLogitsProcessor(LogitsProcessor):
     # ------------------------------------------------------------------
 
     def apply(self, logits: torch.Tensor) -> torch.Tensor:
+        """Modify the logits in place to force thinking-budget exits when the limit is reached."""
         if not self.req_states:
             return logits
 

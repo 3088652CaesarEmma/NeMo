@@ -527,7 +527,9 @@ class AudioStream:
                 chunk = self.resample(chunk)
                 self.output_buffer += chunk
                 # logger.debug(
-                #     f"[{self.tag}] Added {len(chunk)} bytes ({len(chunk) / 2 / self.output_sample_rate:.4f} seconds) to buffer, current buffer size: {self.current_buffer_size}"
+                #     f"[{self.tag}] Added {len(chunk)} bytes "
+                #     f"({len(chunk) / 2 / self.output_sample_rate:.4f} seconds) to buffer, "
+                #     f"current buffer size: {self.current_buffer_size}"
                 # )
                 if self._is_buffer_full() or no_wait:
                     break
@@ -557,7 +559,8 @@ class AudioStream:
 
         if not self._buffer_ready:
             # logger.debug(
-            #     f"[{self.tag}] Buffer not ready ({self.current_buffer_size}/{self.min_buffer_chunks} chunks), sending silence"
+            #     f"[{self.tag}] Buffer not ready "
+            #     f"({self.current_buffer_size}/{self.min_buffer_chunks} chunks), sending silence"
             # )
             # Return the output chunk and a boolean indicating if there's speech in the chunk
             silence_chunk = b'\x00' * self.output_chunk_bytes

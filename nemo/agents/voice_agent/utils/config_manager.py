@@ -34,7 +34,8 @@ class ConfigManager:
         Initialize the configuration manager.
 
         Args:
-            server_base_path: Path to the server base directory containing the server_configs and model_registry.yaml files.
+            server_base_path: Path to the server base directory containing the server_configs
+                and model_registry.yaml files.
             server_config_path: Path to the main server configuration file.
                         If None, uses default path from environment variable.
         """
@@ -142,7 +143,11 @@ class ConfigManager:
             if model_name in self.model_registry.stt_models:
                 yaml_file_name = self.model_registry.stt_models[model_name].yaml_id
             else:
-                message = f"STT model {model_name} is not in model registry: {self.model_registry.stt_models}, please make sure the server config ({self._server_config_path}) contains all the necessary configurations."
+                message = (
+                    f"STT model {model_name} is not in model registry: {self.model_registry.stt_models}, "
+                    f"please make sure the server config ({self._server_config_path}) "
+                    "contains all the necessary configurations."
+                )
                 logger.warning(message)
 
         if yaml_file_name is not None:
@@ -205,7 +210,8 @@ class ConfigManager:
             else:
                 logger.warning(
                     f"LLM model {llm_model_id} is not included in the model registry. "
-                    f"Please make sure the server config ({self._server_config_path}) contains all the necessary configurations."
+                    f"Please make sure the server config ({self._server_config_path}) "
+                    "contains all the necessary configurations."
                 )
 
         if yaml_file_name is not None:
@@ -267,7 +273,11 @@ class ConfigManager:
             if tts_model_id in self.model_registry.tts_models:
                 yaml_file_name = self.model_registry.tts_models[tts_model_id].yaml_id
             else:
-                message = f"TTS model {tts_model_id} is not in model registry: {self.model_registry.tts_models}, please make sure the server config ({self._server_config_path}) contains all the necessary configurations."
+                message = (
+                    f"TTS model {tts_model_id} is not in model registry: {self.model_registry.tts_models}, "
+                    f"please make sure the server config ({self._server_config_path}) "
+                    "contains all the necessary configurations."
+                )
                 logger.warning(message)
 
         if yaml_file_name is not None:

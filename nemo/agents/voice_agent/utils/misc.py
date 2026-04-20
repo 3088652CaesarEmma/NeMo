@@ -22,11 +22,14 @@ from loguru import logger
 
 
 def setup_logging(log_file: str = "bot_server.log", log_level: str = "DEBUG", rotation: str = "1 day"):
-    # Configure loguru to output to both console and file
+    """Configure loguru to emit to stderr and a rotating log file."""
     logger.remove()  # Remove default handler
     logger.add(
         sys.stderr,
-        format="<green>{time:YYYY-MM-DD HH:mm:ss.SSSS}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
+        format=(
+            "<green>{time:YYYY-MM-DD HH:mm:ss.SSSS}</green> | <level>{level: <8}</level> | "
+            "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>"
+        ),
         level=log_level,
     )
 
@@ -49,6 +52,7 @@ class FileLogger:
         return "unknown"
 
     def log(self, message: str, include_caller: bool = True):
+        """Write a timestamped line to the log file (if set) and stdout."""
         if include_caller:
             message = f"{self._get_caller_location()} | {message}"
 
@@ -60,16 +64,21 @@ class FileLogger:
         print(message, flush=True)
 
     def __call__(self, message: str, include_caller: bool = True):
+        """Allow calling the logger instance directly like a function."""
         self.log(message, include_caller=include_caller)
 
     def info(self, message: str, include_caller: bool = True):
+        """Log at INFO level."""
         self.log(f"[INFO]: {message}", include_caller=include_caller)
 
     def error(self, message: str, include_caller: bool = True):
+        """Log at ERROR level."""
         self.log(f"[ERROR]: {message}", include_caller=include_caller)
 
     def warning(self, message: str, include_caller: bool = True):
+        """Log at WARNING level."""
         self.log(f"[WARNING]: {message}", include_caller=include_caller)
 
     def debug(self, message: str, include_caller: bool = True):
+        """Log at DEBUG level."""
         self.log(f"[DEBUG]: {message}", include_caller=include_caller)

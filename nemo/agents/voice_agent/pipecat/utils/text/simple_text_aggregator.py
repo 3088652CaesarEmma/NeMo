@@ -178,7 +178,8 @@ class SimpleSegmentedTextAggregator(SimpleTextAggregator):
             punctuation_marks += [","]
             self._punctuation_marks = punctuation_marks
         logger.debug(
-            f"text aggregator initialized with punctuation marks: {self._punctuation_marks} and ignore strings: {self._ignore_marks}"
+            f"text aggregator initialized with punctuation marks: {self._punctuation_marks} "
+            f"and ignore strings: {self._ignore_marks}"
         )
 
     def _find_segment_end(self, text: str) -> Optional[int]:
