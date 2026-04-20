@@ -59,6 +59,7 @@ runs:
     - name: Noop
       shell: bash
       run: |
+        mkdir -p ${{ github.run_id }}
         chmod -R u+rwX ${{ github.run_id }}
         echo "noop"
 

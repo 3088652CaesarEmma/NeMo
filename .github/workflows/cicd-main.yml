@@ -213,11 +213,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          path: ${{ github.run_id }}
-
-      - name: Checkout action
-        uses: actions/checkout@v6
 
       - name: main
         uses: ./.github/actions/test-template
