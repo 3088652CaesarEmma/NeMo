@@ -1633,4 +1633,3 @@ class TestLhotseStringEquivalence:
             [(0, 5, "A"), (5, 8, "B"), (8, 10, "C")],
         )
         assert string_path == pytest.approx(lhotse_path)
-
