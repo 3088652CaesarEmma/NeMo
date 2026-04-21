@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import inspect
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -34,6 +35,30 @@ def setup_logging(log_file: str = "bot_server.log", log_level: str = "DEBUG", ro
     )
 
     logger.add(log_file, rotation=rotation, level=log_level)
+
+
+def setup_rotating_log(
+    log_file: str,
+    log_level: str = "DEBUG",
+    create_new_log: bool = False,
+    overwrite_existing: bool = False,
+) -> None:
+    """Roll an existing log file aside (or delete it), then call ``setup_logging``.
+
+    If ``create_new_log`` is True and the file exists, it is either removed
+    (``overwrite_existing=True``) or renamed with a timestamp suffix. Used by
+    bot server scripts that want a fresh log on every run.
+    """
+    if create_new_log and os.path.exists(log_file):
+        if overwrite_existing:
+            os.remove(log_file)
+            logger.info(f"Removed existing log file: {log_file}")
+        else:
+            new_log_file = log_file.replace(".log", f".{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+            os.rename(log_file, new_log_file)
+            logger.info(f"Renamed existing log file: {log_file} to {new_log_file}")
+
+    setup_logging(log_file=log_file, log_level=log_level)
 
 
 class FileLogger:

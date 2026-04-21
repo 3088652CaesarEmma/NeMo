@@ -84,6 +84,7 @@ By default, each scenario is scored by **strict dictionary comparison** between 
 | `--domain <name>` | Run all scenarios in a domain (matches `{domain}__*` prefix) |
 | `--list` | List all registered scenarios and exit |
 | `--list-domains` | List available domains and exit |
+| `--audio-chunk-in-seconds <seconds>` | Audio chunk in seconds for the audio stream (default: 0.016) |
 | `--duration <seconds>` | Default max duration per scenario (default: 120). Overridden by scenario's own `max_duration` if set. |
 | `--pause <seconds>` | Pause between scenarios (default: 0.5) |
 | `--output-dir <path>` | Output directory root (default: `./eval_results`) |

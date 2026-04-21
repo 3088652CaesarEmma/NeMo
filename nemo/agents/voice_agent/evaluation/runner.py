@@ -36,7 +36,8 @@ async def run_dynamic_evaluation(
     agent_url: str,
     output_dir: str,
     scenarios: List[Scenario],
-    duration_per_scenario: int = 120,
+    audio_chunk_in_seconds: float = 0.016,
+    duration_per_scenario: Optional[int] = None,
     pause_between_scenarios: float = 0.5,
     user_output_sample_rate: int = 24000,
     agent_output_sample_rate: int = 24000,
@@ -56,7 +57,8 @@ async def run_dynamic_evaluation(
         agent_url: WebSocket URL of agent being tested
         output_dir: Output directory for results
         scenarios: List of Scenario objects defining each evaluation scenario
-        duration_per_scenario: Default duration per scenario in seconds
+        audio_chunk_in_seconds: Audio chunk in seconds for the audio stream (default: 0.016)
+        duration_per_scenario: Maximum duration per scenario in seconds, which overrides the scenario's own max_duration if set.
         pause_between_scenarios: Seconds to pause between scenarios
         user_output_sample_rate: User TTS output sample rate (default: 24000)
         agent_output_sample_rate: Agent TTS output sample rate (default: 24000)
@@ -84,6 +86,7 @@ async def run_dynamic_evaluation(
         user_input_sample_rate=user_input_sample_rate,
         agent_input_sample_rate=agent_input_sample_rate,
         output_sample_rate=output_sample_rate,
+        audio_chunk_in_seconds=audio_chunk_in_seconds,
     )
 
     all_results = []
@@ -116,7 +119,7 @@ async def run_dynamic_evaluation(
         await asyncio.sleep(pause_between_scenarios)
 
         # Run scenario
-        duration = scenario.max_duration if scenario.max_duration is not None else duration_per_scenario
+        duration = duration_per_scenario if duration_per_scenario is not None else scenario.max_duration
         logger.info(f"Running scenario for {duration} seconds...")
 
         scenario_start = datetime.now()

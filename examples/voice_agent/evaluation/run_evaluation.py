@@ -86,10 +86,16 @@ Examples:
     )
     parser.add_argument("--list-domains", action="store_true", help="List all available domains and exit")
     parser.add_argument(
+        "--audio-chunk-in-seconds",
+        type=float,
+        default=0.016,
+        help="Audio chunk in seconds for the audio stream (default: 0.016)",
+    )
+    parser.add_argument(
         "--duration",
         type=int,
-        default=120,
-        help="Default duration per scenario in seconds (default: 120), only used when the scenario does not specify a duration.",
+        default=None,
+        help="Maximum duration per scenario in seconds (default: 300), which overrides the scenario's own max_duration if set.",
     )
     parser.add_argument("--pause", type=float, default=0.5, help="Pause between scenarios in seconds (default: 0.5)")
     parser.add_argument(
@@ -209,6 +215,7 @@ Examples:
                 agent_url=args.agent_url,
                 output_dir=session_dir,
                 scenarios=scenarios,
+                audio_chunk_in_seconds=args.audio_chunk_in_seconds,
                 duration_per_scenario=args.duration,
                 pause_between_scenarios=args.pause,
                 output_sample_rate=args.output_sample_rate,

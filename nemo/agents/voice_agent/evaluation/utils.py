@@ -405,8 +405,19 @@ You MUST return ONLY a JSON object in the following format, with no other text:
         """
         with open(reference, "r") as f:
             reference_content = f.read()
+            ref_json = json.loads(reference_content)
+            # if the reference is a dictionary, convert it to a list of dictionaries
+            if isinstance(ref_json, dict):
+                ref_json = [ref_json]
+            reference_content = json.dumps(ref_json)
         with open(prediction, "r") as f:
             prediction_content = f.read()
+            pred_json = json.loads(prediction_content)
+            if isinstance(pred_json, dict):
+                pred_json = [pred_json]
+            prediction_content = json.dumps(pred_json)
+        logger.debug(f"reference_content: {reference_content}")
+        logger.debug(f"prediction_content: {prediction_content}")
         return self.judge(reference_content, prediction_content, prompt)
 
     def judge_scenario(
