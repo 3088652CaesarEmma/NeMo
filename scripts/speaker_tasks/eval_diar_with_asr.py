@@ -96,8 +96,7 @@ def get_supervisions_from_rttms(rttm_file_path_list):
 
 
 def make_meta_dict(hyp_rttm_list, ref_rttm_list):
-    """Create a temporary `audio_rttm_map_dict` for evaluation
-    """
+    """Create a temporary `audio_rttm_map_dict` for evaluation"""
     meta_dict = {}
     for k, rttm_file in enumerate(ref_rttm_list):
         uniq_id = get_uniqname_from_filepath(rttm_file)
@@ -109,8 +108,7 @@ def make_meta_dict(hyp_rttm_list, ref_rttm_list):
 
 
 def make_trans_info_dict(hyp_json_list_path):
-    """Create `trans_info_dict` from the `.json` files
-    """
+    """Create `trans_info_dict` from the `.json` files"""
     trans_info_dict = {}
     for json_file in hyp_json_list_path:
         json_file = json_file.strip()
@@ -122,8 +120,7 @@ def make_trans_info_dict(hyp_json_list_path):
 
 
 def read_file_path(list_path):
-    """Read file path and strip to remove line change symbol
-    """
+    """Read file path and strip to remove line change symbol"""
     return sorted([x.strip() for x in read_file(list_path)])
 
 

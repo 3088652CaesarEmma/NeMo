@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from itertools import permutations
-from typing import Any, Dict, IO, Iterable, List, Optional, Tuple, Union
+from typing import IO, Any, Dict, Iterable, List, Optional, Tuple, Union
 
 import editdistance
 import numpy as np
@@ -332,7 +332,9 @@ def get_online_DER_stats(
 
 
 def _build_mapping_from_data(
-    ref_data: Dict, sys_data: Dict, uem_data: Optional[Dict],
+    ref_data: Dict,
+    sys_data: Dict,
+    uem_data: Optional[Dict],
 ) -> Dict[str, SpeakerMap]:
     """Build per-file optimal speaker mappings from parsed RTTM data."""
     mapping_dict: Dict[str, SpeakerMap] = {}
@@ -366,9 +368,7 @@ def _build_mapping_from_data(
                     continue
                 for rs in seg["REF"]:
                     for ss in seg["SYS"]:
-                        spkr_overlap.setdefault(rs, {})[ss] = (
-                            spkr_overlap.get(rs, {}).get(ss, 0.0) + seg["TDUR"]
-                        )
+                        spkr_overlap.setdefault(rs, {})[ss] = spkr_overlap.get(rs, {}).get(ss, 0.0) + seg["TDUR"]
             mapping_dict[file_id] = map_speakers(spkr_overlap)
     return mapping_dict
 
@@ -507,10 +507,7 @@ def score_labels(
         if ref_n_spk == hyp_n_spk:
             correct_spk_count += 1
         if verbose and ref_n_spk != hyp_n_spk:
-            logging.info(
-                f"Wrong Spk. Count with uniq_id:...{ref_key[-10:]}, "
-                f"Ref: {ref_n_spk}, Hyp: {hyp_n_spk}"
-            )
+            logging.info(f"Wrong Spk. Count with uniq_id:...{ref_key[-10:]}, " f"Ref: {ref_n_spk}, Hyp: {hyp_n_spk}")
 
         ref_dicts.append(_annotation_to_rttm_data(ref_key, ref_labels))
         sys_dicts.append(_annotation_to_rttm_data(ref_key, hyp_labels))
@@ -531,8 +528,12 @@ def score_labels(
         uem_data = _default_uem_from_ref_sys(ref_data, sys_data)
 
     all_scores, cum = evaluate(
-        ref_data, sys_data, uem_data=uem_data,
-        collar=collar, opt_1=ignore_overlap, verbose=False,
+        ref_data,
+        sys_data,
+        uem_data=uem_data,
+        collar=collar,
+        opt_1=ignore_overlap,
+        verbose=False,
     )
 
     mapping_dict = _build_mapping_from_data(ref_data, sys_data, uem_data)
@@ -542,8 +543,11 @@ def score_labels(
     spk_count_acc = correct_spk_count / len(all_reference)
 
     metric = DiarizationErrorResult(
-        all_scores=all_scores, cum=cum, mapping_dict=mapping_dict,
-        collar=collar, ignore_overlap=ignore_overlap,
+        all_scores=all_scores,
+        cum=cum,
+        mapping_dict=mapping_dict,
+        collar=collar,
+        ignore_overlap=ignore_overlap,
     )
 
     if verbose:
@@ -658,8 +662,12 @@ def score_labels_from_rttm_labels(
         uem_data = _default_uem_from_ref_sys(ref_data, sys_data)
 
     all_scores, cum = evaluate(
-        ref_data, sys_data, uem_data=uem_data,
-        collar=collar, opt_1=ignore_overlap, verbose=False,
+        ref_data,
+        sys_data,
+        uem_data=uem_data,
+        collar=collar,
+        opt_1=ignore_overlap,
+        verbose=False,
     )
 
     mapping_dict = _build_mapping_from_data(ref_data, sys_data, uem_data)
@@ -676,8 +684,11 @@ def score_labels_from_rttm_labels(
     spk_count_acc = correct_spk_count / len(ref_labels_list)
 
     metric = DiarizationErrorResult(
-        all_scores=all_scores, cum=cum, mapping_dict=mapping_dict,
-        collar=collar, ignore_overlap=ignore_overlap,
+        all_scores=all_scores,
+        cum=cum,
+        mapping_dict=mapping_dict,
+        collar=collar,
+        ignore_overlap=ignore_overlap,
     )
 
     if verbose:
