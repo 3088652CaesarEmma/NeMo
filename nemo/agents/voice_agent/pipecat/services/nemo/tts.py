@@ -287,7 +287,7 @@ class BaseNemoTTSService(TTSService, ToolCallingMixin):
             text = self._drop_special_tokens(text)
 
         logger.debug(f"{self}: Generating TTS [{text}]")
-
+        tts_start_time = asyncio.get_running_loop().time()
         try:
             await self.start_ttfb_metrics()
             yield TTSStartedFrame()
@@ -307,6 +307,7 @@ class BaseNemoTTSService(TTSService, ToolCallingMixin):
             try:
                 # Queue the TTS request for background processing
                 await self._tts_queue.put((text, request_id))
+                await self.start_tts_usage_metrics(text)
 
                 # Wait for the result directly from our request queue
                 result = await request_queue.get()
@@ -323,7 +324,6 @@ class BaseNemoTTSService(TTSService, ToolCallingMixin):
                     yield ErrorFrame(error="TTS generation failed - no audio returned")
                     return
 
-                await self.start_tts_usage_metrics(text)
 
                 # Collect all audio for logging
                 all_audio_bytes = b""
@@ -395,7 +395,9 @@ class BaseNemoTTSService(TTSService, ToolCallingMixin):
                         )
                     except Exception as e:
                         logger.warning(f"Failed to log agent audio: {e}")
-
+                
+                tts_end_time = asyncio.get_running_loop().time()
+                logger.debug(f"TTS generation time for text `{text}`: {tts_end_time - tts_start_time}s")
                 yield TTSStoppedFrame()
 
             finally:
@@ -879,7 +881,7 @@ class EasyMagpieTTSService(BaseNemoTTSService):
         self._base_streaming_state = None
         # The pipecat WebSocketTransport frontend player runs at PLAYER_SAMPLE_RATE=24000 Hz.
         # Audio is resampled from the codec's native 22050 Hz to 24000 Hz before sending.
-        output_sample_rate = kwargs.pop("sample_rate", 24000)
+        output_sample_rate = kwargs.pop("sample_rate", 22050)
         super().__init__(model=model_path, device=device, sample_rate=output_sample_rate, **kwargs)
         self.setup_tool_calling()
 
