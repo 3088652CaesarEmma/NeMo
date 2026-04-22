@@ -51,9 +51,14 @@ RUN \
   # whose `extra()` does a `pip install ${DEPS[@]}` that resolves deps of
   # nvidia-modelopt/nemo_run and can silently swap torchvision otherwise.
   #
-  # `|| true` guards against grep exit 1 when no match, which would abort
-  # the heredoc under bash -e.
-  pip freeze --all | grep -E '^(torch|torchvision|torchaudio|triton|pytorch-triton)==' > /tmp/nv-pinned.txt || true
+  # Use importlib.metadata rather than `pip freeze | grep name==`: NGC records
+  # torch/torchvision/torchaudio as direct-URL installs (`torch @ file:///...`),
+  # which never match the `name==version` pattern. Reading METADATA directly is
+  # agnostic to install source.
+  for pkg in torch torchvision torchaudio triton pytorch-triton; do
+    ver=$(python -c "import importlib.metadata as m; print(m.version('$pkg'))" 2>/dev/null) || continue
+    echo "${pkg}==${ver}"
+  done > /tmp/nv-pinned.txt
   echo "=== Pinning NV torch stack ==="
   cat /tmp/nv-pinned.txt
   echo "==============================="
@@ -61,6 +66,14 @@ RUN \
 
   bash /tmp/NeMo/install_dep.sh --library extra --mode install
   pip install --no-cache-dir ".[all,cu13]"
+
+  # Fail the build loudly if any pip step swapped the NGC torch stack for a
+  # PyPI build — otherwise the ABI mismatch surfaces only at pytest time as
+  # "operator torchvision::nms does not exist".
+  echo "=== Final torch stack ==="
+  pip freeze --all | grep -iE '^(torch|torchvision|torchaudio|triton|pytorch-triton)' || true
+  python -c "import torch, torchvision; print('torch', torch.__version__); print('torchvision', torchvision.__version__); from torchvision.ops import nms; print('nms OK')"
+  echo "========================="
 EOF
 
 
