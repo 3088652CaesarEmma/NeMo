@@ -296,16 +296,35 @@ class SALMAutomodel(LightningModule, HFHubMixin):
             causal_mask_mapping=inputs.get("causal_mask_mapping"),
         )
         num_frames = (inputs["target_ids"] != -100).long().sum()
+
+        # Match Automodel's training recipe: normalize CE by the *global* token count across
+        # the DP group rather than each rank's local count. With variable-length speech batches
+        # a local normalizer makes every rank contribute a differently-scaled gradient, and
+        # FSDP's gradient averaging doesn't recover the true global mean. All-reduce the
+        # labeled-token count and scale the per-rank loss by ``dp_size`` so that FSDP's
+        # gradient averaging yields ``sum(rank_CE_sum) / num_frames_global``.
+        dp_group = self._get_moe_dp_group()
+        dp_size = dp_group.size() if dp_group is not None else 1
+        if dp_group is not None and dist.is_available() and dist.is_initialized():
+            num_frames_global = num_frames.clone()
+            dist.all_reduce(num_frames_global, op=dist.ReduceOp.SUM, group=dp_group)
+        else:
+            num_frames_global = num_frames
+        num_frames_global = num_frames_global.clamp(min=1)
+
         with loss_parallel():
-            loss = (
-                torch.nn.functional.cross_entropy(
-                    forward_outputs["logits"].flatten(0, 1),  # (B, T, Vt) -> (*, Vt)
-                    inputs["target_ids"].flatten(0, 1),
-                    reduction="sum",
-                    ignore_index=-100,
-                )
-                / num_frames
+            loss_sum = torch.nn.functional.cross_entropy(
+                forward_outputs["logits"].flatten(0, 1),  # (B, T, Vt) -> (*, Vt)
+                inputs["target_ids"].flatten(0, 1),
+                reduction="sum",
+                ignore_index=-100,
             )
+            loss = loss_sum * dp_size / num_frames_global
+
+        # Display the local per-token CE so logged values stay on the same scale as before
+        # this fix. The gradient-carrying ``loss`` above is the globally-normalized quantity.
+        with torch.no_grad():
+            loss_display = loss_sum.detach() / num_frames.clamp(min=1)
 
         B, T = inputs["input_embeds"].shape[:2]
         ans = {
@@ -316,10 +335,11 @@ class SALMAutomodel(LightningModule, HFHubMixin):
             "batch_size": B,
             "sequence_length": T,
             "num_frames": num_frames.to(torch.float32),  # avoid warning
+            "num_frames_global": num_frames_global.to(torch.float32),
             "target_to_input_ratio": num_frames / (B * T),
             "padding_ratio": (batch["input_ids"] != self.text_pad_id).long().sum() / batch["input_ids"].numel(),
         }
-        self.log("loss", loss, on_step=True, prog_bar=True)
+        self.log("loss", loss_display, on_step=True, prog_bar=True)
         self.log_dict({k: v for k, v in ans.items() if k != "loss"}, on_step=True)
         self.maybe_log_moe_metrics(batch_idx)
         return ans
