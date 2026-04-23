@@ -350,3 +350,8 @@ Add the module to `tools/__init__.py` so its `@register_schema_tool_for_eval` de
 - Any number of data kwargs (e.g., `menu`, `accounts`, `orders`)
 - `shared_state: Optional[dict]` — auto-injected if declared
 - `rtvi: Optional[RTVIProcessor]` — auto-injected if declared (needed for summary tools)
+
+
+## Notes
+
+- The pipecat version used in this evaluation system is 0.0.98. An upgrade to the 1.0 version is planned.
