@@ -70,8 +70,9 @@ class CustomerServiceBaseScenario(Scenario):
                 "Listen to the customer's issue and ask clarifying questions if needed.",
                 "Look up the customer's account using the `LookupAccountTool` tool if applicable.",
                 "Resolve the customer's issue and explain the resolution clearly.",
-                "Use the `ModifyAccountTool` tool to update customer account details "
-                "when needed before resolving the ticket.",
+                "Use the operation-specific tool provided for this scenario (for example "
+                "`ProcessRefundTool`, `StartItemReturnTool`, `ChangePlanTool`, `UnlockAccountTool`, or "
+                "`CancelSubscriptionTool`) to apply any required account or order changes before resolving.",
                 "Use the `ResolveTicketTool` tool to log the resolution.",
                 "Thank the customer and use the `EndConversationTool` tool to end the conversation.",
             ],
@@ -79,8 +80,8 @@ class CustomerServiceBaseScenario(Scenario):
                 "Always be polite and professional.",
                 "Always use the `ResolveTicketTool` tool to log resolutions before ending the conversation.",
                 "Always use the `EndConversationTool` tool to end the conversation after the issue is resolved.",
-                "Use the `ModifyAccountTool` tool to update customer account details "
-                "when needed before resolving the ticket.",
+                "Apply any required account or order changes using the provided operation-specific tool "
+                "before resolving the ticket.",
                 "Do not make promises that TechCorp cannot fulfill.",
                 "If you cannot resolve the issue, escalate it and inform the customer.",
             ],
@@ -93,11 +94,11 @@ class CustomerServiceBaseScenario(Scenario):
                 "LookupAccountTool": {
                     "accounts": json.dumps({}),
                 },
-                "ModifyAccountTool": {},
                 "ResolveTicketTool": {},
                 "EndConversationTool": {},
             },
             information=[
+                "Today's date is 2026-04-22.",
                 "TechCorp's return policy allows returns within 30 days of purchase.",
                 "TechCorp's warranty covers manufacturing defects for 1 year from purchase date.",
                 "For refunds, the amount is credited back to the original payment method within 5 to 7 business days.",
@@ -137,7 +138,11 @@ class CustomerServiceBaseScenario(Scenario):
 
     @property
     def user_resources(self) -> Resources:
-        return Resources()
+        return Resources(
+            information=[
+                "Today's date is 2026-04-22.",
+            ],
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -161,10 +166,9 @@ class CustomerServiceBillingDispute(CustomerServiceBaseScenario):
             "name": "Sarah",
             "email": "sarah@email.com",
             "plan": "Premium",
-            "balance": "$142.50",
+            "balance": "$92.51",
             "recent_charges": [
-                {"description": "TechCorp Pro Laptop", "amount": "$1,299.00", "date": "2026-03-01"},
-                {"description": "Extended Warranty", "amount": "$49.99", "date": "2026-03-15"},
+                {"description": "Refund - Extended Warranty", "amount": "-$49.99", "date": "2026-04-22"},
             ],
         },
     }
@@ -235,14 +239,18 @@ class CustomerServiceBillingDispute(CustomerServiceBaseScenario):
                         }
                     ),
                 },
+                "ProcessRefundTool": {},
                 "ResolveTicketTool": {},
                 "EndConversationTool": {},
             },
             information=[
+                "Today's date is 2026-04-22.",
                 "TechCorp's return policy allows returns within 30 days of purchase.",
                 "TechCorp's warranty covers manufacturing defects for 1 year from purchase date.",
                 "For refunds, the amount is credited back to the original payment method within 5 to 7 business days.",
                 "Extended warranty charges can be refunded if the customer did not explicitly opt in.",
+                "Use `ProcessRefundTool` to issue a refund; it will append a negative charge entry and "
+                "reduce the account balance.",
             ],
         )
 
@@ -323,27 +331,25 @@ class CustomerServiceOrderDelay(CustomerServiceBaseScenario):
                                 "email": "marcus@university.edu",
                                 "plan": "Standard",
                                 "balance": "$0.00",
+                                "orders": {
+                                    "ORD-54321": {
+                                        "product": "TechCorp Pro Laptop",
+                                        "status": "In Transit",
+                                        "estimated_delivery": "2 business days",
+                                        "shipping_carrier": "FastShip Express",
+                                        "tracking_number": "FS-88776655",
+                                    },
+                                },
                             },
                         }
                     ),
                 },
-                "CheckOrderStatusTool": {
-                    "orders": json.dumps(
-                        {
-                            "ORD-54321": {
-                                "product": "TechCorp Pro Laptop",
-                                "status": "In Transit",
-                                "estimated_delivery": "2 business days",
-                                "shipping_carrier": "FastShip Express",
-                                "tracking_number": "FS-88776655",
-                            },
-                        }
-                    ),
-                },
+                "CheckOrderStatusTool": {},
                 "ResolveTicketTool": {},
                 "EndConversationTool": {},
             },
             information=[
+                "Today's date is 2026-04-22.",
                 "TechCorp's return policy allows returns within 30 days of purchase.",
                 "TechCorp's warranty covers manufacturing defects for 1 year from purchase date.",
                 "Customers can track their shipment using the tracking number provided.",
@@ -373,6 +379,11 @@ class CustomerServiceDefectiveReplacement(CustomerServiceBaseScenario):
             "email": "linda@photography.com",
             "plan": "Standard",
             "balance": "$0.00",
+            "orders": {
+                "ORD-67890": {
+                    "status": "Return Started",
+                },
+            },
         },
     }
 
@@ -429,29 +440,29 @@ class CustomerServiceDefectiveReplacement(CustomerServiceBaseScenario):
                                 "email": "linda@photography.com",
                                 "plan": "Standard",
                                 "balance": "$0.00",
+                                "orders": {
+                                    "ORD-67890": {
+                                        "product": "TechCorp Pro Laptop",
+                                        "status": "Delivered",
+                                        "delivery_date": "2026-03-28",
+                                    },
+                                },
                             },
                         }
                     ),
                 },
-                "CheckOrderStatusTool": {
-                    "orders": json.dumps(
-                        {
-                            "ORD-67890": {
-                                "product": "TechCorp Pro Laptop",
-                                "status": "Delivered",
-                                "delivery_date": "2026-03-28",
-                            },
-                        }
-                    ),
-                },
+                "CheckOrderStatusTool": {},
+                "StartItemReturnTool": {},
                 "ResolveTicketTool": {},
                 "EndConversationTool": {},
             },
             information=[
+                "Today's date is 2026-04-22.",
                 "TechCorp's return policy allows returns within 30 days of purchase.",
                 "TechCorp's warranty covers manufacturing defects for 1 year from purchase date.",
                 "Defective products can be replaced within 30 days. A return shipping label will be provided.",
                 "Replacement units are typically shipped within 3 to 5 business days.",
+                "Use `StartItemReturnTool` to initiate the return of the defective unit before resolving the ticket.",
             ],
         )
 
@@ -478,6 +489,11 @@ class CustomerServiceDefectiveRefund(CustomerServiceBaseScenario):
             "email": "james@realestate.com",
             "plan": "Premium",
             "balance": "$0.00",
+            "orders": {
+                "ORD-11223": {
+                    "status": "Return Started",
+                },
+            },
         },
     }
 
@@ -536,30 +552,31 @@ class CustomerServiceDefectiveRefund(CustomerServiceBaseScenario):
                                 "email": "james@realestate.com",
                                 "plan": "Premium",
                                 "balance": "$0.00",
+                                "orders": {
+                                    "ORD-11223": {
+                                        "product": "TechCorp SmartPhone X",
+                                        "status": "Delivered",
+                                        "delivery_date": "2026-03-20",
+                                        "price": "$899.00",
+                                    },
+                                },
                             },
                         }
                     ),
                 },
-                "CheckOrderStatusTool": {
-                    "orders": json.dumps(
-                        {
-                            "ORD-11223": {
-                                "product": "TechCorp SmartPhone X",
-                                "status": "Delivered",
-                                "delivery_date": "2026-03-20",
-                                "price": "$899.00",
-                            },
-                        }
-                    ),
-                },
+                "CheckOrderStatusTool": {},
+                "StartItemReturnTool": {},
                 "ResolveTicketTool": {},
                 "EndConversationTool": {},
             },
             information=[
+                "Today's date is 2026-04-22.",
                 "TechCorp's return policy allows returns within 30 days of purchase.",
                 "TechCorp's warranty covers manufacturing defects for 1 year from purchase date.",
                 "For refunds, the amount is credited back to the original payment method within 5 to 7 business days.",
                 "A return shipping label will be provided for defective items.",
+                "Use `StartItemReturnTool` to initiate the return before confirming the refund; the refund "
+                "itself is processed 5 to 7 business days after the defective unit is received.",
             ],
         )
 
@@ -637,15 +654,14 @@ class CustomerServicePlanUpgrade(CustomerServiceBaseScenario):
                 "I'm Alex, how can I help you today?'.",
                 "Listen to the customer's issue and ask clarifying questions if needed.",
                 "Look up the customer's account using the `LookupAccountTool` tool if applicable.",
-                "Use the `ModifyAccountTool` tool to change the customer's plan to 'Premium' and monthly_rate to "
-                "'$19.99'.",
+                "Use the `ChangePlanTool` tool with new_plan='Premium' to upgrade the customer's plan.",
                 "Use the `ResolveTicketTool` tool to log the resolution.",
                 "Thank the customer and use the `EndConversationTool` tool to end the conversation.",
             ],
             guidelines=[
                 "Always be polite and professional.",
-                "Use the `ModifyAccountTool` tool to update the customer's plan and monthly_rate before resolving "
-                "the ticket.",
+                "Use the `ChangePlanTool` tool to upgrade the plan before resolving the ticket; it updates both "
+                "the plan name and the monthly rate atomically.",
                 "Always use the `ResolveTicketTool` tool to log resolutions before ending the conversation.",
                 "Always use the `EndConversationTool` tool to end the conversation after the issue is resolved.",
                 "Do not make promises that TechCorp cannot fulfill.",
@@ -669,11 +685,14 @@ class CustomerServicePlanUpgrade(CustomerServiceBaseScenario):
                         }
                     ),
                 },
-                "ModifyAccountTool": {},
+                "ChangePlanTool": {
+                    "plans": json.dumps({"Standard": "$9.99", "Premium": "$19.99"}),
+                },
                 "ResolveTicketTool": {},
                 "EndConversationTool": {},
             },
             information=[
+                "Today's date is 2026-04-22.",
                 "TechCorp Standard plan costs $9.99 per month and includes basic support.",
                 "TechCorp Premium plan costs $19.99 per month and includes extended warranty coverage and priority "
                 "support.",
@@ -757,16 +776,15 @@ class CustomerServiceAccountAccess(CustomerServiceBaseScenario):
                 "I'm Alex, how can I help you today?'.",
                 "Listen to the customer's issue and ask clarifying questions if needed.",
                 "Look up the customer's account using the `LookupAccountTool` tool if applicable.",
-                "Use the `ModifyAccountTool` tool to change account_status to 'Active' and failed_login_attempts to "
-                "'0'.",
+                "Use the `UnlockAccountTool` tool to unlock the account.",
                 "Guide the customer through the account recovery process.",
                 "Use the `ResolveTicketTool` tool to log the resolution.",
                 "Thank the customer and use the `EndConversationTool` tool to end the conversation.",
             ],
             guidelines=[
                 "Always be polite and professional.",
-                "Use the `ModifyAccountTool` tool to unlock the account by setting account_status to 'Active' and "
-                "failed_login_attempts to '0' before resolving the ticket.",
+                "Use the `UnlockAccountTool` tool to unlock the account before resolving the ticket; it resets "
+                "account_status to 'Active' and failed_login_attempts to '0'.",
                 "Always use the `ResolveTicketTool` tool to log resolutions before ending the conversation.",
                 "Always use the `EndConversationTool` tool to end the conversation after the issue is resolved.",
                 "Do not make promises that TechCorp cannot fulfill.",
@@ -786,16 +804,17 @@ class CustomerServiceAccountAccess(CustomerServiceBaseScenario):
                                 "plan": "Standard",
                                 "balance": "$0.00",
                                 "account_status": "Locked",
-                                "failed_login_attempts": 5,
+                                "failed_login_attempts": "5",
                             },
                         }
                     ),
                 },
-                "ModifyAccountTool": {},
+                "UnlockAccountTool": {},
                 "ResolveTicketTool": {},
                 "EndConversationTool": {},
             },
             information=[
+                "Today's date is 2026-04-22.",
                 "Accounts are locked after 5 consecutive failed login attempts.",
                 "Account lockout is automatically lifted after 15 minutes.",
                 "A password reset link can be sent to the email address on file.",
@@ -830,6 +849,11 @@ class CustomerServiceWarrantyClaim(CustomerServiceBaseScenario):
             "email": "mei@accounting.com",
             "plan": "Standard",
             "balance": "$0.00",
+            "orders": {
+                "ORD-33445": {
+                    "status": "Return Started",
+                },
+            },
         },
     }
 
@@ -887,31 +911,31 @@ class CustomerServiceWarrantyClaim(CustomerServiceBaseScenario):
                                 "email": "mei@accounting.com",
                                 "plan": "Standard",
                                 "balance": "$0.00",
+                                "orders": {
+                                    "ORD-33445": {
+                                        "product": "TechCorp UltraBook",
+                                        "status": "Delivered",
+                                        "delivery_date": "2025-08-01",
+                                        "price": "$999.00",
+                                        "warranty_expiry": "2026-08-01",
+                                    },
+                                },
                             },
                         }
                     ),
                 },
-                "CheckOrderStatusTool": {
-                    "orders": json.dumps(
-                        {
-                            "ORD-33445": {
-                                "product": "TechCorp UltraBook",
-                                "status": "Delivered",
-                                "delivery_date": "2025-08-01",
-                                "price": "$999.00",
-                                "warranty_expiry": "2026-08-01",
-                            },
-                        }
-                    ),
-                },
+                "CheckOrderStatusTool": {},
+                "StartItemReturnTool": {},
                 "ResolveTicketTool": {},
                 "EndConversationTool": {},
             },
             information=[
+                "Today's date is 2026-04-22.",
                 "TechCorp's warranty covers manufacturing defects for 1 year from purchase date.",
                 "Warranty claims require verification of the purchase date and product condition.",
                 "Approved warranty replacements are shipped within 5 to 7 business days.",
                 "A prepaid return label is provided for returning the defective unit.",
+                "Use `StartItemReturnTool` to initiate the return of the defective unit before resolving the ticket.",
             ],
         )
 
@@ -990,15 +1014,14 @@ class CustomerServiceSubscriptionCancel(CustomerServiceBaseScenario):
                 "I'm Alex, how can I help you today?'.",
                 "Listen to the customer's issue and ask clarifying questions if needed.",
                 "Look up the customer's account using the `LookupAccountTool` tool if applicable.",
-                "Use the `ModifyAccountTool` tool to change the customer's plan to 'Canceled' and monthly_rate to "
-                "'$0.00'.",
+                "Use the `CancelSubscriptionTool` tool to cancel the customer's subscription.",
                 "Use the `ResolveTicketTool` tool to log the resolution.",
                 "Thank the customer and use the `EndConversationTool` tool to end the conversation.",
             ],
             guidelines=[
                 "Always be polite and professional.",
-                "Use the `ModifyAccountTool` tool to update the customer's plan to 'Canceled' and monthly_rate to "
-                "'$0.00' before resolving the ticket.",
+                "Use the `CancelSubscriptionTool` tool to cancel the subscription before resolving the ticket; it "
+                "sets plan to 'Canceled' and monthly_rate to '$0.00'.",
                 "Always use the `ResolveTicketTool` tool to log resolutions before ending the conversation.",
                 "Always use the `EndConversationTool` tool to end the conversation after the issue is resolved.",
                 "Do not make promises that TechCorp cannot fulfill.",
@@ -1023,11 +1046,12 @@ class CustomerServiceSubscriptionCancel(CustomerServiceBaseScenario):
                         }
                     ),
                 },
-                "ModifyAccountTool": {},
+                "CancelSubscriptionTool": {},
                 "ResolveTicketTool": {},
                 "EndConversationTool": {},
             },
             information=[
+                "Today's date is 2026-04-22.",
                 "Subscription cancellations take effect at the end of the current billing period.",
                 "Customers retain access to premium features until the billing period ends.",
                 "No partial refunds are issued for mid-cycle cancellations.",
@@ -1058,6 +1082,11 @@ class CustomerServiceWrongItem(CustomerServiceBaseScenario):
             "email": "anika@fitness.com",
             "plan": "Standard",
             "balance": "$0.00",
+            "orders": {
+                "ORD-44556": {
+                    "status": "Return Started",
+                },
+            },
         },
     }
 
@@ -1118,30 +1147,30 @@ class CustomerServiceWrongItem(CustomerServiceBaseScenario):
                                 "email": "anika@fitness.com",
                                 "plan": "Standard",
                                 "balance": "$0.00",
+                                "orders": {
+                                    "ORD-44556": {
+                                        "product": "TechCorp Wireless Earbuds Pro",
+                                        "status": "Delivered",
+                                        "delivery_date": "2026-04-01",
+                                        "price": "$149.99",
+                                    },
+                                },
                             },
                         }
                     ),
                 },
-                "CheckOrderStatusTool": {
-                    "orders": json.dumps(
-                        {
-                            "ORD-44556": {
-                                "product": "TechCorp Wireless Earbuds Pro",
-                                "status": "Delivered",
-                                "delivery_date": "2026-04-01",
-                                "price": "$149.99",
-                            },
-                        }
-                    ),
-                },
+                "CheckOrderStatusTool": {},
+                "StartItemReturnTool": {},
                 "ResolveTicketTool": {},
                 "EndConversationTool": {},
             },
             information=[
+                "Today's date is 2026-04-22.",
                 "TechCorp's return policy allows returns within 30 days of purchase.",
                 "Wrong item shipments are eligible for immediate replacement at no extra charge.",
                 "A prepaid return label will be provided for returning the incorrect item.",
                 "Correct items are typically shipped within 2 to 3 business days.",
+                "Use `StartItemReturnTool` to initiate the return of the incorrect item before resolving the ticket.",
             ],
         )
 
@@ -1243,6 +1272,7 @@ class CustomerServiceOutageComplaint(CustomerServiceBaseScenario):
                 "EndConversationTool": {},
             },
             information=[
+                "Today's date is 2026-04-22.",
                 "There is a known service disruption affecting TechCorp Cloud in certain regions.",
                 "The engineering team is actively investigating the root cause.",
                 "Affected customers can request escalation to the senior engineering team.",
