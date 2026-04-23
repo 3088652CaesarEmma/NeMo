@@ -257,8 +257,12 @@ class SALMAutomodel(LightningModule, HFHubMixin):
     def on_fit_start(self) -> None:
         """Warm the distributed forward path before the sanity-check validation.
 
-        Controlled by ``cfg.distributed_warmup_barriers`` (0 = disabled).
+        Controlled by ``cfg.distributed_warmup_barriers`` (0 = disabled). Also
+        configures the MoE aux-loss backward scaler to cancel FSDP's gradient
+        averaging (see ``_configure_moe_aux_loss_scaler``).
         """
+        self._configure_moe_aux_loss_scaler()
+
         self._warmup_barriers_remaining = int(self.cfg.get("distributed_warmup_barriers", 0))
         if self._warmup_barriers_remaining <= 0:
             return
@@ -683,6 +687,27 @@ class SALMAutomodel(LightningModule, HFHubMixin):
         if "dp" in dim_names:
             return device_mesh["dp"].get_group()
         return None
+
+    def _configure_moe_aux_loss_scaler(self) -> None:
+        """Cancel FSDP's gradient averaging on MoE aux-loss grads.
+
+        ``MoEAuxLossAutoScaler`` multiplies aux-loss-derived gradients by
+        ``main_loss_backward_scale`` during backward. FSDP's all-reduce then
+        divides every gradient by ``dp_group_size``. Setting the scaler to
+        ``dp_group_size`` (non-PP case) cancels that division out, matching the
+        intent in ``nemo_automodel/recipes/llm/train_ft.py`` — otherwise the
+        aux-loss contribution to the gradient would be under-scaled by a factor
+        of ``dp_group_size``.
+
+        No-op when ``nemo_automodel`` isn't available (non-MoE builds).
+        """
+        try:
+            from nemo_automodel.components.moe.megatron.moe_utils import MoEAuxLossAutoScaler
+        except ImportError:
+            return
+        dp_group = self._get_moe_dp_group()
+        dp_size = dp_group.size() if dp_group is not None else 1
+        MoEAuxLossAutoScaler.main_loss_backward_scale = torch.tensor(float(dp_size))
 
     def configure_optimizers(self):
         return configure_optimizers(self)
