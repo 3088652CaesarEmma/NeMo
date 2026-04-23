@@ -275,7 +275,8 @@ class LLMJudge:
 
     DEFAULT_PROMPT = """You are a judge that evaluates the similarity between a reference answer and a prediction.
 You will be given a reference and a prediction wrapped in XML tags.
-Judge how well the prediction matches the reference in terms of correctness and completeness.
+Judge how well the prediction matches the reference in terms of correctness and completeness. If a field in prediction 
+is not present in the reference, it means that the field is not required to check and can be ignored. 
 Return a score between 0 and 1, where 0 means completely wrong and 1 means a perfect match.
 You MUST return ONLY a JSON object in the following format, with no other text:
 {"score": <score>, "reason": "<brief explanation>"}"""

@@ -23,6 +23,14 @@ from nemo.agents.voice_agent.evaluation.tools import register_schema_tool_for_ev
 from nemo.agents.voice_agent.evaluation.tools.rtvi_control import SendScenarioSummaryTool
 from nemo.agents.voice_agent.utils.tool_calling import StandardSchemaTool
 
+DEFAULT_RESOLUTION_TYPES: List[str] = [
+    "refund",
+    "replacement",
+    "information",
+    "escalation",
+    "account_change",
+]
+
 
 def _parse_money(value: str) -> float:
     """Parse a money string like '$1,234.56' or '-$49.99' into a float."""
@@ -423,6 +431,7 @@ class ResolveTicketTool(SendScenarioSummaryTool):
         *,
         rtvi: Optional[RTVIProcessor] = None,
         shared_state: Optional[dict] = None,
+        resolution_types: Optional[List[str]] = None,
         description: Optional[str] = None,
     ):
         super().__init__(
@@ -434,9 +443,11 @@ class ResolveTicketTool(SendScenarioSummaryTool):
             rtvi=rtvi,
         )
         self.state = shared_state if shared_state is not None else {}
+        self.resolution_types = list(resolution_types) if resolution_types else list(DEFAULT_RESOLUTION_TYPES)
 
     @property
     def properties(self) -> Dict[str, Any]:
+        allowed = ", ".join(self.resolution_types)
         return {
             "account_id": {
                 "type": "string",
@@ -448,10 +459,8 @@ class ResolveTicketTool(SendScenarioSummaryTool):
             },
             "resolution_type": {
                 "type": "string",
-                "description": (
-                    "Type of resolution applied, for example: refund, replacement, "
-                    "information, escalation, or account_change."
-                ),
+                "enum": self.resolution_types,
+                "description": f"Type of resolution applied. Must be exactly one of: {allowed}.",
             },
             "resolution_details": {
                 "type": "string",
