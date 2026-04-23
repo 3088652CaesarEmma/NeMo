@@ -76,6 +76,15 @@ class AudioPerceptionModule(NeuralModule, Exportable):
         else:
             self.proj = nn.Identity()
 
+    def set_activation_checkpointing(self, enabled: bool) -> None:
+        """Enable/disable activation checkpointing on the encoder's transformer layers.
+
+        When ``enabled`` is True, wraps each layer in ``self.encoder.layers`` with
+        ``torch.distributed.algorithms._checkpoint.checkpoint_wrapper``. Must be
+        called before FSDP2 sharding. When ``enabled`` is False, this is a no-op.
+        """
+        _set_encoder_activation_checkpointing(self.encoder, enabled)
+
     def maybe_preprocess_audio(
         self,
         input_signal=None,
@@ -146,6 +155,34 @@ class IdentityConnector(nn.Module):
         return audio_signal, length
 
 
+def _set_encoder_activation_checkpointing(encoder: nn.Module, enabled: bool) -> None:
+    """Wrap the encoder's subsampling front-end and each transformer layer with
+    ``checkpoint_wrapper`` when enabled.
+
+    Covers ``encoder.pre_encode`` (the Conformer fbank→subsampled-activation
+    module: ``ConvSubsampling`` / ``StackingSubsampling`` / ``nn.Linear``) and
+    each entry in ``encoder.layers``. Missing attributes are skipped so
+    non-Conformer architectures degrade gracefully. No-op when ``enabled`` is
+    False.
+    """
+    if not enabled:
+        return
+    from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import checkpoint_wrapper
+
+    pre_encode = getattr(encoder, "pre_encode", None)
+    # ConformerEncoder.forward dispatches on ``isinstance(pre_encode, nn.Linear)``
+    # to choose between positional and (x=, lengths=) kwargs. Wrapping a Linear
+    # hides its type and routes it to the wrong branch, so skip that case — the
+    # memory win is negligible anyway (one linear vs. a conv/stacking stack).
+    if pre_encode is not None and not isinstance(pre_encode, nn.Linear):
+        encoder.pre_encode = checkpoint_wrapper(pre_encode)
+
+    layers = getattr(encoder, "layers", None)
+    if layers is not None:
+        for i in range(len(layers)):
+            layers[i] = checkpoint_wrapper(layers[i])
+
+
 class AudioTranscriptionPerceptionModule(NeuralModule, Exportable):
     """Audio perception module that consists of audio encoder(s) and modality adapter."""
 
@@ -193,6 +230,15 @@ class AudioTranscriptionPerceptionModule(NeuralModule, Exportable):
             self.proj = nn.Linear(cfg.modality_adapter.d_model, cfg.output_dim)
         else:
             self.proj = nn.Identity()
+
+    def set_activation_checkpointing(self, enabled: bool) -> None:
+        """Enable/disable activation checkpointing on the encoder's transformer layers.
+
+        When ``enabled`` is True, wraps each layer in ``self.encoder.layers`` with
+        ``torch.distributed.algorithms._checkpoint.checkpoint_wrapper``. Must be
+        called before FSDP2 sharding. When ``enabled`` is False, this is a no-op.
+        """
+        _set_encoder_activation_checkpointing(self.encoder, enabled)
 
     def maybe_preprocess_audio(
         self,

@@ -718,6 +718,8 @@ class SALMAutomodel(LightningModule, HFHubMixin):
         distributed_config=None,
         moe_config=None,
         moe_mesh=None,
+        activation_checkpointing_llm: bool | None = None,
+        activation_checkpointing_perception: bool | None = None,
     ) -> None:
         # Use provided device_mesh, or fall back to LightningModule property
         if device_mesh is not None:
@@ -744,6 +746,16 @@ class SALMAutomodel(LightningModule, HFHubMixin):
             moe_mesh = getattr(self._trainer.strategy, "moe_mesh", None)
         if moe_config is None and self._trainer is not None:
             moe_config = getattr(self._trainer.strategy, "moe_config", None)
+        if activation_checkpointing_llm is None and self._trainer is not None:
+            activation_checkpointing_llm = getattr(self._trainer.strategy, "activation_checkpointing_llm", None)
+        if activation_checkpointing_llm is None:
+            activation_checkpointing_llm = False
+        if activation_checkpointing_perception is None and self._trainer is not None:
+            activation_checkpointing_perception = getattr(
+                self._trainer.strategy, "activation_checkpointing_perception", None
+            )
+        if activation_checkpointing_perception is None:
+            activation_checkpointing_perception = False
 
         automodel_kwargs = {}
         if device_mesh is not None:
@@ -758,8 +770,16 @@ class SALMAutomodel(LightningModule, HFHubMixin):
                 from nemo_automodel.components.moe.config import MoEParallelizerConfig
 
                 moe_config = MoEParallelizerConfig()
+            # Route the single LLM AC flag to both paths: the EP/MoE parallelizer
+            # reads ``activation_checkpointing`` directly (MoEParallelizerConfig
+            # has no such field), while FSDP2's AC wrapping reads the field on
+            # FSDP2Config. Forcing both keeps behavior identical regardless of
+            # whether ep_size is 1 (FSDP2 path) or > 1 (EP path).
+            if activation_checkpointing_llm:
+                distributed_config.activation_checkpointing = True
             automodel_kwargs["distributed_config"] = distributed_config
             automodel_kwargs["moe_config"] = moe_config
+            automodel_kwargs["activation_checkpointing"] = activation_checkpointing_llm
         if moe_mesh is not None:
             automodel_kwargs["moe_mesh"] = moe_mesh
 
@@ -804,6 +824,11 @@ class SALMAutomodel(LightningModule, HFHubMixin):
 
         # Fix projection dim for pretrained_weights=False (config output_dim may not match LLM)
         update_perception_output_dim(self)
+
+        # Activation checkpointing on perception encoder layers. Must run BEFORE
+        # FSDP2 wrapping (see LLM path in automodel) so checkpoint_wrapper sees
+        # the pristine layer objects and fully_shard indexes the final structure.
+        self.perception.set_activation_checkpointing(activation_checkpointing_perception)
 
         # Apply LoRA adapters to the LLM.
         # When device_mesh is set, LoRA was already applied inside automodel's

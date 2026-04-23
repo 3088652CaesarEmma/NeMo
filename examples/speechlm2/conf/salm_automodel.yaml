@@ -131,16 +131,24 @@ trainer:
     cp_size: 1          # Context parallel size
     ep_size: 8          # Expert parallel size (for MoE models)
 
+    # --- Activation checkpointing ---
+    # Two independent knobs: one for the LLM, one for the perception encoder.
+    # ``activation_checkpointing_llm`` is a single switch that covers both the
+    # non-EP FSDP2 path (via FSDP2Config.activation_checkpointing) and the
+    # EP/MoE parallelizer path.
+    # ``activation_checkpointing_perception`` wraps each layer in ``perception.encoder.layers`` 
+    # with ``checkpoint_wrapper`` before FSDP2 sharding.
+    activation_checkpointing_llm: false
+    activation_checkpointing_perception: false
+
     # --- FSDP2 distributed config (plain dict, resolved to FSDP2Config automatically) ---
     # distributed_config:
     #   sequence_parallel: false    # Enable sequence parallelism (requires tp_size > 1)
-    #   activation_checkpointing: false  # Checkpoint activations to save memory
     #   # offload_policy:           # Uncomment to enable CPU offloading
     #   #   _target_: torch.distributed.fsdp.CPUOffloadPolicy
 
     # --- MoE config (plain dict, resolved to MoEParallelizerConfig automatically) ---
     # moe_config:
-    #   activation_checkpointing: false   # Checkpoint activations in MoE transformer blocks
     #   ignore_router_for_ac: false       # Selective AC: save router outputs, recompute the rest
     #   reshard_after_forward: false       # Reshard params after forward (saves memory, more comms)
     #   lm_head_precision: null            # Override LM head precision (e.g., "float32" for stability)
