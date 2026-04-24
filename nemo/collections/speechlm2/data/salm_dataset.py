@@ -77,6 +77,7 @@ class SALMDataset(torch.utils.data.Dataset):
         self.load_audio = AudioSamples(
             fault_tolerant=True,
             use_batch_loader=os.environ.get("USE_AIS_GET_BATCH", "False").lower() == "true",
+            mono_downmix=True,
         )
 
     def __getitem__(self, conversations: CutSet) -> dict | None:
