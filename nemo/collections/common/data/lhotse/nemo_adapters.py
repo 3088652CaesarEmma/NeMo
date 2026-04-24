@@ -35,7 +35,7 @@ from lhotse.audio.backend import LibsndfileBackend
 from lhotse.cut import Cut
 from lhotse.dataset.dataloading import resolve_seed
 from lhotse.lazy import LazyIteratorChain, LazyJsonlIterator
-from lhotse.serialization import open_best
+from lhotse.serialization import decode_json_line, open_best
 from lhotse.utils import compute_num_samples, ifnone
 
 from nemo.collections.common.parts.preprocessing.manifest import get_full_path
@@ -48,12 +48,18 @@ class LhotseLazyJsonlIterator(LazyJsonlIterator):
         super().__init__(path)
 
     def __iter__(self):
-        for line in super().__iter__():
-            try:
-                yield line
-            except Exception as e:
-                logging.error(f"Error decoding JSON line `{line}` in file `{self.path}`: {e}")
-                raise e
+        tot = 0
+        with open_best(self.path, "r") as f:
+            for line in f:
+                try:
+                    data = decode_json_line(line)
+                    yield data
+                    tot += 1
+                except Exception as e:
+                    logging.error(f"Error decoding JSON line `{line}` in file `{self.path}`: {e}")
+                    raise e
+        if self._len is None:
+            self._len = tot
 
 
 class LazyNeMoIterator:
