@@ -27,6 +27,10 @@ model:
 
   prompt_format: nemotron-nano-v3
   audio_locator_tag: "<|audio|>"  # placeholder token for audio turn is expected
+  # Split audios longer than this before the speech encoder forward, then concatenate
+  # the encoded chunks back into one sequence before passing them to the LLM.
+  # Set to null to disable encoder chunking and encode each audio row directly.
+  encoder_chunk_size_seconds: 30.0
 
   # Uncomment the block below to enable LoRA on the LLM via Automodel.
   # LoRA parameters are kept trainable even when the LLM is frozen.

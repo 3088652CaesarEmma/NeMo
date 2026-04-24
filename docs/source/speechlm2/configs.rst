@@ -114,6 +114,7 @@ MoE as the LLM backbone, with Expert Parallelism across 8 GPUs:
       pretrained_llm: nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16
       pretrained_asr: "nvidia/canary-1b-flash"
       pretrained_weights: True
+      encoder_chunk_size_seconds: 30.0
 
       freeze_params:
         - "^llm\\..+$"
@@ -158,6 +159,10 @@ Note the differences from the SALM configuration:
 * ``ep_size`` controls Expert Parallelism on the FSDP data-parallel axis — dense layers are sharded via FSDP2, while MoE layers use EP for expert routing on the same GPUs.
 * LoRA config uses ``dim``/``alpha`` keys (Automodel native) instead of ``r``/``lora_alpha`` (HF PEFT).
 * No ``embed_tokens`` freeze pattern — embeddings stay inside the LLM.
+* ``encoder_chunk_size_seconds`` controls long-audio chunking for the speech encoder.
+  Audio rows longer than this value are split on the time axis, encoded as a chunk
+  batch, and concatenated back into one embedding sequence before the LLM forward.
+  Set it to ``null`` to disable chunking.
 
 DuplexS2SModel Configuration
 -----------------------------
@@ -328,6 +333,9 @@ Model Parameters
 
 - **pretrained_llm**: Path to the pretrained HuggingFace LLM
 - **pretrained_asr**: Name of the pretrained NeMo ASR model used for perception
+- **encoder_chunk_size_seconds**: Speech-encoder chunk size in seconds for long audio inputs
+  (supported by both ``SALM`` and ``SALMAutomodel``). Leave as ``null`` to encode each audio
+  row directly
 - **pretrained_audio_codec**: Path to the pretrained audio codec model (for speech generation)
 - **init_from_checkpoint**: Path to a training checkpoint to initialize model weights from (see :ref:`fine-tuning-from-checkpoint` below)
 - **freeze_params**: Regex patterns of parameters to freeze during training
