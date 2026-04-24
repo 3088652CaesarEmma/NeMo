@@ -18,7 +18,7 @@ from typing import Any, Callable
 import torch
 import torch.distributed as dist
 from lightning import LightningModule
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 from torch import Tensor
 from torch.distributed.fsdp import fully_shard
 from torch.distributed.tensor import DTensor
@@ -764,6 +764,20 @@ class SALMAutomodel(LightningModule, HFHubMixin):
 
             compile_dict = dict(compile_cfg)
             automodel_kwargs["compile_config"] = CompileConfig(**compile_dict)
+
+        # Pass backend through to automodel — lets YAML pick attn/linear/rms_norm/MoE
+        # dispatcher backends (e.g. set attn=sdpa to bypass TransformerEngine).
+        backend_cfg = self.cfg.get("automodel_backend", None)
+        if backend_cfg is not None:
+            from nemo_automodel.components.models.common import BackendConfig
+
+            automodel_kwargs["backend"] = BackendConfig(**OmegaConf.to_container(backend_cfg, resolve=True))
+
+        # Pin the SDPA kernel used by attn=sdpa (e.g. [flash_attention] to force FA2
+        # and error out if unavailable). Accepts strings; resolved by automodel.
+        sdpa_method = self.cfg.get("sdpa_method", None)
+        if sdpa_method is not None:
+            automodel_kwargs["sdpa_method"] = list(OmegaConf.to_container(sdpa_method, resolve=True))
 
         self.llm = load_pretrained_automodel_llm(
             self.cfg.pretrained_llm,
