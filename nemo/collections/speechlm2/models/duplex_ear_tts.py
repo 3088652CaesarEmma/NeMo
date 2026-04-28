@@ -95,7 +95,7 @@ class DuplexEARTTS(LightningModule, HFHubMixin):
         self.tokenizer = AutoTokenizer(
             self.cfg.pretrained_lm_name,
             use_fast=True,
-            trust_remote_code=True,
+            trust_remote_code=self.cfg.get("trust_remote_code", False),
             bos_token=self.cfg.get("bos_token", None),
             eos_token=self.cfg.get("eos_token", None),
             pad_token=self.cfg.get("pad_token", None),
