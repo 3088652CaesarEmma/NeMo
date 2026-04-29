@@ -22,6 +22,8 @@ from pathlib import Path
 import yaml
 from dotenv import load_dotenv
 from loguru import logger
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter as OTLPSpanExporterGRPC
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter as OTLPSpanExporterHTTP
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import LLMRunFrame
 from pipecat.observers.loggers.user_bot_latency_log_observer import UserBotLatencyLogObserver
@@ -32,6 +34,7 @@ from pipecat.processors.frameworks.rtvi import RTVIConfig, RTVIProcessor
 from pipecat.serializers.protobuf import ProtobufFrameSerializer
 from pipecat.services.openai.base_llm import BaseOpenAILLMService
 from pipecat.transports.websocket.server import WebsocketServerParams, WebsocketServerTransport
+from pipecat.utils.tracing.setup import setup_tracing
 
 from nemo.agents.voice_agent.evaluation.tools import get_schema_tool_for_eval
 from nemo.agents.voice_agent.pipecat.bot_server import (
@@ -144,6 +147,28 @@ def _inject_prompt_variables(prompt: str, **variables) -> str:
         return prompt.format(**variables)
     except KeyError:
         return prompt
+
+
+# Initialize tracing if enabled
+if IS_TRACING_ENABLED:
+    # Get the endpoint URL
+    endpoint_url = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "localhost:4317")
+
+    # Determine which exporter to use based on the endpoint URL
+    if endpoint_url.startswith("http://") or endpoint_url.startswith("https://"):
+        # HTTP exporter - use full URL with protocol
+        otlp_exporter = OTLPSpanExporterHTTP(endpoint=endpoint_url)
+    else:
+        # gRPC exporter - endpoint should be host:port format (no protocol prefix)
+        otlp_exporter = OTLPSpanExporterGRPC(endpoint=endpoint_url, insecure=True)
+
+    # Set up tracing with the exporter
+    setup_tracing(
+        service_name="nemotron-voice-agent",
+        exporter=otlp_exporter,
+        console_export=os.getenv("OTEL_CONSOLE_EXPORT", "").lower() == "true",
+    )
+    logger.info("OpenTelemetry tracing initialized")
 
 
 async def run_bot_websocket(

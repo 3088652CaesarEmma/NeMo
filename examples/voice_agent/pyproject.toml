@@ -34,7 +34,8 @@ dependencies = [
     "python_weather",
     "python-dotenv",
     "loguru",
-    "opentelemetry-sdk",
+    "opentelemetry-exporter-otlp-proto-grpc",
+    "opentelemetry-exporter-otlp-proto-http",
 
     # Riva client
     "nvidia-riva-client==2.21.1",
