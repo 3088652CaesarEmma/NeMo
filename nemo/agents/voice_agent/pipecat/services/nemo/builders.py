@@ -26,10 +26,10 @@ from typing import Optional
 
 from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
+from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair, LLMUserAggregatorParams
 from pipecat.serializers.protobuf import ProtobufFrameSerializer
 from pipecat.services.llm_service import LLMService
-from pipecat.services.openai import BaseOpenAILLMService
 from pipecat.services.stt_service import STTService
 from pipecat.services.tts_service import TTSService
 
@@ -67,7 +67,6 @@ def build_vad_analyzer(config_manager: ConfigManager) -> SileroVADAnalyzer:
 
 def build_ws_transport(
     config_manager: ConfigManager,
-    vad_analyzer: SileroVADAnalyzer | None,
     host: str,
     port: int,
 ) -> WebsocketServerTransport:
@@ -79,7 +78,6 @@ def build_ws_transport(
             audio_in_enabled=True,
             audio_out_enabled=True,
             add_wav_header=False,
-            vad_analyzer=vad_analyzer,
             session_timeout=None,
             audio_in_sample_rate=server_config.transport.get("audio_in_sample_rate", config_manager.SAMPLE_RATE),
             audio_out_sample_rate=server_config.transport.get("audio_out_sample_rate", None),
@@ -142,12 +140,18 @@ def build_llm(config_manager: ConfigManager) -> LLMService:
     return get_llm_service_from_config(config_manager.server_config.llm)
 
 
-def build_context_and_aggregators(llm: BaseOpenAILLMService, config_manager: ConfigManager):
-    """Build ``OpenAILLMContext`` and its user/assistant aggregators.
+def build_context_and_aggregators(
+    config_manager: ConfigManager,
+    vad_analyzer: Optional[SileroVADAnalyzer] = None,
+):
+    """Build ``LLMContext`` and its user/assistant aggregators.
 
     Returns ``(context, user_aggregator, assistant_aggregator, original_messages)``.
     ``original_messages`` is a fresh deep-copy of the initial message list, safe
     to hand to the reset/update-prompt RTVI action factories.
+
+    In pipecat 1.x, VAD lives on the user aggregator rather than the transport,
+    so the analyzer is passed through here.
     """
     messages = [
         {
@@ -159,11 +163,14 @@ def build_context_and_aggregators(llm: BaseOpenAILLMService, config_manager: Con
         dummy_message = config_manager.server_config.llm.get("dummy_user_message", "Hello.")
         messages.append({"role": "user", "content": dummy_message})
 
-    context = OpenAILLMContext(messages=messages)
+    context = LLMContext(messages=messages)
     original_messages = copy.deepcopy(context.get_messages())
 
-    context_aggregator = llm.create_context_aggregator(context)
-    return context, context_aggregator.user(), context_aggregator.assistant(), original_messages
+    user_agg, assistant_agg = LLMContextAggregatorPair(
+        context,
+        user_params=LLMUserAggregatorParams(vad_analyzer=vad_analyzer),
+    )
+    return context, user_agg, assistant_agg, original_messages
 
 
 def resolve_log_file_path(

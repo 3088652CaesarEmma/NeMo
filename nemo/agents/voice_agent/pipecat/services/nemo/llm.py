@@ -36,7 +36,7 @@ from pipecat.frames.frames import (
     LLMFullResponseStartFrame,
     LLMTextFrame,
 )
-from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
+from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.nvidia.llm import NvidiaLLMService
 from pipecat.services.openai.llm import OpenAILLMService
 from transformers import AsyncTextIteratorStreamer, AutoModelForCausalLM, AutoTokenizer
@@ -254,11 +254,11 @@ class HuggingFaceLLMService(OpenAILLMService):
             apply_chat_template_kwargs=self._apply_chat_template_kwargs,
         )
 
-    async def _process_context(self, context: OpenAILLMContext):
+    async def _process_context(self, context: LLMContext):
         """Process a context through the LLM and push text frames.
 
         Args:
-            context (OpenAILLMContext): The context to process, containing messages
+            context (LLMContext): The context to process, containing messages
                 and other information needed for the LLM interaction.
         """
         await self.push_frame(LLMFullResponseStartFrame())
@@ -288,7 +288,7 @@ class HuggingFaceLLMService(OpenAILLMService):
         """Create a streaming chat completion using HuggingFace model.
 
         Args:
-            context (OpenAILLMContext): The context object containing tools configuration
+            context (LLMContext): The context object containing tools configuration
                 and other settings for the chat completion.
             messages (List[ChatCompletionMessageParam]): The list of messages comprising
                 the conversation history and current request.

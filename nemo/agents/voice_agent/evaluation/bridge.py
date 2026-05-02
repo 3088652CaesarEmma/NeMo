@@ -38,13 +38,13 @@ import websockets
 from loguru import logger
 from omegaconf import DictConfig
 from pipecat.frames.frames import OutputAudioRawFrame
-from pipecat.processors.frameworks.rtvi import (
-    RTVIBotStartedSpeakingMessage,
-    RTVIBotStoppedSpeakingMessage,
-    RTVIBotTranscriptionMessage,
-    RTVIBotTTSTextMessage,
-    RTVIServerMessage,
-    RTVITextMessageData,
+from pipecat.processors.frameworks.rtvi.models import (
+    BotStartedSpeakingMessage,
+    BotStoppedSpeakingMessage,
+    BotTranscriptionMessage,
+    BotTTSTextMessage,
+    ServerMessage,
+    TextMessageData,
 )
 from pipecat.serializers.protobuf import MessageFrame, ProtobufFrameSerializer
 
@@ -60,11 +60,11 @@ from nemo.agents.voice_agent.utils import setup_logging
 from nemo.agents.voice_agent.utils.audio import AudioStream, NoiseConfig
 
 # RTVI message type constants - automatically adapts to pipecat changes
-RTVI_BOT_STOPPED_SPEAKING = RTVIBotStoppedSpeakingMessage().type
-RTVI_BOT_STARTED_SPEAKING = RTVIBotStartedSpeakingMessage().type
-RTVI_BOT_TRANSCRIPTION = RTVIBotTranscriptionMessage(data=RTVITextMessageData(text="")).type
-RTVI_BOT_TTS_TEXT = RTVIBotTTSTextMessage(data=RTVITextMessageData(text="")).type
-RTVI_BOT_SERVER_MESSAGE = RTVIServerMessage(data=RTVITextMessageData(text="")).type
+RTVI_BOT_STOPPED_SPEAKING = BotStoppedSpeakingMessage().type
+RTVI_BOT_STARTED_SPEAKING = BotStartedSpeakingMessage().type
+RTVI_BOT_TRANSCRIPTION = BotTranscriptionMessage(data=TextMessageData(text="")).type
+RTVI_BOT_TTS_TEXT = BotTTSTextMessage(data=TextMessageData(text="")).type
+RTVI_BOT_SERVER_MESSAGE = ServerMessage(data=TextMessageData(text="")).type
 
 STOP_REASON_TIMEOUT = "[TIMEOUT]"
 STOP_REASON_EXIT = "[EXIT]"

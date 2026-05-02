@@ -20,10 +20,10 @@ from dotenv import load_dotenv
 from loguru import logger
 from omegaconf import OmegaConf
 from pipecat.frames.frames import LLMRunFrame
-from pipecat.observers.loggers.user_bot_latency_log_observer import UserBotLatencyLogObserver
+from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.task import PipelineParams, PipelineTask
-from pipecat.processors.frameworks.rtvi import RTVIConfig, RTVIProcessor
+from pipecat.processors.frameworks.rtvi import RTVIProcessor
 
 from nemo.agents.voice_agent.evaluation.tools import get_schema_tool_for_eval
 from nemo.agents.voice_agent.evaluation.tools.basic_tools import GetCityWeatherTool
@@ -35,9 +35,9 @@ from nemo.agents.voice_agent.pipecat.bot_server import (
 from nemo.agents.voice_agent.pipecat.processors.frameworks.rtvi import RTVIObserver
 from nemo.agents.voice_agent.pipecat.processors.frameworks.rtvi_actions import (
     TaskRef,
-    create_get_context_history_action,
-    create_reset_context_action,
-    create_update_system_prompt_action,
+    register_get_context_history_handler,
+    register_reset_context_handler,
+    register_update_system_prompt_handler,
 )
 from nemo.agents.voice_agent.pipecat.services.nemo.audio_logger import RTVIAudioLoggerObserver
 from nemo.agents.voice_agent.pipecat.services.nemo.builders import (
@@ -88,7 +88,7 @@ async def run_bot_websocket(
 
     audio_logger = build_audio_logger(config_manager)
     vad_analyzer = build_vad_analyzer(config_manager)
-    ws_transport = build_ws_transport(config_manager, vad_analyzer, host, port)
+    ws_transport = build_ws_transport(config_manager, host, port)
     stt = build_stt(config_manager, audio_logger)
     diar = build_diar(config_manager, audio_logger)
     turn_taking = build_turn_taking(config_manager, audio_logger)
@@ -98,7 +98,9 @@ async def run_bot_websocket(
     setup_rotating_log(log_file=log_file, log_level=log_level)
 
     llm = build_llm(config_manager)
-    context, user_agg, assistant_agg, original_messages = build_context_and_aggregators(llm, config_manager)
+    context, user_agg, assistant_agg, original_messages = build_context_and_aggregators(
+        config_manager, vad_analyzer=vad_analyzer
+    )
 
     llm_enable_tool_calling = server_config.llm.get("enable_tool_calling", False)
     if llm_enable_tool_calling:
@@ -107,7 +109,7 @@ async def run_bot_websocket(
     else:
         logger.info("Tool calling disabled; skipping initial tool registration.")
 
-    rtvi = RTVIProcessor(config=RTVIConfig(config=[]))
+    rtvi = RTVIProcessor()
 
     pipeline_list = [ws_transport.input(), rtvi, stt]
     if diar is not None:
@@ -119,25 +121,23 @@ async def run_bot_websocket(
 
     resettable = [stt, tts, turn_taking, diar]
     task_ref = TaskRef()
-    rtvi.register_action(create_reset_context_action(task_ref, user_agg, assistant_agg, original_messages, resettable))
-    rtvi.register_action(
-        create_update_system_prompt_action(
-            task_ref,
-            user_agg,
-            assistant_agg,
-            original_messages,
-            resettable,
-            system_role=config_manager.SYSTEM_ROLE,
-            system_prompt_suffix=config_manager.SYSTEM_PROMPT_SUFFIX,
-            enable_tool_calling=llm_enable_tool_calling,
-            llm=llm,
-            context=context,
-            rtvi=rtvi,
-            tool_factory=get_schema_tool_for_eval,
-            register_schema_tools=register_schema_tools_to_llm,
-        )
+    register_reset_context_handler(rtvi, task_ref, user_agg, assistant_agg, original_messages, resettable)
+    register_update_system_prompt_handler(
+        rtvi,
+        task_ref,
+        user_agg,
+        assistant_agg,
+        original_messages,
+        resettable,
+        system_role=config_manager.SYSTEM_ROLE,
+        system_prompt_suffix=config_manager.SYSTEM_PROMPT_SUFFIX,
+        enable_tool_calling=llm_enable_tool_calling,
+        llm=llm,
+        context=context,
+        tool_factory=get_schema_tool_for_eval,
+        register_schema_tools=register_schema_tools_to_llm,
     )
-    rtvi.register_action(create_get_context_history_action(task_ref, assistant_agg))
+    register_get_context_history_handler(rtvi, task_ref, assistant_agg)
 
     task = PipelineTask(
         pipeline,
@@ -149,7 +149,7 @@ async def run_bot_websocket(
         observers=[
             RTVIObserver(rtvi),
             RTVIAudioLoggerObserver(audio_logger=audio_logger),
-            UserBotLatencyLogObserver(),
+            UserBotLatencyObserver(),
         ],
         idle_timeout_secs=None,
         cancel_on_idle_timeout=False,

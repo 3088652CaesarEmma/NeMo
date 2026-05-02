@@ -14,8 +14,8 @@
  */
 
 import {
-  RTVIClient,
-  RTVIClientOptions,
+  PipecatClient,
+  PipecatClientOptions,
   RTVIEvent,
 } from '@pipecat-ai/client-js';
 import {
@@ -23,7 +23,7 @@ import {
 } from "@pipecat-ai/websocket-transport";
 
 class WebsocketClientApp {
-  private rtviClient: RTVIClient | null = null;
+  private rtviClient: PipecatClient | null = null;
   private connectBtn: HTMLButtonElement | null = null;
   private disconnectBtn: HTMLButtonElement | null = null;
   private muteBtn: HTMLButtonElement | null = null;
@@ -222,13 +222,8 @@ class WebsocketClientApp {
 
       //const transport = new DailyTransport();
       const transport = new WebSocketTransport();
-      const RTVIConfig: RTVIClientOptions = {
+      const RTVIConfig: PipecatClientOptions = {
         transport,
-        params: {
-          // The baseURL and endpoint of your bot server that the client will connect to
-          baseUrl: this.getSelectedServerConfig().baseUrl,
-          endpoints: { connect: '/connect' },
-        },
         enableMic: true,
         enableCam: false,
         callbacks: {
@@ -327,7 +322,7 @@ class WebsocketClientApp {
       
       // Create the client with error handling
       try {
-        this.rtviClient = new RTVIClient(RTVIConfig);
+        this.rtviClient = new PipecatClient(RTVIConfig);
         this.setupTrackListeners();
       } catch (clientError) {
         this.log(`Error creating RTVI client: ${clientError}`);
@@ -339,7 +334,10 @@ class WebsocketClientApp {
       this.log('Devices initialized successfully');
 
       this.log('Connecting to bot...');
-      await this.rtviClient.connect();
+      // pipecat 1.x moved the connect endpoint from PipecatClientOptions.params to connect()
+      await this.rtviClient.connect({
+        endpoint: `${this.getSelectedServerConfig().baseUrl}/connect`,
+      });
 
       const timeTaken = Date.now() - startTime;
       this.log(`Connection complete, timeTaken: ${timeTaken}`);
@@ -574,13 +572,13 @@ class WebsocketClientApp {
     try {
       this.log('Resetting conversation context...');
       
-      // Call the reset action on the server
-      const result = await this.rtviClient.action({ service: 'context', action: 'reset', arguments: [] });
-      
-      if (result) {
+      // Send the context.reset request to the server (pipecat 1.x RTVI client-message API)
+      const response = await this.rtviClient.sendClientRequest('context.reset', {});
+      const success = (response as { result?: boolean } | undefined)?.result === true;
+      if (success) {
         this.log('Conversation context reset successfully');
       } else {
-        this.log('Failed to reset conversation context');
+        this.log(`Failed to reset conversation context: ${JSON.stringify(response)}`);
       }
     } catch (error) {
       this.log(`Error resetting context: ${error}`);

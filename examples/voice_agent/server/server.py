@@ -21,7 +21,7 @@ from loguru import logger
 from omegaconf import OmegaConf
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.task import PipelineParams, PipelineTask
-from pipecat.processors.frameworks.rtvi import RTVIConfig, RTVIObserverParams, RTVIProcessor
+from pipecat.processors.frameworks.rtvi import RTVIObserverParams, RTVIProcessor
 
 from nemo.agents.voice_agent.pipecat.bot_server import (
     create_fastapi_app,
@@ -29,7 +29,7 @@ from nemo.agents.voice_agent.pipecat.bot_server import (
     run_bot_with_fastapi,
 )
 from nemo.agents.voice_agent.pipecat.processors.frameworks.rtvi import RTVIObserver
-from nemo.agents.voice_agent.pipecat.processors.frameworks.rtvi_actions import TaskRef, create_reset_context_action
+from nemo.agents.voice_agent.pipecat.processors.frameworks.rtvi_actions import TaskRef, register_reset_context_handler
 from nemo.agents.voice_agent.pipecat.services.nemo.audio_logger import RTVIAudioLoggerObserver
 from nemo.agents.voice_agent.pipecat.services.nemo.builders import (
     build_audio_logger,
@@ -67,7 +67,7 @@ async def run_bot_websocket(host: str, port: int):
 
     audio_logger = build_audio_logger(config_manager)
     vad_analyzer = build_vad_analyzer(config_manager)
-    ws_transport = build_ws_transport(config_manager, vad_analyzer, host, port)
+    ws_transport = build_ws_transport(config_manager, host, port)
     stt = build_stt(config_manager, audio_logger)
     diar = build_diar(config_manager, audio_logger)
     turn_taking = build_turn_taking(config_manager, audio_logger)
@@ -76,9 +76,11 @@ async def run_bot_websocket(host: str, port: int):
     setup_logging()
 
     llm = build_llm(config_manager)
-    context, user_agg, assistant_agg, original_messages = build_context_and_aggregators(llm, config_manager)
+    context, user_agg, assistant_agg, original_messages = build_context_and_aggregators(
+        config_manager, vad_analyzer=vad_analyzer
+    )
 
-    rtvi = RTVIProcessor(config=RTVIConfig(config=[]))
+    rtvi = RTVIProcessor()
     pipeline_list = [ws_transport.input(), rtvi, stt]
     if diar is not None:
         pipeline_list.append(diar)
@@ -94,12 +96,11 @@ async def run_bot_websocket(host: str, port: int):
         logger.info("Tool calling disabled; skipping initial tool registration.")
 
     task_ref = TaskRef()
-    rtvi.register_action(create_reset_context_action(task_ref, user_agg, assistant_agg, original_messages, resettable))
+    register_reset_context_handler(rtvi, task_ref, user_agg, assistant_agg, original_messages, resettable)
 
     task = PipelineTask(
         pipeline,
         params=PipelineParams(
-            allow_interruptions=True,
             enable_metrics=False,
             enable_usage_metrics=False,
             send_initial_empty_metrics=True,

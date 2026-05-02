@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
-from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
+from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.llm_service import FunctionCallParams
 from pipecat.services.openai.llm import OpenAILLMService
 
@@ -134,7 +134,7 @@ class StandardSchemaTool:
 
 def register_schema_tools_to_llm(
     llm: OpenAILLMService,
-    context: OpenAILLMContext,
+    context: LLMContext,
     tools: List[StandardSchemaTool],
     cancel_on_interruption: bool = True,
     keep_existing_tools: bool = True,

@@ -46,12 +46,12 @@ from pipecat.frames.frames import (
     UserStoppedSpeakingFrame,
 )
 from pipecat.processors.aggregators.llm_context import LLMContext
-from pipecat.processors.aggregators.llm_response import (
-    LLMAssistantAggregatorParams,
-    LLMAssistantContextAggregator,
-    LLMUserAggregatorParams,
-    LLMUserContextAggregator,
+from pipecat.processors.aggregators.llm_response_universal import (
+    LLMAssistantAggregator as LLMAssistantContextAggregator,
 )
+from pipecat.processors.aggregators.llm_response_universal import LLMAssistantAggregatorParams
+from pipecat.processors.aggregators.llm_response_universal import LLMUserAggregator as LLMUserContextAggregator
+from pipecat.processors.aggregators.llm_response_universal import LLMUserAggregatorParams
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from nemo.agents.voice_agent.pipecat.frames.action import StartedPresenceUserActionFrame

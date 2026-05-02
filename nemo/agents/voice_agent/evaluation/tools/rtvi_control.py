@@ -19,7 +19,8 @@
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
-from pipecat.processors.frameworks.rtvi import RTVIProcessor, RTVIServerMessage, RTVITextMessageData
+from pipecat.processors.frameworks.rtvi import RTVIProcessor
+from pipecat.processors.frameworks.rtvi.models import ServerMessage, TextMessageData
 from pipecat.services.llm_service import FunctionCallParams
 
 from nemo.agents.voice_agent.evaluation.tools import register_schema_tool_for_eval
@@ -75,8 +76,8 @@ class SendRTVIMessageTool(StandardSchemaTool):
         Args:
             message: The message to be sent.
         """
-        message = RTVIServerMessage(data=RTVITextMessageData(text=message))
-        await self._rtvi.push_transport_message(message, exclude_none=True)
+        message_obj = ServerMessage(data=TextMessageData(text=message))
+        await self._rtvi.push_transport_message(message_obj, exclude_none=True)
 
     async def _execute(self, params: FunctionCallParams) -> None:
         """
