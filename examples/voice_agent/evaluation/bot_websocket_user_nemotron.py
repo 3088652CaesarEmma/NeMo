@@ -70,10 +70,10 @@ class VADProfile(Enum):
 
 load_dotenv(override=True)
 SERVER_HOST = os.getenv("SERVER_HOST", "0.0.0.0")
-WEBSOCKET_PORT = int(os.getenv("WEBSOCKET_PORT", 8765))
-FASTAPI_PORT = int(os.getenv("FASTAPI_PORT", 7860))
+WEBSOCKET_PORT = int(os.getenv("WEBSOCKET_PORT", 8766))
+FASTAPI_PORT = int(os.getenv("FASTAPI_PORT", 7861))
 TALK_FIRST = os.getenv("TALK_FIRST", "true").lower() == "true"
-LOG_FILE = os.getenv("LOG_FILE", "bot_agent_nemotron.log")
+LOG_FILE = os.getenv("LOG_FILE", "bot_user_nemotron.log")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "DEBUG")
 
 
@@ -81,8 +81,9 @@ ENABLE_TOOL_CALLING = os.getenv("ENABLE_TOOL_CALLING", "false").lower() == "true
 ENABLE_THINKING = os.getenv("ENABLE_THINKING", "false").lower() == "true"
 AUDIO_OUT_10MS_CHUNKS = int(os.getenv("AUDIO_OUT_10MS_CHUNKS", "10"))
 ENABLE_MULTILINGUAL = os.getenv("ENABLE_MULTILINGUAL", "false").lower() == "true"
-VAD_PROFILE = VADProfile(os.getenv("VAD_PROFILE", VADProfile.ASR))
-VAD_STOP_SECS = float(os.getenv("VAD_STOP_SECS", "1.2"))
+# user VAD with longer stop time to prevent user from interrupting the agent
+VAD_PROFILE = VADProfile(os.getenv("VAD_PROFILE", VADProfile.SILERO))
+VAD_STOP_SECS = float(os.getenv("VAD_STOP_SECS", 1.2))
 PROMPT_FILE = Path(
     os.getenv("PROMPT_FILE_PATH", str(Path(__file__).parent / "nemotron_voice_agent_config" / "prompt.yaml"))
 )
@@ -105,7 +106,7 @@ ASR_CLOUD_FUNCTION_ID = os.getenv("ASR_CLOUD_FUNCTION_ID", "1598d209-5e27-4d3c-8
 
 ENABLE_TTS_TEXT_FILTER = os.getenv("ENABLE_TTS_TEXT_FILTER", "true").lower() == "true"
 TTS_SERVER_URL = os.getenv("TTS_SERVER_URL", "grpc.nvcf.nvidia.com:443")
-TTS_VOICE_ID = os.getenv("TTS_VOICE_ID", "Magpie-Multilingual.EN-US.Aria")  # default to Aria for agent, Leo for user
+TTS_VOICE_ID = os.getenv("TTS_VOICE_ID", "Magpie-Multilingual.EN-US.Leo")  # default to Aria for agent, Leo for user
 TTS_MODEL_NAME = os.getenv("TTS_MODEL_NAME", "magpie_tts_ensemble-Magpie-Multilingual")
 TTS_LANGUAGE = os.getenv("TTS_LANGUAGE", "en-US")
 ZERO_SHOT_AUDIO_PROMPT = os.getenv("ZERO_SHOT_AUDIO_PROMPT")
