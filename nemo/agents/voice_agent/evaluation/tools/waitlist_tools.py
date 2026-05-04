@@ -56,11 +56,11 @@ class JoinWaitListTool(SendScenarioSummaryTool):
         return {
             "name": {
                 "type": "string",
-                "description": "The customer's name.",
+                "description": "The customer's name, should be capitalized properly if the provided name is not capitalized (e.g. 'luna' -> 'Luna').",
             },
             "phone": {
                 "type": "string",
-                "description": "The customer's phone number.",
+                "description": "The customer's phone number, should be formatted as '123-456-7890'.",
             },
             "party_size": {
                 "type": "integer",
@@ -122,7 +122,7 @@ class DropWaitListTool(SendScenarioSummaryTool):
         return {
             "name": {
                 "type": "string",
-                "description": "The name of the customer to remove from the waitlist.",
+                "description": "The name of the customer to remove from the waitlist, should be capitalized properly if the provided name is not capitalized (e.g. 'luna' -> 'Luna').",
             },
         }
 

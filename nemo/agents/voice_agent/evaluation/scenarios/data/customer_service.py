@@ -89,6 +89,8 @@ class CustomerServiceBaseScenario(Scenario):
                 "before resolving the ticket.",
                 "Do not make promises that TechCorp cannot fulfill.",
                 "If you cannot resolve the issue, escalate it and inform the customer.",
+                "An account ID is in the format of 'TC-12345'.",
+                "A date is in the format of '2026-01-01'.",
             ],
         )
 
