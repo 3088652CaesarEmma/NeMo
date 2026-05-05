@@ -253,7 +253,8 @@ async def run_bot_websocket(
                 f"THINKING_BUDGET is greater than MAX_TOKENS, setting it to MAX_TOKENS - 3: {thinking_budget}"
             )
         extra_body = {
-            "reasoning_budget": thinking_budget,
+            "reasoning_budget": thinking_budget,  # for nvidia api compatibility
+            "thinking_token_budget": thinking_budget,  # for vllm compatibility
             "chat_template_kwargs": {"enable_thinking": enable_thinking},
         }
 
