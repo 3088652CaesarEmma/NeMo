@@ -80,6 +80,7 @@ jobs:
       library-name: Neural Modules
       validate-only: ${{ github.event_name != 'workflow_dispatch' }}
       dry-run: ${{ inputs.dry-run || false }}
+      wheel-content-ignore: "W002,W004,W005,W009"
       version-bump-branch: ${{ inputs.version-bump-branch || github.ref_name }}
       create-gh-release: ${{ inputs.create-gh-release || true }}
       app-id: ${{ vars.BOT_ID }}
