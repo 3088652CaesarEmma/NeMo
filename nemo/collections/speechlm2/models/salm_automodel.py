@@ -263,9 +263,12 @@ class SALMAutomodel(LightningModule, HFHubMixin):
 
         # TE's fused-attention CP path rejects ``padding_causal``; only ``causal``
         # is supported. BSHD batches are left-padded so dropping the padding mask
-        # lets pad K/V leak into real-token attention — tolerable for the
-        # smoke-test step but the durable fix for batched + padded inputs is the
-        # THD packed-sequence path (which uses cu_seqlens-aware CP attention).
+        # lets pad K/V leak into real-token attention — empirically this drives
+        # the loss to NaN at step 2 (the gradient through the LoRA / projection
+        # parameters is corrupted by the leak after one optimizer step). BSHD +
+        # CP is therefore not a supported configuration; set
+        # ``model.packed_sequences: true`` to use the THD path under CP, which
+        # uses cu_seqlens-aware attention and has no equivalent issue.
         llm_attention_mask = None if cp_size > 1 else attention_mask
 
         return {
