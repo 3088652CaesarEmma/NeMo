@@ -281,7 +281,39 @@ class SALMAutomodel(LightningModule, HFHubMixin):
     def on_fit_start(self) -> None:
         """Configure the MoE aux-loss backward scaler to cancel FSDP's gradient
         averaging (see ``_configure_moe_aux_loss_scaler``)."""
+        self._validate_parallelism_compatibility()
         self._configure_moe_aux_loss_scaler()
+
+    def _validate_parallelism_compatibility(self) -> None:
+        """Raise on known-incompatible THD/CP/backend configurations.
+
+        Delegates to :func:`nemo.collections.speechlm2.parts.parallel.validate_parallelism_compatibility`
+        with the runtime-derived values from this model's config and device mesh.
+        """
+        import os
+
+        from nemo.collections.speechlm2.parts.parallel import validate_parallelism_compatibility
+
+        cp_size = 1
+        device_mesh = getattr(self, "_device_mesh", None)
+        if device_mesh is not None:
+            names = device_mesh.mesh_dim_names or ()
+            if "cp" in names:
+                cp_size = device_mesh["cp"].size()
+
+        attn_backend = self.cfg.get("automodel_backend", {}).get("attn", "te")
+        nvte_fused_attn = os.environ.get("NVTE_FUSED_ATTN")
+        device_capability = (
+            torch.cuda.get_device_capability() if torch.cuda.is_available() else None
+        )
+
+        validate_parallelism_compatibility(
+            packed_sequences=bool(self.cfg.get("packed_sequences", False)),
+            cp_size=cp_size,
+            attn_backend=attn_backend,
+            nvte_fused_attn=nvte_fused_attn,
+            device_capability=device_capability,
+        )
 
     def training_step(self, batch: dict, batch_idx: int):
         self._current_batch_idx = batch_idx
