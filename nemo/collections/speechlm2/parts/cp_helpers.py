@@ -13,17 +13,14 @@
 # limitations under the License.
 """Context-Parallelism (CP) helpers for SALMAutomodel.
 
-These helpers consolidate the CP-shape work needed to feed both BSHD and THD
-batches into a Nemotron-V3 LLM whose attention/Mamba layers were CP-wired by
-the Automodel parallelizer (`set_context_parallel_group()` / `mixer.cp =
-MambaContextParallel(...)`). Three concerns:
+These helpers consolidate the CP-shape work needed to feed THD packed
+batches into a Nemotron-V3 LLM whose attention/Mamba layers were CP-wired
+by the Automodel parallelizer (``set_context_parallel_group()`` /
+``mixer.cp = MambaContextParallel(...)``). Two concerns:
 
 1. ``get_cp_mesh`` — read the CP submesh out of a device mesh, returning
    ``(None, 1, 0)`` when CP is inactive so callers can short-circuit.
-2. ``shard_bshd_for_cp`` — pad and partition a BSHD batch along the seq dim
-   using TE's DualChunkSwap pattern (matches Automodel's Config 1 reference
-   test in ``run_hybrid_nemotron_v3_cp.py``).
-3. ``encode_audio_with_cp_distribution`` — distribute the audio encoder
+2. ``encode_audio_with_cp_distribution`` — distribute the audio encoder
    forward across CP ranks so it isn't recomputed cp_size times. Pads to a
    multiple of cp_size with dummy zero-audios so every rank participates in
    FSDP all-gather; dummies are dropped after the post-encoder all-gather.
@@ -34,7 +31,6 @@ from typing import Optional
 
 import torch
 import torch.distributed as dist
-import torch.nn.functional as F
 from torch import Tensor
 
 from nemo.collections.speechlm2.parts.encoder_chunking import encode_audio_with_optional_chunking
@@ -50,55 +46,6 @@ def get_cp_mesh(device_mesh) -> tuple[Optional[object], int, int]:
     cp_mesh = device_mesh["cp"]
     cp_rank = dist.get_rank(group=cp_mesh.get_group())
     return cp_mesh, cp_mesh.size(), cp_rank
-
-
-def shard_bshd_for_cp(
-    input_embs: Tensor,
-    attention_mask: Tensor,
-    target_ids: Tensor,
-    cp_mesh,
-    tp_size: int = 1,
-) -> dict[str, Tensor]:
-    """Pre-shard a BSHD batch across CP ranks via TE's DualChunkSwap pattern.
-
-    Right-pads the seq dim to a multiple of ``2 * cp_size * tp_size`` (TE-CP
-    requires ``2 * cp_size``; SP requires per-rank len divisible by ``tp_size``)
-    and partitions along the seq dim using
-    ``transformer_engine_torch.thd_get_partitioned_indices``.
-
-    Args:
-        input_embs:     ``[B, T, H]`` float.
-        attention_mask: ``[B, T]`` bool/long; pad slots become 0.
-        target_ids:     ``[B, T]`` int64; pad slots become ``-100``.
-        cp_mesh:        the CP submesh of size ``cp_size > 1``.
-        tp_size:        tensor-parallel world size (1 if TP is inactive).
-
-    Returns dict with keys ``input_embs``, ``attention_mask``, ``target_ids``,
-    each shape ``[B, T_padded // cp_size, ...]``.
-    """
-    import transformer_engine_torch as tex
-
-    cp_size = cp_mesh.size()
-    cp_rank = dist.get_rank(group=cp_mesh.get_group())
-    device = input_embs.device
-
-    B, T, H = input_embs.shape
-    mult = 2 * cp_size * max(1, tp_size)
-    T_padded = ((T + mult - 1) // mult) * mult
-    pad_n = T_padded - T
-    if pad_n > 0:
-        input_embs = F.pad(input_embs, (0, 0, 0, pad_n), value=0.0)
-        attention_mask = F.pad(attention_mask.to(torch.long), (0, pad_n), value=0).to(torch.bool)
-        target_ids = F.pad(target_ids, (0, pad_n), value=-100)
-
-    cu_seqlens = torch.tensor([0, T_padded], dtype=torch.int32, device=device)
-    indices = tex.thd_get_partitioned_indices(cu_seqlens, T_padded, cp_size, cp_rank)
-
-    return {
-        "input_embs": input_embs.index_select(1, indices).contiguous(),
-        "attention_mask": attention_mask.index_select(1, indices).contiguous(),
-        "target_ids": target_ids.index_select(1, indices).contiguous(),
-    }
 
 
 def encode_audio_with_cp_distribution(

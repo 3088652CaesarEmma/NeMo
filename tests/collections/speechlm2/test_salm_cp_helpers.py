@@ -13,11 +13,10 @@
 # limitations under the License.
 """CPU-only tests for the CP-helper module.
 
-The ``cp_size > 1`` paths in ``shard_bshd_for_cp`` and
-``encode_audio_with_cp_distribution`` require ``transformer_engine_torch``
-and a real ``torch.distributed`` process group respectively; they're
-exercised by the 2-GPU smoke. These tests cover the fallback contracts
-that run on every machine (``cp_mesh is None``, ``B_aud == 0``).
+The ``cp_size > 1`` path in ``encode_audio_with_cp_distribution`` requires
+a real ``torch.distributed`` process group; it's exercised by the 2-GPU
+smoke. These tests cover the fallback contracts that run on every machine
+(``cp_mesh is None``, ``B_aud == 0``).
 """
 import torch
 

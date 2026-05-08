@@ -197,10 +197,9 @@ class SALMAutomodel(LightningModule, HFHubMixin):
         from nemo.collections.speechlm2.parts.cp_helpers import (
             encode_audio_with_cp_distribution,
             get_cp_mesh,
-            shard_bshd_for_cp,
         )
 
-        cp_mesh, cp_size, _ = get_cp_mesh(getattr(self, "_device_mesh", None))
+        cp_mesh, _, _ = get_cp_mesh(getattr(self, "_device_mesh", None))
 
         # Source audio encoding (distributed across CP ranks when CP is active).
         # Input audio: (B_aud, T_samples) → list of (L_i, H) embeddings.
@@ -243,37 +242,20 @@ class SALMAutomodel(LightningModule, HFHubMixin):
         attention_mask = attention_mask[:, :-1]
         target_ids = target_ids[:, 1:]
 
-        # Sequence-length divisibility for sequence/context parallelism.
-        # CP path: pad to 2*cp_size*tp_size and partition along the seq dim
-        # (the existing TP truncation is folded into the CP padding). BSHD-only
-        # path keeps the original TP-truncation behavior.
-        tp_size = self.device_mesh["tp"].size() if self._use_tp else 1
-        if cp_size > 1:
-            sharded = shard_bshd_for_cp(input_embs, attention_mask, target_ids, cp_mesh, tp_size=tp_size)
-            input_embs = sharded["input_embs"]
-            attention_mask = sharded["attention_mask"]
-            target_ids = sharded["target_ids"]
-        elif self._use_tp:
+        # BSHD path runs only when CP is inactive (the fit-start validator
+        # rejects BSHD + CP > 1, see _validate_parallelism_compatibility).
+        # Truncate the seq dim to be divisible by tp_size so sequence
+        # parallelism doesn't reshape the input under us.
+        if self._use_tp:
+            tp_size = self.device_mesh["tp"].size()
             if (remainder := (input_embs.shape[1] - 1) % tp_size) != 0:
-                # Truncate some tokens from the end to make the sequence length shape divisible by tensor parallelism
-                # world size. Otherwise, sequence parallelism will change the input shape making leading to mismatches.
                 input_embs = input_embs[:, :-remainder]
                 attention_mask = attention_mask[:, :-remainder]
                 target_ids = target_ids[:, :-remainder]
 
-        # TE's fused-attention CP path rejects ``padding_causal``; only ``causal``
-        # is supported. BSHD batches are left-padded so dropping the padding mask
-        # lets pad K/V leak into real-token attention — empirically this drives
-        # the loss to NaN at step 2 (the gradient through the LoRA / projection
-        # parameters is corrupted by the leak after one optimizer step). BSHD +
-        # CP is therefore not a supported configuration; set
-        # ``model.packed_sequences: true`` to use the THD path under CP, which
-        # uses cu_seqlens-aware attention and has no equivalent issue.
-        llm_attention_mask = None if cp_size > 1 else attention_mask
-
         return {
             "input_embeds": input_embs,
-            "attention_mask": llm_attention_mask,
+            "attention_mask": attention_mask,
             "target_ids": target_ids,
             "llm_kwargs": {},
         }
