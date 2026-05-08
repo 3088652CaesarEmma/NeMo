@@ -249,6 +249,16 @@ sequence rounding aligns naturally with CP's ``2*cp_size`` requirement.
    Set ``model.packed_sequences: true`` to use the THD path instead.
 
 .. note::
+   **CP-safe data loading is automatic.** The speechlm2 datamodule wraps
+   the Lhotse loader in
+   :class:`~nemo.collections.common.data.lhotse.broadcasting.BroadcastingDataLoader`,
+   so under CP/TP every batch is constructed once on the DP source rank
+   (``cp_rank == 0`` and ``tp_rank == 0``) and broadcast to its sub-mesh
+   peers. This eliminates per-rank Lhotse non-determinism (``concurrent_bucketing``,
+   worker scheduling jitter, etc.) as a source of NCCL deadlocks under CP.
+   See :doc:`/dataloaders` for the standalone API.
+
+.. note::
    **TE/THD exploding-gradients workaround on some GPUs.** On certain GPU
    architectures (notably Blackwell ``sm_120``), the cuDNN backend that
    TransformerEngine 2.14 picks for ``qkv_format="thd"`` with
