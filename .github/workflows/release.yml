@@ -98,7 +98,6 @@ jobs:
       docs-target-path: nemo
       docs-directory: docs/source
       docs-requirements-file: requirements/requirements_docs.txt
-      docs-fail-on-warning: false
       publish-as-latest: true
       run-on-version-tag-only: ${{ github.ref_name != 'main' }}
       docs-skip-linkcheck: true
