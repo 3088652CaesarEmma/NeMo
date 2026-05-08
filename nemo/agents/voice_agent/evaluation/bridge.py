@@ -370,8 +370,16 @@ class VoiceAgentEvaluationBridge:
         await self.connect()
 
         # Update prompts (handler will automatically reset)
-        await self.update_user_prompt(prompt=scenario["user_prompt"], tools=scenario["user_tools"])
-        await self.update_agent_prompt(prompt=scenario["agent_prompt"], tools=scenario["agent_tools"])
+        await self.update_user_prompt(
+            prompt=scenario["user_prompt"],
+            tools=scenario["user_tools"],
+            shared_state_init=scenario.get("user_shared_state_init", "{}"),
+        )
+        await self.update_agent_prompt(
+            prompt=scenario["agent_prompt"],
+            tools=scenario["agent_tools"],
+            shared_state_init=scenario.get("agent_shared_state_init", "{}"),
+        )
 
         if "noise_config" in scenario:
             self.set_noise_config(scenario["noise_config"])
@@ -554,7 +562,14 @@ class VoiceAgentEvaluationBridge:
             logger.error(f"Error waiting for bot-ready: {e}")
             return False
 
-    async def update_user_prompt(self, prompt: str, tools: str, auto_reset: bool = False, add_suffix: bool = False):
+    async def update_user_prompt(
+        self,
+        prompt: str,
+        tools: str,
+        auto_reset: bool = False,
+        add_suffix: bool = False,
+        shared_state_init: str = "{}",
+    ):
         """
         Update user's system prompt via RTVI action.
 
@@ -563,6 +578,9 @@ class VoiceAgentEvaluationBridge:
             tools: New tools in json string format
             auto_reset: If True, also sends reset action after updating prompt
             add_suffix: If True, add previously configured system prompt suffix to the new prompt
+            shared_state_init: JSON string used to initialize ``shared_state`` on the
+                bot server before tools are instantiated. Default ``"{}"`` (empty
+                dict) preserves prior behavior.
         """
         logger.info(f"Updating user prompt: {prompt[:100]}..., tools: {tools[:100]}...")
 
@@ -578,6 +596,7 @@ class VoiceAgentEvaluationBridge:
                     {"name": "prompt", "value": prompt},
                     {"name": "tools", "value": tools},
                     {"name": "add_suffix", "value": add_suffix},
+                    {"name": "shared_state_init", "value": shared_state_init},
                 ],
             },
         }
@@ -595,7 +614,14 @@ class VoiceAgentEvaluationBridge:
 
         return True
 
-    async def update_agent_prompt(self, prompt: str, tools: str, auto_reset: bool = False, add_suffix: bool = False):
+    async def update_agent_prompt(
+        self,
+        prompt: str,
+        tools: str,
+        auto_reset: bool = False,
+        add_suffix: bool = False,
+        shared_state_init: str = "{}",
+    ):
         """
         Update agent's system prompt via RTVI action.
 
@@ -604,6 +630,9 @@ class VoiceAgentEvaluationBridge:
             tools: New tools in json string format
             auto_reset: If True, also sends reset action after updating prompt
             add_suffix: If True, add previously configured system prompt suffix to the new prompt
+            shared_state_init: JSON string used to initialize ``shared_state`` on the
+                bot server before tools are instantiated. Default ``"{}"`` (empty
+                dict) preserves prior behavior.
         """
         logger.info(f"Updating agent prompt: {prompt[:100]}..., tools: {tools[:100]}...")
 
@@ -619,6 +648,7 @@ class VoiceAgentEvaluationBridge:
                     {"name": "prompt", "value": prompt},
                     {"name": "tools", "value": tools},
                     {"name": "add_suffix", "value": add_suffix},
+                    {"name": "shared_state_init", "value": shared_state_init},
                 ],
             },
         }

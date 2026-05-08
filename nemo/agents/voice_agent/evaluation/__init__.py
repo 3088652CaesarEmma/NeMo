@@ -11,3 +11,24 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+import os
+from pathlib import Path
+
+
+def get_eval_data_root() -> Path:
+    """Resolve the root directory for evaluation fixture data.
+
+    Checks `$EVAL_DATA_ROOT` first; falls back to
+    `<repo>/examples/voice_agent/evaluation/data`. Lazy (function, not module
+    constant) so env-var changes after import take effect — useful for tests
+    and for bridge/server processes setting it differently.
+
+    Convention: `db_path` and similar fixture-path values stored in
+    `shared_state_init` are always **relative** to this root, so bridge and
+    server can resolve to different absolute roots.
+    """
+    if env := os.environ.get("EVAL_DATA_ROOT"):
+        return Path(env)
+    # parents[4]: __init__.py → evaluation → voice_agent → agents → nemo → repo root
+    return Path(__file__).resolve().parents[4] / "examples" / "voice_agent" / "evaluation" / "data"

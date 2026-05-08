@@ -120,6 +120,14 @@ def create_update_system_prompt_action(
     per tool to produce schema tools, then ``register_schema_tools`` swaps them
     onto ``llm`` / ``context``. This keeps the factory decoupled from
     evaluation-specific tool registries.
+
+    The action accepts an optional ``shared_state_init`` argument (JSON string)
+    used to initialize the per-scenario ``shared_state`` dict before tools are
+    instantiated. The bridge populates it from ``Scenario.setup_shared_state``.
+    Convention: keys ending in ``_path`` (currently just ``db_path``) are
+    resolved against ``EVAL_DATA_ROOT`` and the loaded JSON content replaces
+    them under the de-suffixed key (``db_path`` → ``db``). Missing files raise
+    ``FileNotFoundError`` loudly. Only consumed when tool calling is enabled.
     """
 
     async def handler(rtvi_processor: RTVIProcessor, service: str, arguments: dict[str, Any]) -> bool:
@@ -155,7 +163,26 @@ def create_update_system_prompt_action(
             ):
                 logger.info("Registering new tools...")
                 new_tools = json.loads(new_tools_json)
-                shared_state: dict = {}
+
+                # Initialize shared_state from the optional shared_state_init payload
+                # produced by Scenario.setup_shared_state(). Convention: any *_path
+                # keys (e.g. "db_path") are resolved against EVAL_DATA_ROOT and the
+                # loaded JSON content replaces them under the de-suffixed key
+                # ("db_path" → "db"). Decoupled from agent tool-call order.
+                from nemo.agents.voice_agent.evaluation import get_eval_data_root
+
+                shared_state: dict = json.loads(arguments.get("shared_state_init", "{}"))
+                if "db_path" in shared_state:
+                    db_path = shared_state.pop("db_path")
+                    full_path = get_eval_data_root() / db_path
+                    if not full_path.exists():
+                        raise FileNotFoundError(
+                            f"Scenario DB not found at {full_path} (from db_path={db_path!r}). "
+                            f"Check EVAL_DATA_ROOT (currently resolves to {get_eval_data_root()})."
+                        )
+                    shared_state["db"] = json.loads(full_path.read_text())
+                    logger.info(f"Loaded scenario DB from {full_path} into shared_state['db']")
+
                 new_schema_tools = [
                     tool_factory(tool_name, rtvi=rtvi, shared_state=shared_state, **tool_args)
                     for tool_name, tool_args in new_tools.items()
@@ -191,6 +218,7 @@ def create_update_system_prompt_action(
             {"name": "prompt", "type": "string", "required": True},
             {"name": "tools", "type": "string", "required": False, "default": "{}"},
             {"name": "add_suffix", "type": "bool", "required": False, "default": True},
+            {"name": "shared_state_init", "type": "string", "required": False, "default": "{}"},
         ],
         handler=handler,
     )

@@ -184,6 +184,7 @@ def check_if_task_success(
     ignore_capitalization: bool = False,
     ignore_punctuation: bool = False,
     clean_text: bool = False,
+    disallow_extra_items: bool = False,
 ) -> bool:
     """
     Check if the prediction is matches with the reference answer.
@@ -202,6 +203,8 @@ def check_if_task_success(
       - The order of the dictionaries in the reference/prediction is not important.
       - All dictionaries in the reference should be matched with a dictionary in the prediction
         to be considered as a success.
+      - If ``disallow_extra_items`` is True, the lengths must also match exactly
+        (exact bijection — no extra prediction items tolerated).
 
     Args:
         reference: The path to the reference json file.
@@ -209,6 +212,11 @@ def check_if_task_success(
         ignore_capitalization: Whether to ignore case when comparing strings.
         ignore_punctuation: Whether to ignore punctuation when comparing strings.
         clean_text: Whether to clean the text before comparing.
+        disallow_extra_items: For list-of-dicts comparisons (Situation 3), require
+            ``len(reference) == len(prediction)``. Default False preserves the
+            lenient behavior where agent extras pass. Note: Situation 2 (single
+            dict reference, list-of-dicts prediction) is unaffected — the last
+            prediction dict is still picked and matched.
     Returns:
         True if the task is considered as successful, False otherwise.
     """
@@ -232,6 +240,17 @@ def check_if_task_success(
 
     logger.debug(f"reference_answer: {reference_answer}")
     logger.debug(f"prediction_answer: {prediction_answer}")
+
+    # Strict mode: exact bijection required. Combined with the existing
+    # "each prediction matches at most one reference" constraint below,
+    # equal lengths + every reference matched ⇒ every prediction matched.
+    if disallow_extra_items and len(reference_answer) != len(prediction_answer):
+        logger.debug(
+            f"disallow_extra_items=True; length mismatch "
+            f"(ref={len(reference_answer)}, pred={len(prediction_answer)}); fail"
+        )
+        return False
+
     result = True
     # Situation 3: For each reference dict, find a matching prediction dict (order-independent).
     matched_indices = set()

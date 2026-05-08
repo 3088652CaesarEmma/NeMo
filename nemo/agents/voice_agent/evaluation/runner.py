@@ -48,6 +48,7 @@ async def run_dynamic_evaluation(
     logger: FileLogger = None,
     judge: Optional[LLMJudge] = None,
     judge_threshold: Optional[float] = None,
+    strict_match: bool = False,
 ):
     """
     Run evaluation with dynamic scenario switching and latency measurement.
@@ -69,6 +70,8 @@ async def run_dynamic_evaluation(
         logger: FileLogger instance for logging
         judge: LLMJudge instance for judging the scenario
         judge_threshold: Threshold for judging the scenario if binary result is desired, None for score based result
+        strict_match: If True, force ``disallow_extra_items=True`` on every scenario for this run,
+            overriding each scenario's own setting. Default False respects per-scenario flags.
     """
 
     if not logger:
@@ -100,6 +103,13 @@ async def run_dynamic_evaluation(
         scenario_dir = os.path.join(output_dir, scenario.name)
         os.makedirs(scenario_dir, exist_ok=True)
 
+        # Per-side shared_state — let the scenario seed scenario fixtures
+        # (e.g., a database path) before tools are instantiated on the bot
+        # server. Decoupled from agent tool-call order; LLM-invisible.
+        user_state, agent_state = {}, {}
+        scenario.setup_shared_state(user_state, "user")
+        scenario.setup_shared_state(agent_state, "agent")
+
         # Build dict for bridge.prepare_for_scenario
         scenario_dict = {
             "name": scenario.name,
@@ -107,6 +117,8 @@ async def run_dynamic_evaluation(
             "agent_prompt": scenario.get_agent_prompt(),
             "user_tools": scenario.get_user_tools(),
             "agent_tools": scenario.get_agent_tools(),
+            "user_shared_state_init": json.dumps(user_state),
+            "agent_shared_state_init": json.dumps(agent_state),
         }
         if scenario.noise_config:
             scenario_dict["noise_config"] = scenario.noise_config
@@ -150,12 +162,14 @@ async def run_dynamic_evaluation(
                 is_successful = result["score"]
             success_results.append(is_successful)
         else:
+            scenario_disallow_extra = strict_match or getattr(scenario, "disallow_extra_items", False)
             is_successful = check_if_task_success(
                 reference=reference_file,
                 prediction=prediction_file,
                 ignore_capitalization=getattr(scenario, "ignore_capitalization", False),
                 ignore_punctuation=getattr(scenario, "ignore_punctuation", False),
                 clean_text=getattr(scenario, "clean_text", False),
+                disallow_extra_items=scenario_disallow_extra,
             )
             success_results.append(is_successful)
 

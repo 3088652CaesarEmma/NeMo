@@ -113,6 +113,15 @@ Examples:
     parser.add_argument(
         "--judge-threshold", type=float, default=0.95, help="Threshold for the LLM judge if binary result is desired"
     )
+    parser.add_argument(
+        "--strict-match",
+        action="store_true",
+        help=(
+            "Force disallow_extra_items=True on every scenario for this run "
+            "(strict list-of-dicts comparator: lengths must match exactly). "
+            "Overrides each scenario's own disallow_extra_items setting."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -223,6 +232,7 @@ Examples:
                 logger=logger,
                 judge=judge,
                 judge_threshold=args.judge_threshold,
+                strict_match=args.strict_match,
             )
         )
         return 0

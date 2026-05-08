@@ -224,6 +224,7 @@ class Scenario:
         ignore_capitalization: Optional[bool] = False,
         ignore_punctuation: Optional[bool] = False,
         clean_text: Optional[bool] = False,
+        disallow_extra_items: Optional[bool] = False,
     ):
         """
         Initialize the scenario.
@@ -241,6 +242,9 @@ class Scenario:
                 and the final agent response.
             clean_text: Whether to clean the text when comparing the reference answer
                 and the final agent response.
+            disallow_extra_items: When True, the list-of-dicts comparator requires
+                ``len(reference) == len(prediction)`` (exact bijection). Default False
+                preserves the existing lenient behavior where agent extras pass.
         """
         if not hasattr(self, "name"):
             self.name = name
@@ -261,6 +265,25 @@ class Scenario:
             self.ignore_punctuation = ignore_punctuation
         if not hasattr(self, "clean_text"):
             self.clean_text = clean_text
+        if not hasattr(self, "disallow_extra_items"):
+            self.disallow_extra_items = disallow_extra_items
+
+    def setup_shared_state(self, state: dict, side: str) -> None:
+        """Populate per-side ``shared_state`` before tools are instantiated.
+
+        Called by the runner once per scenario, separately for ``side="user"``
+        and ``side="agent"``. The resulting state is JSON-serialized and sent
+        to the corresponding bot server via the ``shared_state_init`` arg of
+        ``update_system_prompt``.
+
+        Default no-op. Override in subclasses to seed scenario fixtures (e.g.,
+        a database path that the action handler resolves and loads).
+
+        Convention: any ``*_path`` keys placed in ``state`` are treated as
+        relative to ``get_eval_data_root()`` and resolved/loaded by the action
+        handler. ``state["db_path"]`` becomes ``state["db"]`` after resolution.
+        """
+        pass
 
     def get_user_tools(self) -> str:
         """
@@ -396,6 +419,7 @@ class Scenario:
             "ignore_capitalization": self.ignore_capitalization,
             "ignore_punctuation": self.ignore_punctuation,
             "clean_text": self.clean_text,
+            "disallow_extra_items": self.disallow_extra_items,
         }
         with open(output_dir / "metadata.json", "w") as f:
             json.dump(metadata, f, indent=4)
