@@ -191,10 +191,14 @@ class ConfigManager:
 
     def _configure_turn_taking(self):
         """Configure turn taking parameters."""
-        if self.server_config.turn_taking.get("enabled", False):
+        if self.server_config.turn_taking.get("enabled", True):
             self.TURN_TAKING_BACKCHANNEL_PHRASES_PATH = self.server_config.turn_taking.backchannel_phrases_path
             self.TURN_TAKING_MAX_BUFFER_SIZE = self.server_config.turn_taking.max_buffer_size
             self.TURN_TAKING_BOT_STOP_DELAY = self.server_config.turn_taking.bot_stop_delay
+        else:
+            self.TURN_TAKING_BACKCHANNEL_PHRASES_PATH = ""
+            self.TURN_TAKING_MAX_BUFFER_SIZE = 0
+            self.TURN_TAKING_BOT_STOP_DELAY = 0.0
 
     def _configure_llm(self):
         """Configure LLM parameters."""
