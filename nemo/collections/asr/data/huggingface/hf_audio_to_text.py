@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import datasets as hf_datasets
@@ -134,7 +136,7 @@ class _HFAudioTextDataset(Dataset):
         hf_data_cfg: Union[DictConfig, ListConfig],
         parser: Union[str, Callable],
         sample_rate: int,
-        augmentor: 'nemo.collections.asr.parts.perturb.AudioAugmentor' = None,
+        augmentor: Optional[AudioAugmentor] = None,
         trim: bool = False,
         bos_id: Optional[int] = None,
         eos_id: Optional[int] = None,
@@ -168,7 +170,8 @@ class _HFAudioTextDataset(Dataset):
             with open_dict(data_cfg):
                 if "streaming" in data_cfg and data_cfg.streaming:
                     logging.warning(
-                        "streaming must be False for random access dataset, but you use streaming=True. Forcing streaming=False"
+                        "streaming must be False for random access dataset, but you use streaming=True. "
+                        "Forcing streaming=False"
                     )
                 data_cfg.streaming = False
             logging.info(f"Loading HuggingFace Dataset with cfg: {data_cfg}")
@@ -238,7 +241,7 @@ class HFAudioToCharDataset(_HFAudioTextDataset):
         hf_data_cfg: DictConfig,
         labels: List[str],
         sample_rate: int,
-        augmentor: 'nemo.collections.asr.parts.perturb.AudioAugmentor' = None,
+        augmentor: Optional[AudioAugmentor] = None,
         trim: bool = False,
         bos_id: Optional[int] = None,
         eos_id: Optional[int] = None,
@@ -305,9 +308,9 @@ class HFAudioToBPEDataset(_HFAudioTextDataset):
         text_key: str,
         sample_rate_key: str,
         hf_data_cfg: DictConfig,
-        tokenizer: 'nemo.collections.common.tokenizers.TokenizerSpec',
+        tokenizer: tokenizers.TokenizerSpec,
         sample_rate: int,
-        augmentor: 'nemo.collections.asr.parts.perturb.AudioAugmentor' = None,
+        augmentor: Optional[AudioAugmentor] = None,
         trim: bool = False,
         return_sample_id: bool = False,
         channel_selector: Optional[ChannelSelectorType] = None,
@@ -408,7 +411,7 @@ class _HFIterableAudioTextDataset(IterableDataset):
         hf_data_cfg: Union[DictConfig, ListConfig],
         parser: Union[str, Callable],
         sample_rate: int,
-        augmentor: 'nemo.collections.asr.parts.perturb.AudioAugmentor' = None,
+        augmentor: Optional[AudioAugmentor] = None,
         trim: bool = False,
         bos_id: Optional[int] = None,
         eos_id: Optional[int] = None,
@@ -450,7 +453,8 @@ class _HFIterableAudioTextDataset(IterableDataset):
             with open_dict(data_cfg):
                 if "streaming" in data_cfg and not data_cfg.streaming:
                     logging.warning(
-                        "streaming must be True for streaming dataset, but you use streaming=False. Forcing streaming=True"
+                        "streaming must be True for streaming dataset, but you use streaming=False. "
+                        "Forcing streaming=True"
                     )
                 # streaming must be True for iterable dataset
                 data_cfg.streaming = True
@@ -458,7 +462,7 @@ class _HFIterableAudioTextDataset(IterableDataset):
             dataset_list.append(hf_datasets.load_dataset(**data_cfg))
 
         self.dataset = concatenate_datasets(dataset_list)
-        logging.info(f"Total number of samples cannot be extracted from HF streaming dataset")
+        logging.info("Total number of samples cannot be extracted from HF streaming dataset")
 
         if shuffle_n > 0:
             self.dataset = self.dataset.shuffle(seed=shuffle_seed, buffer_size=shuffle_n)
@@ -468,7 +472,8 @@ class _HFIterableAudioTextDataset(IterableDataset):
 
     def __len__(self):
         raise NotImplementedError(
-            f"len() is not supported for {self.__class__.__name__}. Please set `trainer.max_steps` to explicitly set the number of steps to train for."
+            f"len() is not supported for {self.__class__.__name__}. "
+            "Please set `trainer.max_steps` to explicitly set the number of steps to train for."
         )
 
     def __iter__(self):
@@ -542,7 +547,7 @@ class HFIterableAudioToCharDataset(_HFIterableAudioTextDataset):
         sample_rate_key: str,
         hf_data_cfg: DictConfig,
         sample_rate: int,
-        augmentor: 'nemo.collections.asr.parts.perturb.AudioAugmentor' = None,
+        augmentor: Optional[AudioAugmentor] = None,
         trim: bool = False,
         bos_id: int | None = None,
         eos_id: int | None = None,
@@ -617,9 +622,9 @@ class HFIterableAudioToBPEDataset(_HFIterableAudioTextDataset):
         text_key: str,
         sample_rate_key: str,
         hf_data_cfg: DictConfig,
-        tokenizer: 'nemo.collections.common.tokenizers.TokenizerSpec',
+        tokenizer: tokenizers.TokenizerSpec,
         sample_rate: int,
-        augmentor: 'nemo.collections.asr.parts.perturb.AudioAugmentor' = None,
+        augmentor: Optional[AudioAugmentor] = None,
         trim: bool = False,
         return_sample_id: bool = False,
         id_key: str | None = None,
