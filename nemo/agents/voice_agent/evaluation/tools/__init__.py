@@ -77,6 +77,7 @@ def list_schema_tools_for_eval() -> List[StandardSchemaTool]:
 
 import nemo.agents.voice_agent.evaluation.tools.basic_tools
 import nemo.agents.voice_agent.evaluation.tools.customer_service_tools  # noqa: E402, F401
+import nemo.agents.voice_agent.evaluation.tools.eva_airline_tools  # noqa: E402, F401
 import nemo.agents.voice_agent.evaluation.tools.restaurant_tools  # noqa: E402, F401
 
 # Import subpackages to trigger @register_schema_tool_for_eval decorators.
