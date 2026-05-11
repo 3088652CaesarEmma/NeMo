@@ -92,7 +92,14 @@ skip_string_normalization = true
 # https://black.readthedocs.io/en/stable/the_black_code_style/index.html
 # `required_version` is necessary for consistency (other `black` versions will fail to reformat files)
 required_version = "24"
-target-version = ['py310', 'py311', 'py312']
+target-version = ['py310', 'py311', 'py312', 'py313']
+# by default exclude Jupyter Notebooks (but can be reformated when passed directly)
+extend-exclude = '''
+(
+  \.ipynb
+  | \.ipynb_checkpoints
+)
+'''
 
 
 [tool.pytest.ini_options]
