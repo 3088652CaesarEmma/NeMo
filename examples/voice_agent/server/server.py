@@ -19,6 +19,7 @@ import os
 from dotenv import load_dotenv
 from loguru import logger
 from omegaconf import OmegaConf
+from pipecat.frames.frames import LLMRunFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.frameworks.rtvi import RTVIConfig, RTVIObserverParams, RTVIProcessor
@@ -123,7 +124,7 @@ async def run_bot_websocket(host: str, port: int):
         task_ref=task_ref,
         audio_logger=audio_logger,
         talk_first=True,
-        initial_frame_factory=user_agg.get_context_frame,
+        initial_frame_factory=LLMRunFrame,
         on_disconnect_reset_services=None,
     )
 
