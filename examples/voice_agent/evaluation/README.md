@@ -125,11 +125,48 @@ The `eva_airline` domain is the first port from an external scenario library and
 
 - **Symmetric inline DB transfer.** Each scenario's `setup_shared_state` writes the full scenario DB content (`data/eva_airline_scenarios/{eva_id}.json`) into `state["db"]`. The runner serializes this in the `update_system_prompt` RTVI message and the bot server uses it as-is — no filesystem coupling on the server side. At end-of-scenario the bridge pulls the (mutated) DB back via `get_scenario_summary`. Full content travels both ways. (A path-based fallback in the action handler remains for any future domain whose fixture is too large to ship inline — see [`data/README.md`](../evaluation/data/README.md).)
 - **Auto-aggregated action records, bridge-pulled.** Write tools subclass `WriteAirlineTool` and call `self._record_action(...)` on success, populating `shared_state["actions"]`. There is **no LLM-callable summary tool**; the bridge pulls `{"actions": ..., "db": ...}` at end-of-scenario via the `get_scenario_summary` RTVI action (mirrors `get_context_history`). This eliminates summary-tool failure modes (forget-to-call, double-call, mid-conversation call) and a class of hallucinations (mis-formatted numbers, dropped fields, wrong enum values). Scoring measures what tools actually did.
-- **DB-state hash matching (path-independent scoring).** Each scenario binds to an `expected_scenario_db` via a `cached_property` that reads from `eva_airline_dataset.jsonl`'s `ground_truth.expected_scenario_db` field. The bridge pulls the post-run DB; the runner SHA-256-hashes both states and compares. Path-independent: any sequence of agent actions that lands in the right end state passes. Verified empirically on `eva_airline__voluntary_date_change` — a canonical happy path produces a DB whose hash matches eva's expected state exactly. Action-list comparison still runs alongside as a separate signal — useful when you want to specifically score "did the agent perform action X" vs. "did the world end up in state Y". `eva_airline__smoke` opts out (sets `expected_scenario_db = None`) since it doesn't mutate state. (Hash utility adapted from eva's `task_completion` metric.)
+- **DB-state hash matching (path-independent scoring).** Each scenario binds to an `expected_scenario_db` via a `cached_property` that reads from `eva_airline_dataset.jsonl`'s `ground_truth.expected_scenario_db` field. The bridge pulls the post-run DB; the runner SHA-256-hashes both states and compares. Path-independent: any sequence of agent actions that lands in the right end state passes. Verified empirically on `eva_airline__voluntary_date_change` — a canonical happy path produces a DB whose hash matches eva's expected state exactly. Action-list comparison still runs alongside as a separate signal — useful when you want to specifically score "did the agent perform action X" vs. "did the world end up in state Y". Scenarios that don't mutate state can opt out of DB-state scoring by setting `expected_scenario_db = None`. (Hash utility adapted from eva's `task_completion` metric.)
 - **Single-source-of-truth metadata.** Each scenario subclass declares only `eva_id`. `current_date` is a `cached_property` derived from the bound JSON's `_current_date` — no manual mirror, no drift.
 - **`disallow_extra_items` opt-in.** Off by default for airline scenarios (lenient — agent extras like reverted-then-redone rebooks pass). Enable per-scenario for clean-path runs where first-attempt correctness matters.
 - **ASR speakability.** Confirmation numbers (e.g., `ZK3FFW`) and flight numbers (e.g., `SK703`) round-trip poorly through ASR/TTS. The user persona is instructed to spell every character (e.g., "Z, K, three, F, F, W"), and the agent guideline forbids reading internal journey IDs aloud.
 - **Attribution.** Tool function bodies and Pydantic param models are adapted from [ServiceNow/eva](https://github.com/ServiceNow/eva/tree/0.1.3) (MIT). Inline `# Adapted from ...` comments are present at each ported block; see [`evaluation/data/README.md`](../evaluation/data/README.md) for the full source/license inventory.
+
+#### Running an eva_airline scenario
+
+Same three-terminal flow as the Quick Start, but use `--domain eva_airline` (or `--scenarios <name>`). Pick a single scenario to iterate on:
+
+```bash
+# Terminal 3 — bridge
+cd examples/voice_agent/evaluation
+python run_evaluation.py \
+    --user-url ws://localhost:8766 \
+    --agent-url ws://localhost:8765 \
+    --scenarios eva_airline__voluntary_date_change \
+    --judge-url <openai-compat-endpoint> \
+    --judge-model <model-name>
+```
+
+Or run the whole domain (5 scenarios; expect ~50 minutes at current pacing):
+
+```bash
+python run_evaluation.py \
+    --user-url ws://localhost:8766 \
+    --agent-url ws://localhost:8765 \
+    --domain eva_airline \
+    --judge-url <...> --judge-model <...>
+```
+
+**Inspecting results.** Each scenario writes to `eval_results/<timestamp>/<scenario>/`:
+
+- `metrics.json` — has both `is_successful` (action-list comparator) and `db_state_match` (DB-state hash). When `db_state_match` is False, `db_state_diff` shows a structured tables → records → fields diff against eva's expected end-state. That's the first place to look when a scenario fails.
+- `final_agent_response.json` — `[{"actions": [...]}]` auto-aggregated by write tools and bridge-pulled.
+- `final_scenario_db.json` — full post-run DB; hash against `dataset.jsonl`'s `ground_truth.expected_scenario_db` for the matching `eva_id`.
+- `bot_logs_agent/llm_context.json` — the agent's full conversation, tool calls, and tool results. The first place to look when behavior is unexpected.
+- `bot_logs_user/llm_context.json` — the user-simulator's side. Useful for distinguishing user-simulator behavior from agent-side STT errors (compare the user-sim's text vs. what the agent's STT decoded it as).
+
+**Tuning `max_duration`.** `EvaAirlineBaseScenario.max_duration = 900` (15 minutes) is the domain default; the `--duration` CLI flag overrides per run. Voice round-trips are slow (~30–40s/turn on a healthy run), so leave plenty of headroom. The closing protocol alone (confirm + ask anything else + goodbye) costs 3–4 turns after the work is done.
+
+**Known limitations.** Parakeet STT mis-recognizes spelled-out alphanumerics (homophones like "four" / "for", letter sequences sometimes collapsed into a single word). When a scenario fails, **compare the user-sim's text in `bot_logs_user/llm_context.json` against the agent-side STT output in `bot_logs_agent/llm_context.json`** to distinguish user-simulator prompt-following failures from voice-pipeline accuracy issues.
 
 ## Evaluation Methods
 
