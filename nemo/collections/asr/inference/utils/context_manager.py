@@ -19,8 +19,15 @@ from typing import Any
 import torch
 from torch import Tensor
 
-from nemo.collections.asr.inference.utils.cache import Cache, QuantizedCache, RawCache
+from nemo.collections.asr.inference.utils.cache import Cache, CastCache, QuantizedCache, RawCache
 from nemo.collections.asr.inference.utils.turboquant.mse import TurboQuantMSE
+
+
+_CAST_DTYPES: dict[str, torch.dtype] = {
+    "fp16": torch.float16,
+    "bf16": torch.bfloat16,
+}
+_VALID_CACHE_STORAGE = ("raw", "fp16", "bf16", "turbo")
 
 
 class CacheAwareContext:
@@ -55,7 +62,7 @@ class CacheAwareContextManager:
         cache_aware_model: Any,
         num_slots: int,
         use_cache: bool = True,
-        quantize_cache: bool = False,
+        cache_storage: str = "raw",
         quant_bits: int = 4,
     ):
         """
@@ -64,10 +71,14 @@ class CacheAwareContextManager:
             cache_aware_model (Any): Cache-Aware model object. It should have the get_initial_cache_state method.
             num_slots (int): Number of slots to use for the cache. It should be greater than or equal to the batch size.
             use_cache (bool): Whether to use the cache. Default is True. If False, the cache is disabled.
-            quantize_cache (bool): If True, store `cache_last_channel` in a `QuantizedCache` (TurboQuantMSE).
-                `cache_last_time` and `cache_last_channel_len` are always stored raw. Default False.
-            quant_bits (int): Bits per coordinate for the TurboQuantMSE scalar codebook. Default 4.
+            cache_storage (str): Backing storage for `cache_last_channel` / `cache_last_time`.
+                One of "raw" (full precision), "fp16", "bf16" (downcast), or "turbo" (TurboQuantMSE).
+                `cache_last_channel_len` is always stored raw. Default "raw".
+            quant_bits (int): Bits per coordinate for the TurboQuantMSE scalar codebook. Only used when
+                `cache_storage == "turbo"`. Default 4.
         """
+        if cache_storage not in _VALID_CACHE_STORAGE:
+            raise ValueError(f"cache_storage must be one of {_VALID_CACHE_STORAGE}, got {cache_storage!r}")
         self.cache_aware_model = cache_aware_model
         # Cache aware model should have the following methods:
         if not hasattr(self.cache_aware_model, "get_initial_cache_state"):
@@ -75,7 +86,7 @@ class CacheAwareContextManager:
 
         self.num_slots = num_slots
         self.cache_disabled = not use_cache
-        self.quantize_cache = quantize_cache
+        self.cache_storage = cache_storage
         self.quant_bits = quant_bits
         self._quantizer: TurboQuantMSE | None = None
         self.cache_last_channel: Cache | None = None
@@ -101,7 +112,7 @@ class CacheAwareContextManager:
             self.cache_last_channel_len,  # B
         ) = self.cache_aware_model.get_initial_cache_state(self.num_slots)
 
-        if self.quantize_cache:
+        if self.cache_storage == "turbo":
             if self._quantizer is None:
                 # `cache_last_channel` carries the hidden vector at axis 3 (shape [..., D]) and
                 # `cache_last_time` carries it at axis 2 (shape [..., D, T]). Both have the same
@@ -131,12 +142,28 @@ class CacheAwareContextManager:
             )
             del initial_cache_last_channel
             del initial_cache_last_time
+        elif self.cache_storage in _CAST_DTYPES:
+            storage_dtype = _CAST_DTYPES[self.cache_storage]
+            self.cache_last_channel = CastCache.empty(
+                shape=tuple(initial_cache_last_channel.shape),
+                source_dtype=initial_cache_last_channel.dtype,
+                storage_dtype=storage_dtype,
+                device=initial_cache_last_channel.device,
+            )
+            self.cache_last_time = CastCache.empty(
+                shape=tuple(initial_cache_last_time.shape),
+                source_dtype=initial_cache_last_time.dtype,
+                storage_dtype=storage_dtype,
+                device=initial_cache_last_time.device,
+            )
+            del initial_cache_last_channel
+            del initial_cache_last_time
         else:
             self.cache_last_channel = RawCache(initial_cache_last_channel)
             self.cache_last_time = RawCache(initial_cache_last_time)
 
         torch.cuda.empty_cache()
-        tag = "quant" if self.quantize_cache else "raw  "
+        tag = f"{self.cache_storage:<5}"
         cache_mb = self.cache_last_channel.storage_nbytes() / 1024**2
         clt_mb = self.cache_last_time.storage_nbytes() / 1024**2
         cll_mb = (
@@ -211,7 +238,7 @@ class CacheAwareContextManager:
         )
 
         if self._step_mem_logs_remaining > 0:
-            tag = "quant" if self.quantize_cache else "raw  "
+            tag = f"{self.cache_storage:<5}"
             print(
                 f"[cache-mem {tag}] after step: "
                 f"{torch.cuda.memory_allocated() / 1024**2:.1f} MB"

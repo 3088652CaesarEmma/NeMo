@@ -88,7 +88,7 @@ class CacheAwareCTCPipeline(BasePipeline):
 
         self.use_cache = cfg.streaming.use_cache
         self.use_feat_cache = cfg.streaming.use_feat_cache
-        self.quantize_cache = cfg.streaming.get("quantize_cache", False)
+        self.cache_storage = cfg.streaming.get("cache_storage", "raw")
         self.quant_bits = cfg.streaming.get("quant_bits", 4)
         self.batch_size = cfg.streaming.batch_size
         self.num_slots = cfg.streaming.num_slots

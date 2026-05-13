@@ -96,7 +96,7 @@ class CacheAwareRNNTPipeline(BasePipeline):
 
         self.use_cache = cfg.streaming.use_cache
         self.use_feat_cache = cfg.streaming.use_feat_cache
-        self.quantize_cache = cfg.streaming.get("quantize_cache", False)
+        self.cache_storage = cfg.streaming.get("cache_storage", "raw")
         self.quant_bits = cfg.streaming.get("quant_bits", 4)
 
         if cfg.streaming.get("chunk_size_in_secs", None) is not None:

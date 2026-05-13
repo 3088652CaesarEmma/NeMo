@@ -94,6 +94,56 @@ class RawCache(Cache):
         return self._data.element_size() * self._data.numel()
 
 
+class CastCache(Cache):
+    """Stores `cache_last_channel` cast to a reduced-precision dtype (e.g. fp16, bf16).
+
+    The original dtype is remembered so `gather_slots` returns tensors in the source dtype
+    expected by the encoder. Compared to `QuantizedCache` this has no rotation/codebook
+    overhead — just a cast on update and another cast on gather — at the cost of weaker
+    compression (2× vs ~4×).
+    """
+
+    def __init__(self, tensor: Tensor, storage_dtype: torch.dtype):
+        """
+        Args:
+            tensor (Tensor): initial cache tensor of shape [L, B, T, D].
+            storage_dtype (torch.dtype): dtype used for backing storage (e.g. torch.float16).
+        """
+        self._source_dtype = tensor.dtype
+        self._data = tensor.to(storage_dtype)
+
+    @classmethod
+    def empty(
+        cls,
+        shape: tuple[int, ...],
+        source_dtype: torch.dtype,
+        storage_dtype: torch.dtype,
+        device: torch.device,
+    ) -> "CastCache":
+        """Construct a zero-valued cast cache without materialising the full-precision tensor."""
+        obj = cls.__new__(cls)
+        obj._source_dtype = source_dtype
+        obj._data = torch.zeros(shape, dtype=storage_dtype, device=device)
+        return obj
+
+    @property
+    def device(self) -> torch.device:
+        return self._data.device
+
+    def reset_slots(self, slot_ids: Tensor) -> None:
+        self._data.index_fill_(1, slot_ids, 0.0)
+
+    def update_slots(self, dst_slot_ids: Tensor, src: Tensor, src_slot_ids: Tensor) -> None:
+        src_slice = src.index_select(1, src_slot_ids).to(self._data.dtype)
+        self._data.index_copy_(1, dst_slot_ids, src_slice)
+
+    def gather_slots(self, slot_ids: list[int]) -> Tensor:
+        return self._data[:, slot_ids, :, :].to(self._source_dtype)
+
+    def storage_nbytes(self) -> int:
+        return self._data.element_size() * self._data.numel()
+
+
 class QuantizedCache(Cache):
     """
     Stores `cache_last_channel` quantized along its hidden dimension using `TurboQuantMSE`.

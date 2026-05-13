@@ -482,7 +482,7 @@ class BasePipeline(PipelineInterface):
             cache_aware_model=self.asr_model,
             num_slots=self.num_slots,
             use_cache=self.use_cache,
-            quantize_cache=getattr(self, 'quantize_cache', False),
+            cache_storage=getattr(self, 'cache_storage', 'raw'),
             quant_bits=getattr(self, 'quant_bits', 4),
         )
 
