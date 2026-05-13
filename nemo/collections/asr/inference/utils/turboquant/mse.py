@@ -51,8 +51,10 @@ class TurboQuantMSE:
         self.rotation = random_rotation(d, seed=seed, device=device, dtype=dtype)
         centroids_np = lloyd_max_centroids(d, bits)
         centroids = torch.as_tensor(centroids_np, device=device, dtype=dtype)
-        # searchsorted in quantize() requires ascending order; Lloyd-Max preserves it but sort defensively.
+        # bucketize in quantize() requires ascending boundaries; Lloyd-Max preserves order but sort defensively.
         self.centroids, _ = torch.sort(centroids)
+        # Midpoints between adjacent centroids — the decision boundaries for nearest-centroid lookup.
+        self.midpoints = 0.5 * (self.centroids[:-1] + self.centroids[1:])
 
     def quantize(self, x: torch.Tensor, vec_axis: int = 2) -> tuple[torch.Tensor, torch.Tensor]:
         x_p = x.movedim(vec_axis, -1)
@@ -61,20 +63,18 @@ class TurboQuantMSE:
                 f"expected size {self.d} at axis {vec_axis}, got {x_p.shape[-1]}"
             )
 
-        norms = x_p.norm(dim=-1)
-        x_unit = x_p / norms.unsqueeze(-1).clamp_min(1e-12)
+        # Rotation is orthogonal, so ||x_p|| == ||x_p @ rotation.T||. Rotate first, then
+        # normalize in place — avoids the separate `x_unit = x_p / norms` allocation.
+        y = x_p @ self.rotation.T
+        norms = y.norm(dim=-1)
+        y.div_(norms.unsqueeze(-1).clamp_min(1e-12))
 
-        y = x_unit @ self.rotation.T
-        # Nearest centroid via searchsorted on the sorted 1D codebook — avoids
-        # materializing a [..., D, n_centroids] difference tensor (OOM on large caches).
-        n = self.centroids.numel()
-        right = torch.searchsorted(self.centroids, y.contiguous()).clamp_(0, n - 1)
-        left = (right - 1).clamp_(min=0)
-        left_dist = (y - self.centroids[left]).abs()
-        right_dist = (y - self.centroids[right]).abs()
-        idx_last = torch.where(left_dist <= right_dist, left, right)
+        # Nearest centroid via bucketize on midpoints: yields the final index in one pass,
+        # no left/right/dist intermediates. int32 output (256 centroids fit easily).
+        idx_last = torch.bucketize(y.contiguous(), self.midpoints, out_int32=True)
+        del y
 
-        indices = idx_last.movedim(-1, vec_axis).to(torch.uint8)
+        indices = idx_last.to(torch.uint8).movedim(-1, vec_axis).contiguous()
         return indices, norms
 
     def dequantize(
@@ -85,8 +85,8 @@ class TurboQuantMSE:
     ) -> torch.Tensor:
         idx_p = indices.movedim(vec_axis, -1).long()
         y_hat = self.centroids[idx_p]
-        x_hat_unit = y_hat @ self.rotation
-        x_hat = x_hat_unit * norms.unsqueeze(-1).to(x_hat_unit.dtype)
+        x_hat = y_hat @ self.rotation
+        x_hat.mul_(norms.unsqueeze(-1).to(x_hat.dtype))
         return x_hat.movedim(-1, vec_axis)
 
     def upper_bound(self) -> float:
