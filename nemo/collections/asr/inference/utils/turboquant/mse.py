@@ -50,7 +50,9 @@ class TurboQuantMSE:
         self.dtype = dtype
         self.rotation = random_rotation(d, seed=seed, device=device, dtype=dtype)
         centroids_np = lloyd_max_centroids(d, bits)
-        self.centroids = torch.as_tensor(centroids_np, device=device, dtype=dtype)
+        centroids = torch.as_tensor(centroids_np, device=device, dtype=dtype)
+        # searchsorted in quantize() requires ascending order; Lloyd-Max preserves it but sort defensively.
+        self.centroids, _ = torch.sort(centroids)
 
     def quantize(self, x: torch.Tensor, vec_axis: int = 2) -> tuple[torch.Tensor, torch.Tensor]:
         x_p = x.movedim(vec_axis, -1)
@@ -63,7 +65,14 @@ class TurboQuantMSE:
         x_unit = x_p / norms.unsqueeze(-1).clamp_min(1e-12)
 
         y = x_unit @ self.rotation.T
-        idx_last = (y.unsqueeze(-1) - self.centroids).abs().argmin(dim=-1)
+        # Nearest centroid via searchsorted on the sorted 1D codebook — avoids
+        # materializing a [..., D, n_centroids] difference tensor (OOM on large caches).
+        n = self.centroids.numel()
+        right = torch.searchsorted(self.centroids, y.contiguous()).clamp_(0, n - 1)
+        left = (right - 1).clamp_(min=0)
+        left_dist = (y - self.centroids[left]).abs()
+        right_dist = (y - self.centroids[right]).abs()
+        idx_last = torch.where(left_dist <= right_dist, left, right)
 
         indices = idx_last.movedim(-1, vec_axis).to(torch.uint8)
         return indices, norms
