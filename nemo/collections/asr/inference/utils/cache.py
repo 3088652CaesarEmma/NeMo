@@ -116,9 +116,12 @@ class QuantizedCache(Cache):
         self._norms.index_fill_(1, slot_ids, 0.0)
 
     def update_slots(self, dst_slot_ids: Tensor, src: Tensor, src_slot_ids: Tensor) -> None:
-        src_indices, src_norms = self.quantizer.quantize(src, vec_axis=self.vec_axis)
-        self._indices.index_copy_(1, dst_slot_ids, src_indices.index_select(1, src_slot_ids))
-        self._norms.index_copy_(1, dst_slot_ids, src_norms.index_select(1, src_slot_ids))
+        # Slice the active slots out of `src` before quantizing so the transient float/int32
+        # buffers inside `quantize()` are sized to len(src_slot_ids), not the full src batch.
+        src_slice = src.index_select(1, src_slot_ids)
+        src_indices, src_norms = self.quantizer.quantize(src_slice, vec_axis=self.vec_axis)
+        self._indices.index_copy_(1, dst_slot_ids, src_indices)
+        self._norms.index_copy_(1, dst_slot_ids, src_norms)
 
     def gather_slots(self, slot_ids: list[int]) -> Tensor:
         indices = self._indices[:, slot_ids, :, :]
