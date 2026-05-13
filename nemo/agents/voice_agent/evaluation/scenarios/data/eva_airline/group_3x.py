@@ -20,7 +20,7 @@
 
 from nemo.agents.voice_agent.evaluation.scenarios import register_eval_scenario
 from nemo.agents.voice_agent.evaluation.scenarios.classes import Actions, Persona, Task
-from nemo.agents.voice_agent.evaluation.scenarios.data.eva_airline import EvaAirlineBaseScenario
+from nemo.agents.voice_agent.evaluation.scenarios.data.eva_airline.base import EvaAirlineBaseScenario
 
 
 # ---------------------------------------------------------------------------
