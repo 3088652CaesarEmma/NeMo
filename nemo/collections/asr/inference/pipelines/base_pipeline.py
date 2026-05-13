@@ -479,7 +479,11 @@ class BasePipeline(PipelineInterface):
         """Initialize the context manager."""
         check_existance_of_required_attributes(self, ['asr_model', 'num_slots', 'use_cache'])
         self.context_manager = CacheAwareContextManager(
-            cache_aware_model=self.asr_model, num_slots=self.num_slots, use_cache=self.use_cache
+            cache_aware_model=self.asr_model,
+            num_slots=self.num_slots,
+            use_cache=self.use_cache,
+            quantize_cache=getattr(self, 'quantize_cache', False),
+            quant_bits=getattr(self, 'quant_bits', 4),
         )
 
     def init_prompt_support(self) -> None:

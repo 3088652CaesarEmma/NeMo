@@ -19,6 +19,9 @@ from typing import Any
 import torch
 from torch import Tensor
 
+from nemo.collections.asr.inference.utils.cache import Cache, QuantizedCache, RawCache
+from nemo.collections.asr.inference.utils.turboquant.mse import TurboQuantMSE
+
 
 class CacheAwareContext:
     """
@@ -52,6 +55,8 @@ class CacheAwareContextManager:
         cache_aware_model: Any,
         num_slots: int,
         use_cache: bool = True,
+        quantize_cache: bool = False,
+        quant_bits: int = 4,
     ):
         """
         Initialize the CacheAwareContextManager.
@@ -59,6 +64,9 @@ class CacheAwareContextManager:
             cache_aware_model (Any): Cache-Aware model object. It should have the get_initial_cache_state method.
             num_slots (int): Number of slots to use for the cache. It should be greater than or equal to the batch size.
             use_cache (bool): Whether to use the cache. Default is True. If False, the cache is disabled.
+            quantize_cache (bool): If True, store `cache_last_channel` in a `QuantizedCache` (TurboQuantMSE).
+                `cache_last_time` and `cache_last_channel_len` are always stored raw. Default False.
+            quant_bits (int): Bits per coordinate for the TurboQuantMSE scalar codebook. Default 4.
         """
         self.cache_aware_model = cache_aware_model
         # Cache aware model should have the following methods:
@@ -67,7 +75,10 @@ class CacheAwareContextManager:
 
         self.num_slots = num_slots
         self.cache_disabled = not use_cache
-        self.cache_last_channel = None
+        self.quantize_cache = quantize_cache
+        self.quant_bits = quant_bits
+        self._quantizer: TurboQuantMSE | None = None
+        self.cache_last_channel: Cache | None = None
         self.cache_last_time = None
         self.cache_last_channel_len = None
         self.reset()
@@ -83,10 +94,25 @@ class CacheAwareContextManager:
         for i in range(self.num_slots):
             self.free_slots.put(i)
         (
-            self.cache_last_channel,  # [17, B, 70, 512]
+            initial_cache_last_channel,  # [17, B, 70, 512]
             self.cache_last_time,  # [17, B, 512, 8]
             self.cache_last_channel_len,  # B
         ) = self.cache_aware_model.get_initial_cache_state(self.num_slots)
+
+        if self.quantize_cache:
+            if self._quantizer is None:
+                self._quantizer = TurboQuantMSE(
+                    d=initial_cache_last_channel.shape[-1],
+                    bits=self.quant_bits,
+                    device=initial_cache_last_channel.device,
+                    dtype=initial_cache_last_channel.dtype,
+                )
+            self.cache_last_channel = QuantizedCache(
+                initial_cache_last_channel, quantizer=self._quantizer, vec_axis=3
+            )
+        else:
+            self.cache_last_channel = RawCache(initial_cache_last_channel)
+
         self.device = self.cache_last_channel.device
 
     def _reset_slots(self, slot_ids: list[int]) -> None:
@@ -99,7 +125,7 @@ class CacheAwareContextManager:
             return
 
         slot_ids_tensor = torch.tensor(slot_ids, device=self.device, dtype=torch.long)
-        self.cache_last_channel.index_fill_(1, slot_ids_tensor, 0.0)
+        self.cache_last_channel.reset_slots(slot_ids_tensor)
         self.cache_last_time.index_fill_(1, slot_ids_tensor, 0.0)
         self.cache_last_channel_len.index_fill_(0, slot_ids_tensor, 0)
 
@@ -131,7 +157,7 @@ class CacheAwareContextManager:
         )
 
         # In-place copy along batch/slot dimension
-        self.cache_last_channel.index_copy_(1, slot_ids, new_context.cache_last_channel.index_select(1, tgt_slot_ids))
+        self.cache_last_channel.update_slots(slot_ids, new_context.cache_last_channel, tgt_slot_ids)
         self.cache_last_time.index_copy_(1, slot_ids, new_context.cache_last_time.index_select(1, tgt_slot_ids))
         self.cache_last_channel_len.index_copy_(
             0, slot_ids, new_context.cache_last_channel_len.index_select(0, tgt_slot_ids)
@@ -181,7 +207,7 @@ class CacheAwareContextManager:
 
         # get the cache for the particular stream_ids
         slot_ids = [self.streamidx2slotidx[stream_id] for stream_id in stream_ids]
-        cache_last_channel = self.cache_last_channel[:, slot_ids, :, :]
+        cache_last_channel = self.cache_last_channel.gather_slots(slot_ids)
         cache_last_time = self.cache_last_time[:, slot_ids, :, :]
         cache_last_channel_len = self.cache_last_channel_len[slot_ids]
 
