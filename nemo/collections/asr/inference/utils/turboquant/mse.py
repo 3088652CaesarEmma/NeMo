@@ -42,10 +42,17 @@ class TurboQuantMSE:
         dtype: torch.dtype = torch.float32,
         seed: int = 42,
     ):
-        if not (1 <= bits <= 8):
-            raise ValueError(f"bits must be in [1, 8], got {bits}")
+        if bits not in (1, 2, 4, 8):
+            raise ValueError(f"bits must be one of 1, 2, 4, 8 (for bit-packing), got {bits}")
         self.d = d
         self.bits = bits
+        # Number of indices that fit in a single uint8 byte; the storage axis shrinks by this factor.
+        self.items_per_byte = 8 // bits
+        if d % self.items_per_byte != 0:
+            raise ValueError(
+                f"d={d} must be divisible by items_per_byte={self.items_per_byte} for bits={bits} packing"
+            )
+        self._mask = (1 << bits) - 1
         self.device = device
         self.dtype = dtype
         self.rotation = random_rotation(d, seed=seed, device=device, dtype=dtype)
@@ -55,6 +62,41 @@ class TurboQuantMSE:
         self.centroids, _ = torch.sort(centroids)
         # Midpoints between adjacent centroids — the decision boundaries for nearest-centroid lookup.
         self.midpoints = 0.5 * (self.centroids[:-1] + self.centroids[1:])
+
+    def _pack_last(self, idx: torch.Tensor) -> torch.Tensor:
+        """Pack `items_per_byte` indices into each uint8 along the last axis.
+
+        Args:
+            idx: integer tensor of shape [..., D] with values in [0, 2**bits - 1].
+        Returns:
+            uint8 tensor of shape [..., D // items_per_byte].
+        """
+        n = self.items_per_byte
+        if n == 1:
+            return idx.to(torch.uint8)
+        *prefix, last = idx.shape
+        grouped = idx.view(*prefix, last // n, n)
+        packed = grouped[..., 0].to(torch.uint8)
+        for i in range(1, n):
+            packed = packed | (grouped[..., i].to(torch.uint8) << (self.bits * i))
+        return packed
+
+    def _unpack_last(self, packed: torch.Tensor) -> torch.Tensor:
+        """Inverse of `_pack_last`: expand each uint8 back into `items_per_byte` indices.
+
+        Args:
+            packed: uint8 tensor of shape [..., D // items_per_byte].
+        Returns:
+            uint8 tensor of shape [..., D] with values in [0, 2**bits - 1].
+        """
+        n = self.items_per_byte
+        if n == 1:
+            return packed
+        *prefix, half = packed.shape
+        out = torch.empty(*prefix, half * n, dtype=torch.uint8, device=packed.device)
+        for i in range(n):
+            out[..., i::n] = (packed >> (self.bits * i)) & self._mask
+        return out
 
     def quantize(self, x: torch.Tensor, vec_axis: int = 2) -> tuple[torch.Tensor, torch.Tensor]:
         x_p = x.movedim(vec_axis, -1)
@@ -74,7 +116,9 @@ class TurboQuantMSE:
         idx_last = torch.bucketize(y.contiguous(), self.midpoints, out_int32=True)
         del y
 
-        indices = idx_last.to(torch.uint8).movedim(-1, vec_axis).contiguous()
+        # Pack along the last axis (bits < 8 → multiple indices per byte) and place vec_axis back.
+        packed_last = self._pack_last(idx_last)
+        indices = packed_last.movedim(-1, vec_axis).contiguous()
         return indices, norms
 
     def dequantize(
@@ -83,7 +127,8 @@ class TurboQuantMSE:
         norms: torch.Tensor,
         vec_axis: int = 2,
     ) -> torch.Tensor:
-        idx_p = indices.movedim(vec_axis, -1).long()
+        packed_last = indices.movedim(vec_axis, -1)
+        idx_p = self._unpack_last(packed_last).long()
         y_hat = self.centroids[idx_p]
         x_hat = y_hat @ self.rotation
         x_hat.mul_(norms.unsqueeze(-1).to(x_hat.dtype))

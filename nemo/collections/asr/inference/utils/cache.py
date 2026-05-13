@@ -62,6 +62,10 @@ class Cache(ABC):
             Tensor of shape [L, len(slot_ids), T, D] in the original (dequantized) float dtype.
         """
 
+    @abstractmethod
+    def storage_nbytes(self) -> int:
+        """Total bytes occupied by the underlying storage tensors (excludes Python overhead)."""
+
 
 class RawCache(Cache):
     """Stores `cache_last_channel` as the original raw float tensor."""
@@ -86,6 +90,9 @@ class RawCache(Cache):
     def gather_slots(self, slot_ids: list[int]) -> Tensor:
         return self._data[:, slot_ids, :, :]
 
+    def storage_nbytes(self) -> int:
+        return self._data.element_size() * self._data.numel()
+
 
 class QuantizedCache(Cache):
     """
@@ -107,6 +114,40 @@ class QuantizedCache(Cache):
         self.vec_axis = vec_axis
         self._indices, self._norms = quantizer.quantize(tensor, vec_axis=vec_axis)
 
+    @classmethod
+    def empty(
+        cls,
+        shape: tuple[int, ...],
+        dtype: torch.dtype,
+        device: torch.device,
+        quantizer: TurboQuantMSE,
+        vec_axis: int = 3,
+    ) -> "QuantizedCache":
+        """Construct a zero-valued quantized cache without materialising the float tensor.
+
+        Dequantizing an all-zero `norms` tensor reconstructs to zero regardless of `indices`
+        (see `TurboQuantMSE.dequantize`), so this is equivalent to `QuantizedCache(zeros(shape))`
+        but avoids the float-cache allocation and the transient buffers inside `quantize()`.
+
+        Args:
+            shape (tuple[int, ...]): the would-be float cache shape, e.g. [L, B, T, D].
+            dtype (torch.dtype): dtype of the `norms` tensor (the indices are always uint8).
+            device (torch.device): device for the underlying storage.
+            quantizer (TurboQuantMSE): the quantizer to use for subsequent update/gather calls.
+            vec_axis (int): axis of `shape` that holds the hidden-dim vector. Default 3.
+        """
+        obj = cls.__new__(cls)
+        obj.quantizer = quantizer
+        obj.vec_axis = vec_axis
+        # `_indices` lives in the packed layout: the `vec_axis` extent shrinks by items_per_byte.
+        packed_shape = list(shape)
+        packed_shape[vec_axis] = shape[vec_axis] // quantizer.items_per_byte
+        obj._indices = torch.zeros(packed_shape, dtype=torch.uint8, device=device)
+        norms_shape = list(shape)
+        norms_shape.pop(vec_axis)
+        obj._norms = torch.zeros(norms_shape, dtype=dtype, device=device)
+        return obj
+
     @property
     def device(self) -> torch.device:
         return self._indices.device
@@ -127,3 +168,9 @@ class QuantizedCache(Cache):
         indices = self._indices[:, slot_ids, :, :]
         norms = self._norms[:, slot_ids, :]
         return self.quantizer.dequantize(indices, norms, vec_axis=self.vec_axis)
+
+    def storage_nbytes(self) -> int:
+        return (
+            self._indices.element_size() * self._indices.numel()
+            + self._norms.element_size() * self._norms.numel()
+        )

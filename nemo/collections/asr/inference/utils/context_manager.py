@@ -79,8 +79,9 @@ class CacheAwareContextManager:
         self.quant_bits = quant_bits
         self._quantizer: TurboQuantMSE | None = None
         self.cache_last_channel: Cache | None = None
-        self.cache_last_time = None
+        self.cache_last_time: Cache | None = None
         self.cache_last_channel_len = None
+        self._step_mem_logs_remaining = 3
         self.reset()
 
     def reset(self) -> None:
@@ -93,25 +94,69 @@ class CacheAwareContextManager:
         self.free_slots = Queue(self.num_slots)
         for i in range(self.num_slots):
             self.free_slots.put(i)
+        torch.cuda.reset_peak_memory_stats()
         (
             initial_cache_last_channel,  # [17, B, 70, 512]
-            self.cache_last_time,  # [17, B, 512, 8]
+            initial_cache_last_time,  # [17, B, 512, 8]
             self.cache_last_channel_len,  # B
         ) = self.cache_aware_model.get_initial_cache_state(self.num_slots)
 
         if self.quantize_cache:
             if self._quantizer is None:
+                # `cache_last_channel` carries the hidden vector at axis 3 (shape [..., D]) and
+                # `cache_last_time` carries it at axis 2 (shape [..., D, T]). Both have the same
+                # D, so a single TurboQuantMSE instance can serve both.
                 self._quantizer = TurboQuantMSE(
                     d=initial_cache_last_channel.shape[-1],
                     bits=self.quant_bits,
                     device=initial_cache_last_channel.device,
                     dtype=initial_cache_last_channel.dtype,
                 )
-            self.cache_last_channel = QuantizedCache(
-                initial_cache_last_channel, quantizer=self._quantizer, vec_axis=3
+            # Build the quantized caches from shape specs rather than quantizing the float tensors.
+            # All-zero norms decode to zero regardless of indices, so this matches the previous
+            # zero-initial state without paying the peak transient of `quantizer.quantize()`.
+            self.cache_last_channel = QuantizedCache.empty(
+                shape=tuple(initial_cache_last_channel.shape),
+                dtype=initial_cache_last_channel.dtype,
+                device=initial_cache_last_channel.device,
+                quantizer=self._quantizer,
+                vec_axis=3,
             )
+            self.cache_last_time = QuantizedCache.empty(
+                shape=tuple(initial_cache_last_time.shape),
+                dtype=initial_cache_last_time.dtype,
+                device=initial_cache_last_time.device,
+                quantizer=self._quantizer,
+                vec_axis=2,
+            )
+            del initial_cache_last_channel
+            del initial_cache_last_time
         else:
             self.cache_last_channel = RawCache(initial_cache_last_channel)
+            self.cache_last_time = RawCache(initial_cache_last_time)
+
+        torch.cuda.empty_cache()
+        tag = "quant" if self.quantize_cache else "raw  "
+        cache_mb = self.cache_last_channel.storage_nbytes() / 1024**2
+        clt_mb = self.cache_last_time.storage_nbytes() / 1024**2
+        cll_mb = (
+            self.cache_last_channel_len.element_size() * self.cache_last_channel_len.numel()
+        ) / 1024**2
+        print(
+            f"[cache-mem {tag}] cache size : "
+            f"cache_last_channel={cache_mb:.1f} MB, "
+            f"cache_last_time={clt_mb:.1f} MB, "
+            f"cache_last_channel_len={cll_mb:.3f} MB"
+        )
+        print(
+            f"[cache-mem {tag}] after init : "
+            f"{torch.cuda.memory_allocated() / 1024**2:.1f} MB"
+        )
+        print(
+            f"[cache-mem {tag}] peak init  : "
+            f"{torch.cuda.max_memory_allocated() / 1024**2:.1f} MB"
+        )
+        torch.cuda.reset_peak_memory_stats()
 
         self.device = self.cache_last_channel.device
 
@@ -126,7 +171,7 @@ class CacheAwareContextManager:
 
         slot_ids_tensor = torch.tensor(slot_ids, device=self.device, dtype=torch.long)
         self.cache_last_channel.reset_slots(slot_ids_tensor)
-        self.cache_last_time.index_fill_(1, slot_ids_tensor, 0.0)
+        self.cache_last_time.reset_slots(slot_ids_tensor)
         self.cache_last_channel_len.index_fill_(0, slot_ids_tensor, 0)
 
         # free the slot, so that it can be used by other streams
@@ -158,10 +203,22 @@ class CacheAwareContextManager:
 
         # In-place copy along batch/slot dimension
         self.cache_last_channel.update_slots(slot_ids, new_context.cache_last_channel, tgt_slot_ids)
-        self.cache_last_time.index_copy_(1, slot_ids, new_context.cache_last_time.index_select(1, tgt_slot_ids))
+        self.cache_last_time.update_slots(slot_ids, new_context.cache_last_time, tgt_slot_ids)
         self.cache_last_channel_len.index_copy_(
             0, slot_ids, new_context.cache_last_channel_len.index_select(0, tgt_slot_ids)
         )
+
+        if self._step_mem_logs_remaining > 0:
+            tag = "quant" if self.quantize_cache else "raw  "
+            print(
+                f"[cache-mem {tag}] after step: "
+                f"{torch.cuda.memory_allocated() / 1024**2:.1f} MB"
+            )
+            print(
+                f"[cache-mem {tag}] peak step : "
+                f"{torch.cuda.max_memory_allocated() / 1024**2:.1f} MB"
+            )
+            self._step_mem_logs_remaining -= 1
 
     def reset_slots(self, stream_ids: list[int], eos_flags: list[bool]) -> None:
         """
@@ -196,6 +253,9 @@ class CacheAwareContextManager:
             # Create a dummy context with None values
             return CacheAwareContext(), {}
 
+        if self._step_mem_logs_remaining > 0:
+            torch.cuda.reset_peak_memory_stats()
+
         # if the stream_id is new, we need to assign a slot to it
         for stream_id in stream_ids:
             if stream_id not in self.streamidx2slotidx:
@@ -208,7 +268,7 @@ class CacheAwareContextManager:
         # get the cache for the particular stream_ids
         slot_ids = [self.streamidx2slotidx[stream_id] for stream_id in stream_ids]
         cache_last_channel = self.cache_last_channel.gather_slots(slot_ids)
-        cache_last_time = self.cache_last_time[:, slot_ids, :, :]
+        cache_last_time = self.cache_last_time.gather_slots(slot_ids)
         cache_last_channel_len = self.cache_last_channel_len[slot_ids]
 
         # create a context object
