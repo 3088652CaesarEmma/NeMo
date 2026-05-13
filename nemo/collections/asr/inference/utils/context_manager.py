@@ -142,11 +142,13 @@ class CacheAwareContextManager:
         cll_mb = (
             self.cache_last_channel_len.element_size() * self.cache_last_channel_len.numel()
         ) / 1024**2
+        total_mb = cache_mb + clt_mb + cll_mb
         print(
             f"[cache-mem {tag}] cache size : "
             f"cache_last_channel={cache_mb:.1f} MB, "
             f"cache_last_time={clt_mb:.1f} MB, "
-            f"cache_last_channel_len={cll_mb:.3f} MB"
+            f"cache_last_channel_len={cll_mb:.3f} MB, "
+            f"total={total_mb:.1f} MB"
         )
         print(
             f"[cache-mem {tag}] after init : "
