@@ -39,7 +39,9 @@ class BaseInputTransport(_BaseInputTransport):
             can_create_user_frames = (
                 self._params.turn_analyzer is None or not self._params.turn_analyzer.speech_triggered
             ) and self._params.can_create_user_frames
-
+            logger.debug(
+                f"base_input: VAD state changed to {new_vad_state}, can_create_user_frames: {can_create_user_frames}"
+            )
             if new_vad_state == VADState.SPEAKING:
                 await self.push_frame(VADUserStartedSpeakingFrame())
                 if can_create_user_frames:
@@ -54,7 +56,8 @@ class BaseInputTransport(_BaseInputTransport):
                     logger.debug("base_input: VAD state changed to QUIET but can_create_user_frames is False")
 
             if frame:
-                await self._handle_user_interruption(frame)
+                logger.debug(f"base_input: handling user interruption: {frame}")
+                await self._handle_user_interruption(new_vad_state)
 
             vad_state = new_vad_state
         return vad_state
