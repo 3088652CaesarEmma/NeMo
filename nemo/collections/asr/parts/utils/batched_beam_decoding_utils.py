@@ -199,6 +199,36 @@ class BatchedBeamHyps:
             self.next_timestamp.fill_(0)
             self.last_timestamp_lasts.fill_(0)
 
+    def clear_chunk_local_(self):
+        """
+        Reset only the chunk-local storage so the per-chunk transcript buffers can be
+        reused for the next chunk in streaming/chunked beam decoding under CUDA graphs.
+
+        The chunk-local storage is the transcript prefix tree (``transcript_wb``,
+        ``transcript_wb_prev_ptr``), the per-step timestamps array (``timestamps``), the
+        write cursor into those buffers (``current_lengths_wb``) and, for transducer
+        models, the per-chunk ``next_timestamp`` counter.
+
+        Cross-chunk per-beam state - ``scores``, ``last_label``, ``transcript_hash``,
+        ``current_lengths_nb`` and ``last_timestamp_lasts`` - is intentionally left
+        untouched so the beam-search loop can continue from the previous chunk's beam
+        state without re-seeding.
+
+        This method does only in-place ``fill_`` / ``copy_`` writes into the existing
+        tensors, so it is safe to call from inside a captured CUDA-graph region (the
+        captured pointers remain valid).
+        """
+        self.current_lengths_wb.fill_(0)
+
+        self.transcript_wb.fill_(NON_EXISTENT_LABEL_VALUE)
+        self.transcript_wb_prev_ptr.fill_(INIT_POINTER_VALUE)
+
+        if self.model_type == ASRModelTypeEnum.CTC:
+            self.timestamps.copy_(self._create_timestamps_tensor(self._max_length))
+        else:
+            self.timestamps.fill_(0)
+            self.next_timestamp.fill_(0)
+
     def copy_from_(self, other: "BatchedBeamHyps"):
         """
         Copy state from another BatchedBeamHyps object (in-place).
@@ -754,14 +784,54 @@ class BatchedBeamHyps:
         4. Updates the internal state of the object, including transcripts, timestamps, scores,
            lengths, labels, and other metadata, based on the sorted order.
         """
-        
-        # import pdb; pdb.set_trace()
+
         # add one for consistency with non-batched decodings, that use SOS.
         normalized_scores = (
             self.scores / (self.current_lengths_nb.to(self.scores.dtype) + 1) if score_norm else self.scores
         )
-        normalized_scores, indices = torch.sort(normalized_scores, dim=-1, descending=True)
+        _, indices = torch.sort(normalized_scores, dim=-1, descending=True)
+        self._flatten_with_permutation_(indices)
 
+    def flatten_(self) -> torch.Tensor:
+        """
+        Flatten the tree structure of hypotheses without changing beam order.
+
+        Like :meth:`flatten_sort_` but uses the identity permutation, so beam ``i`` keeps
+        its identity (its decoded prefix and its cross-chunk per-beam state stay aligned
+        with the corresponding beam in any other ``BatchedBeamHyps`` constructed under the
+        same decoding run). Required for inter-chunk :meth:`merge_` calls in streaming
+        beam decoding where beam indices must correspond across chunks.
+
+        Returns:
+            ``root_ptrs`` of shape ``[batch_size, beam_size]``: the beam index at the
+            chunk's *start* (i.e. before the first ``add_results_*`` write) from which
+            each output beam ultimately descends. For chunked streaming beam search, this
+            tells the caller how to permute the previous chunks' accumulated per-beam
+            transcripts so they align with this chunk's beam ordering before merging.
+
+            If the prefix tree is empty (``current_lengths_wb.max() == 0``) the identity
+            permutation is returned.
+        """
+        identity = self.beam_indices.unsqueeze(0).expand(self.batch_size, self.beam_size).contiguous()
+        return self._flatten_with_permutation_(identity)
+
+    def _flatten_with_permutation_(self, indices: torch.Tensor) -> torch.Tensor:
+        """
+        In-place flatten of the prefix tree using ``indices`` as the new beam permutation.
+
+        Walks ``transcript_wb_prev_ptr`` from the most recent step back to step 0,
+        gathering tokens and timestamps for each output beam from the source beam given
+        by ``indices``. Updates all per-beam metadata to match the new ordering.
+
+        Args:
+            indices: ``[batch_size, beam_size]`` long tensor giving the source beam index
+                for each output beam (e.g. ``arange(beam_size)`` for no permutation).
+
+        Returns:
+            ``root_ptrs`` of shape ``[batch_size, beam_size]``: the beam index *before*
+            step 0 of the prefix tree from which each output beam descends. If the prefix
+            tree is empty (``max_idx < 0``) this equals ``indices``.
+        """
         max_idx = self.current_lengths_wb.max() - 1
         ptrs = indices
 
@@ -785,6 +855,8 @@ class BatchedBeamHyps:
         self.transcript_hash.copy_(torch.gather(self.transcript_hash, dim=-1, index=indices))
         if self.store_prefix_hashes:
             self.transcript_prefix_hash.copy_(torch.gather(self.transcript_prefix_hash, dim=-1, index=indices))
+
+        return ptrs
 
     def _create_fold_consecutive_mask(self, transcript):
         """
@@ -835,25 +907,46 @@ class BatchedBeamHyps:
         else:
             return (transcripts >= 0) & (transcripts != self.blank_index)
 
-    def merge_(self, other: "BatchedBeamHyps") -> "BatchedBeamHyps":
+    def merge_(
+        self,
+        other: "BatchedBeamHyps",
+        is_chunk_continuation: bool = False,
+        boundary_prev_ptr: Optional[torch.Tensor] = None,
+    ) -> "BatchedBeamHyps":
         """
         Merge two batched beam hypotheses structures by concatenating transcripts.
         Used for streaming/chunked inference where results from multiple chunks need to be combined.
-        
+
         Prerequisites:
             - Both self and other should have been processed with flatten_sort_() before merging,
               so that each beam contains an independent flattened hypothesis.
             - Beam indices should correspond across chunks (beam i in self matches beam i in other).
-        
+
         Notes:
             - Timestamps in 'other' should already be cumulative (adjusted for time offset).
             - The transcript_hash values are copied from 'other' and won't reflect the full
               merged transcript. This means recombine_hyps_() should NOT be called on merged
               results without recomputing hashes. This is acceptable for output-only use.
-        
+
         Args:
-            other: BatchedBeamHyps from the next chunk to merge
-            
+            other: BatchedBeamHyps from the next chunk to merge.
+            is_chunk_continuation: If True, treat ``other`` as a beam-search continuation
+                chunk in which the cross-chunk per-beam fields (``scores``,
+                ``current_lengths_nb``) already hold cumulative across-chunks values rather
+                than chunk-local deltas. In that case those fields are *replaced* with the
+                values from ``other`` instead of summed, to avoid double-counting. The
+                default (False) preserves the original "deltas" semantics used by greedy
+                streaming-style merges.
+            boundary_prev_ptr: Optional ``[batch_size, beam_size]`` long tensor. When
+                provided, written into ``transcript_wb_prev_ptr`` at the very first
+                position of the merged region (i.e. at ``self.current_lengths_wb`` before
+                the update). All other positions of the merged region still receive
+                ``beam_indices`` (identity) pointers. This is how chunked streaming beam
+                search threads the cross-chunk beam permutation (the "root ptrs" returned
+                by :meth:`flatten_` on ``other``) into the accumulator's prefix tree so
+                that the final :meth:`flatten_sort_` walk redirects from beam ``i`` in
+                ``other``'s region back to its source beam in ``self``'s region.
+
         Returns:
             Self (modified in-place)
         """
@@ -885,12 +978,22 @@ class BatchedBeamHyps:
             src=other.transcript_wb[..., :max_other_len],
         )
         
-        # Update pointers: for the merged portion, we set pointers to point to the same beam
-        # (since after flatten_sort_, each beam is independent)
+        # Update pointers: in the merged region every position points to its own beam
+        # (identity), except the *first* merged position which optionally encodes the
+        # cross-chunk root permutation so the final flatten walk redirects from the new
+        # region back to the right beam in the old region.
+        identity_src = self.beam_indices.view(1, self.beam_size, 1).expand(
+            self.batch_size, -1, max_other_len
+        )
+        if boundary_prev_ptr is not None:
+            ptr_src = identity_src.clone()
+            ptr_src[..., 0] = boundary_prev_ptr
+        else:
+            ptr_src = identity_src
         self.transcript_wb_prev_ptr.scatter_(
             dim=-1,
             index=shifted_indices,
-            src=self.beam_indices.view(1, self.beam_size, 1).expand(self.batch_size, -1, max_other_len),
+            src=ptr_src,
         )
         
         # Scatter timestamps
@@ -899,14 +1002,21 @@ class BatchedBeamHyps:
             index=shifted_indices,
             src=other.timestamps[..., :max_other_len],
         )
-        
-        # Update lengths
+
+        # Lengths in the chunk-local write cursor are always additive (``other`` always
+        # reports a chunk-local ``current_lengths_wb``).
         self.current_lengths_wb += other.current_lengths_wb
-        self.current_lengths_nb += other.current_lengths_nb
-        
-        # Update scores (log probabilities, so we add them)
-        self.scores += other.scores
-        
+
+        if is_chunk_continuation:
+            # Beam-search streaming: ``other`` carries cumulative cross-chunk state in
+            # these fields, so replace rather than accumulate.
+            self.current_lengths_nb.copy_(other.current_lengths_nb)
+            self.scores.copy_(other.scores)
+        else:
+            # Original ("deltas") semantics.
+            self.current_lengths_nb += other.current_lengths_nb
+            self.scores += other.scores
+
         # Update transcript hash by combining hashes
         # The hash of the merged transcript should account for all non-blank labels
         self.transcript_hash.copy_(other.transcript_hash)

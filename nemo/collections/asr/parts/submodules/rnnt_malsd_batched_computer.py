@@ -777,6 +777,7 @@ class ModifiedALSDBatchedRNNTComputer(WithOptionalCudaGraphs, ConfidenceMethodMi
         """
 
         assert self.cuda_graphs_mode is not None
+        self.cuda_graphs_mode = self.CudaGraphsMode.NO_WHILE_LOOPS
 
         # do not recalculate joint projection, project only once
         encoder_output = self.joint.project_encoder(encoder_output)
@@ -962,6 +963,7 @@ class ModifiedALSDBatchedRNNTComputer(WithOptionalCudaGraphs, ConfidenceMethodMi
         if self.cuda_graphs_mode is self.CudaGraphsMode.FULL_GRAPH:
             try:
                 self._full_graph_compile()
+                print("full_graph_compile")
             except NeMoCUDAPythonException as e:
                 if not self.cuda_graphs_allow_fallback:
                     raise RuntimeError("Full CUDA graph decoding failed. Mode is forced, raising exception") from e
@@ -1066,7 +1068,7 @@ class ModifiedALSDBatchedRNNTComputer(WithOptionalCudaGraphs, ConfidenceMethodMi
             torch.cuda.graph(self.full_graph_continuation, stream=stream_for_graph, capture_error_mode="thread_local"),
         ):
             self._before_loop_continuation()
-            capture_status, _, graph, _, _, _ = cu_call(
+            capture_status, _, graph, *_ = cu_call(
                 cudart.cudaStreamGetCaptureInfo(torch.cuda.current_stream(device=self.state.device).cuda_stream)
             )
 
@@ -1114,14 +1116,32 @@ class ModifiedALSDBatchedRNNTComputer(WithOptionalCudaGraphs, ConfidenceMethodMi
 
     def _before_loop_continuation(self):
         """
-        Prepares state for continuation chunk without clearing batched_hyps.
-        Decoder state and fusion states are already restored from previous chunk
-        via _restore_state_from_prev before this method is called.
+        Prepares state for continuation chunk without clearing the cross-chunk per-beam
+        state of ``batched_hyps``.
+
+        Decoder state and fusion states are already restored from the previous chunk via
+        ``_restore_state_from_prev`` before this method is called. ``batched_hyps`` is
+        likewise restored from the previous chunk so that ``scores``, ``last_label``,
+        ``transcript_hash``, ``current_lengths_nb`` and ``last_timestamp_lasts`` continue
+        the beam search across the chunk boundary.
+
+        However, the per-chunk transcript prefix tree (``transcript_wb`` /
+        ``transcript_wb_prev_ptr`` / ``timestamps``) and the write cursor into it
+        (``current_lengths_wb``) must be reset for the new chunk: their buffers are sized
+        for one chunk's worth of decoding only, and the captured ``add_results_no_checks_``
+        scatters into them at ``current_lengths_wb`` without bounds checking. If we kept
+        the previous chunk's cursor we would index out of bounds within a few chunks,
+        producing a CUDA illegal-memory-access from inside the captured graph. The caller
+        is responsible for snapshotting / merging the per-chunk transcripts before this
+        method runs at the start of the next chunk (see :meth:`BatchedBeamHyps.merge_`
+        with ``is_chunk_continuation=True``).
         """
-        # Don't clear batched_hyps - it's already restored from previous state
-        # Don't reset decoder state - it's already restored from previous state
-        # Don't reset fusion states - they're already restored from previous state
-        
+        # Reset chunk-local storage so the captured loop body writes into freshly zeroed
+        # buffers; cross-chunk per-beam state is preserved.
+        self.state.batched_hyps.clear_chunk_local_()
+
+        # Decoder state and fusion states are already restored from previous state.
+
         self._before_loop_common()
 
     def _before_loop_common(self):
@@ -1250,7 +1270,6 @@ class ModifiedALSDBatchedRNNTComputer(WithOptionalCudaGraphs, ConfidenceMethodMi
         Updates the decoder state, decoder output, and optionally the fusion models state
         for the next iteration of the decoding loop in a batched RNNT (Recurrent Neural Network Transducer) setup.
         """
-
         # step 5: update decoder state + decoder output (+ fusion models state/scores)
         # step 5.1: mask invalid value labels with blank to avoid errors (refer to step 2.2)
         torch.where(

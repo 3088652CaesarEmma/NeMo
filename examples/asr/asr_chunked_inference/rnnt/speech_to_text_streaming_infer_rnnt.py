@@ -299,7 +299,7 @@ def main(cfg: TranscriptionConfig) -> TranscriptionConfig:
         decoding_computer: GreedyBatchedLabelLoopingComputerBase = asr_model.decoding.decoding.decoding_computer
     elif cfg.decoding.strategy == "malsd_batch":
         # Beam search strategies use _decoding_computer (private attribute)
-        is_tdt = True
+        is_tdt = False
         print(f"is_tdt: {is_tdt}")
         if is_tdt:
             decoding_computer: ModifiedALSDBatchedTDTComputer = asr_model.decoding.decoding._decoding_computer
@@ -570,10 +570,42 @@ def main(cfg: TranscriptionConfig) -> TranscriptionConfig:
                     )
                 # ========================================================================
 
-                # Handle hypothesis accumulation differently for beam search vs greedy
+                # Handle hypothesis accumulation differently for beam search vs greedy.
                 if is_beam_search:
-                    # For beam search: same object reused across chunks (stored in state)
-                    current_batched_hyps = chunk_batched_hyps
+                    # For beam search the chunk-local transcript buffers inside
+                    # ``decoding_computer.state.batched_hyps`` are reused across chunks
+                    # (and reset at the start of every continuation chunk), so we need to
+                    # snapshot the per-chunk transcripts before the next call overwrites
+                    # them and merge them into an external accumulator.
+                    #
+                    # ``flatten_`` resolves the chunk-local prefix tree without sorting
+                    # (preserving the chunk's beam ordering) and returns ``root_ptrs``: for
+                    # each chunk-end beam ``i``, the beam index at the chunk's start that
+                    # this hypothesis ultimately descends from. Because the chunk's loop
+                    # body can permute beams at any step via the top-K gather, beam ``i``
+                    # at the end of chunk ``N`` is generally a different logical
+                    # hypothesis from beam ``i`` at the end of chunk ``N-1``: it is the
+                    # descendant of beam ``root_ptrs[i]`` from chunk ``N-1``. Threading
+                    # ``root_ptrs`` into the accumulator's ``transcript_wb_prev_ptr`` at
+                    # the chunk boundary (via ``merge_(..., boundary_prev_ptr=...)``)
+                    # encodes this redirection in the prefix tree so the final
+                    # ``flatten_sort_`` inside ``to_hyps_list`` walks back through the
+                    # right beam history at every chunk boundary.
+                    #
+                    # The cross-chunk per-beam state (``scores``, ``current_lengths_nb``,
+                    # ...) is already cumulative on each chunk's hyps; pass
+                    # ``is_chunk_continuation=True`` so ``merge_`` replaces (not sums)
+                    # those fields.
+                    chunk_snapshot = chunk_batched_hyps.clone()
+                    chunk_root_ptrs = chunk_snapshot.flatten_()
+                    if current_batched_hyps is None:
+                        current_batched_hyps = chunk_snapshot
+                    else:
+                        current_batched_hyps.merge_(
+                            chunk_snapshot,
+                            is_chunk_continuation=True,
+                            boundary_prev_ptr=chunk_root_ptrs,
+                        )
                 else:
                     # For greedy: merge chunks using merge_
                     if current_batched_hyps is None:
