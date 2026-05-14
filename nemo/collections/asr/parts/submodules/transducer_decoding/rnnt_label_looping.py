@@ -881,6 +881,7 @@ class GreedyBatchedRNNTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBas
                     f"Full CUDA graph compilation failed: {e}. "
                     "Falling back to native PyTorch CUDA graphs. Decoding will be slower."
                 )
+                print("[DEBUG greedy] FULL_GRAPH fallback to NO_WHILE_LOOPS triggered", flush=True)
                 self.cuda_graphs_mode = self.CudaGraphsMode.NO_WHILE_LOOPS
                 self._partial_graphs_compile()
         elif self.cuda_graphs_mode is self.CudaGraphsMode.NO_WHILE_LOOPS:
@@ -1004,6 +1005,7 @@ class GreedyBatchedRNNTLabelLoopingComputer(GreedyBatchedLabelLoopingComputerBas
                 ):
                     self._inner_loop_step_find_next_non_blank()
                 self._after_inner_loop_step()
+        print("[DEBUG greedy] _full_graph_compile completed", flush=True)
 
     def _init_decoding_state(
         self, current_batch_size: int, prev_batched_state: Optional[BatchedLabelLoopingState] = None

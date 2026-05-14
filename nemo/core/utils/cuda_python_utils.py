@@ -117,7 +117,9 @@ def cu_call(f_call_out):
 
 @contextlib.contextmanager
 @cuda_python_required
-def with_conditional_node(while_loop_kernel, while_loop_args, while_loop_conditional_handle, device):
+def with_conditional_node(
+    while_loop_kernel, while_loop_args, while_loop_conditional_handle, device, cond_type="while"
+):
     """
     Even though we add a conditional node only once, we need to
     capture the kernel that calls cudaGraphSetConditional() both
@@ -125,7 +127,15 @@ def with_conditional_node(while_loop_kernel, while_loop_args, while_loop_conditi
     and after the rest of the while loop body graph (because we need
     to decide both whether to enter the loop, and also whether to
     execute the next iteration of the loop).
+
+    Args:
+        cond_type: Either "while" (default, original behavior) or "if". For "if" the
+            condition kernel is launched once (before the body) and the body is
+            executed at most once; for "while" the kernel is launched both before
+            entering the body and again at the end of each iteration so the loop
+            can re-evaluate its condition.
     """
+    assert cond_type in ("while", "if"), f"cond_type must be 'while' or 'if', got {cond_type!r}"
     # NB: depending on cuda-python version, cudaStreamGetCaptureInfo can return either 5 or 6 elements
     capture_status, _, graph, *_ = cu_call(
         cudart.cudaStreamGetCaptureInfo(torch.cuda.current_stream(device=device).cuda_stream)
@@ -155,7 +165,10 @@ def with_conditional_node(while_loop_kernel, while_loop_args, while_loop_conditi
     driver_params = cuda.CUgraphNodeParams()
     driver_params.type = cuda.CUgraphNodeType.CU_GRAPH_NODE_TYPE_CONDITIONAL
     driver_params.conditional.handle = while_loop_conditional_handle
-    driver_params.conditional.type = cuda.CUgraphConditionalNodeType.CU_GRAPH_COND_TYPE_WHILE
+    if cond_type == "while":
+        driver_params.conditional.type = cuda.CUgraphConditionalNodeType.CU_GRAPH_COND_TYPE_WHILE
+    else:
+        driver_params.conditional.type = cuda.CUgraphConditionalNodeType.CU_GRAPH_COND_TYPE_IF
     driver_params.conditional.size = 1
     if Version(cuda_python_version) == Version("12.3.0"):
         # Work around for https://github.com/NVIDIA/cuda-python/issues/55
@@ -215,9 +228,13 @@ def with_conditional_node(while_loop_kernel, while_loop_args, while_loop_conditi
 
     yield body_stream, body_graph
 
-    cuda.cuLaunchKernel(
-        while_loop_kernel, 1, 1, 1, 1, 1, 1, 0, body_stream.cuda_stream, while_loop_args.ctypes.data, 0
-    )
+    # For a WHILE node we re-launch the condition kernel at the end of the body so the
+    # graph can decide whether to execute another iteration. An IF node is one-shot so
+    # the body simply ends here.
+    if cond_type == "while":
+        cuda.cuLaunchKernel(
+            while_loop_kernel, 1, 1, 1, 1, 1, 1, 0, body_stream.cuda_stream, while_loop_args.ctypes.data, 0
+        )
 
     cudart.cudaStreamEndCapture(body_stream.cuda_stream)
 
