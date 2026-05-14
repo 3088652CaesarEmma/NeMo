@@ -95,7 +95,7 @@ streaming:
   att_context_size: [70,13]                   # Attention context size: [70,13],[70,6],[70,1],[70,0]
   use_cache: true                             # Whether to use cache for streaming
   use_feat_cache: true                        # Whether to cache mel-spec features, set false to re-calculate all mel-spec features in audio buffer
-  cache_storage: raw                          # Backing storage for cache tensors: "raw" (full precision), "fp16", "bf16", or "turbo" (TurboQuantMSE). `cache_last_channel_len` is always stored raw.
+  cache_storage: raw                          # Backing storage for cache tensors: "raw" (full precision), "fp16", "bf16", "int8", "int4" (per-vector absmax + nibble packing), or "turbo" (TurboQuantMSE). `cache_last_channel_len` is always stored raw.
   quant_bits: 4                               # Bits per coordinate for the TurboQuantMSE codebook (1-8); only used when `cache_storage: turbo`.
   chunk_size_in_secs: null                    # Amount of audio to load for each streaming step, e.g., 0.08s for FastConformer. Set to `null` for using default size equal to 1+lookahead frames.
   request_type: frame                         # Type of request: frame or feature_buffer

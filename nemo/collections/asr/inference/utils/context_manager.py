@@ -19,7 +19,7 @@ from typing import Any
 import torch
 from torch import Tensor
 
-from nemo.collections.asr.inference.utils.cache import Cache, CastCache, QuantizedCache, RawCache
+from nemo.collections.asr.inference.utils.cache import Cache, CastCache, Int4Cache, Int8Cache, QuantizedCache, RawCache
 from nemo.collections.asr.inference.utils.turboquant.mse import TurboQuantMSE
 
 
@@ -27,7 +27,7 @@ _CAST_DTYPES: dict[str, torch.dtype] = {
     "fp16": torch.float16,
     "bf16": torch.bfloat16,
 }
-_VALID_CACHE_STORAGE = ("raw", "fp16", "bf16", "turbo")
+_VALID_CACHE_STORAGE = ("raw", "fp16", "bf16", "int8", "int4", "turbo")
 
 
 class CacheAwareContext:
@@ -72,8 +72,10 @@ class CacheAwareContextManager:
             num_slots (int): Number of slots to use for the cache. It should be greater than or equal to the batch size.
             use_cache (bool): Whether to use the cache. Default is True. If False, the cache is disabled.
             cache_storage (str): Backing storage for `cache_last_channel` / `cache_last_time`.
-                One of "raw" (full precision), "fp16", "bf16" (downcast), or "turbo" (TurboQuantMSE).
-                `cache_last_channel_len` is always stored raw. Default "raw".
+                One of "raw" (full precision), "fp16", "bf16" (downcast), "int8" (per-vector
+                absmax int8), "int4" (per-vector absmax int4 with 2-nibble bit packing), or
+                "turbo" (TurboQuantMSE rotation + Lloyd-Max). `cache_last_channel_len` is
+                always stored raw. Default "raw".
             quant_bits (int): Bits per coordinate for the TurboQuantMSE scalar codebook. Only used when
                 `cache_storage == "turbo"`. Default 4.
         """
@@ -155,6 +157,36 @@ class CacheAwareContextManager:
                 source_dtype=initial_cache_last_time.dtype,
                 storage_dtype=storage_dtype,
                 device=initial_cache_last_time.device,
+            )
+            del initial_cache_last_channel
+            del initial_cache_last_time
+        elif self.cache_storage == "int8":
+            self.cache_last_channel = Int8Cache.empty(
+                shape=tuple(initial_cache_last_channel.shape),
+                source_dtype=initial_cache_last_channel.dtype,
+                device=initial_cache_last_channel.device,
+                vec_axis=3,
+            )
+            self.cache_last_time = Int8Cache.empty(
+                shape=tuple(initial_cache_last_time.shape),
+                source_dtype=initial_cache_last_time.dtype,
+                device=initial_cache_last_time.device,
+                vec_axis=2,
+            )
+            del initial_cache_last_channel
+            del initial_cache_last_time
+        elif self.cache_storage == "int4":
+            self.cache_last_channel = Int4Cache.empty(
+                shape=tuple(initial_cache_last_channel.shape),
+                source_dtype=initial_cache_last_channel.dtype,
+                device=initial_cache_last_channel.device,
+                vec_axis=3,
+            )
+            self.cache_last_time = Int4Cache.empty(
+                shape=tuple(initial_cache_last_time.shape),
+                source_dtype=initial_cache_last_time.dtype,
+                device=initial_cache_last_time.device,
+                vec_axis=2,
             )
             del initial_cache_last_channel
             del initial_cache_last_time

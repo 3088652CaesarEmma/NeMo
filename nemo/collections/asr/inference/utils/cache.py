@@ -144,6 +144,200 @@ class CastCache(Cache):
         return self._data.element_size() * self._data.numel()
 
 
+class Int8Cache(Cache):
+    """Stores the cache as per-vector absmax-scaled int8 along `vec_axis`.
+
+    For each vector v along `vec_axis`:
+        scale = max(|v|) / 127
+        v_int8 = clamp(round(v / scale), -128, 127)
+    Reconstruction: v ≈ v_int8 * scale, cast back to the source dtype.
+
+    Storage is `(indices: int8, scale: source_dtype)` with the slot dimension on dim 1
+    (matching `RawCache`/`CastCache`/`QuantizedCache`), so all `index_fill_` /
+    `index_copy_` / `index_select` slot ops carry over unchanged.
+
+    Compared to `QuantizedCache` at bits=8 this has the same storage size (1 byte per
+    coordinate) but no rotation/codebook overhead — quantize is one absmax + round,
+    dequantize is one multiply. Compared to `CastCache(fp16)` it is 2× smaller.
+    """
+
+    _INT8_MAX = 127.0
+
+    def __init__(self, tensor: Tensor, vec_axis: int = 3):
+        """
+        Args:
+            tensor (Tensor): initial cache tensor.
+            vec_axis (int): axis that holds the per-vector quantization unit. Default 3.
+        """
+        self._source_dtype = tensor.dtype
+        self.vec_axis = vec_axis
+        self._indices, self._scale = self._quantize(tensor, vec_axis)
+
+    @classmethod
+    def empty(
+        cls,
+        shape: tuple[int, ...],
+        source_dtype: torch.dtype,
+        device: torch.device,
+        vec_axis: int = 3,
+    ) -> "Int8Cache":
+        """Construct a zero-valued int8 cache without materialising the float tensor.
+
+        Dequantizing an all-zero `scale` reconstructs to zero regardless of indices, so this
+        matches `Int8Cache(zeros(shape))` while avoiding the float-cache allocation.
+        """
+        obj = cls.__new__(cls)
+        obj._source_dtype = source_dtype
+        obj.vec_axis = vec_axis
+        obj._indices = torch.zeros(shape, dtype=torch.int8, device=device)
+        scale_shape = list(shape)
+        scale_shape.pop(vec_axis)
+        obj._scale = torch.zeros(scale_shape, dtype=source_dtype, device=device)
+        return obj
+
+    @classmethod
+    def _quantize(cls, x: Tensor, vec_axis: int) -> tuple[Tensor, Tensor]:
+        abs_max = x.abs().amax(dim=vec_axis, keepdim=True)
+        # clamp_min guards against all-zero vectors (would produce NaN under x / scale).
+        scale = (abs_max / cls._INT8_MAX).clamp_min(1e-12)
+        q = (x / scale).round().clamp_(-cls._INT8_MAX - 1.0, cls._INT8_MAX).to(torch.int8)
+        return q, scale.squeeze(vec_axis)
+
+    @property
+    def device(self) -> torch.device:
+        return self._indices.device
+
+    def reset_slots(self, slot_ids: Tensor) -> None:
+        # Dequantize multiplies indices by scale; zero scale → zero output regardless of indices.
+        self._scale.index_fill_(1, slot_ids, 0.0)
+
+    def update_slots(self, dst_slot_ids: Tensor, src: Tensor, src_slot_ids: Tensor) -> None:
+        # Slice before quantizing so transient float buffers are sized to len(src_slot_ids).
+        src_slice = src.index_select(1, src_slot_ids)
+        src_q, src_scale = self._quantize(src_slice, self.vec_axis)
+        self._indices.index_copy_(1, dst_slot_ids, src_q)
+        self._scale.index_copy_(1, dst_slot_ids, src_scale)
+
+    def gather_slots(self, slot_ids: list[int]) -> Tensor:
+        q = self._indices[:, slot_ids]
+        scale = self._scale[:, slot_ids]
+        return q.to(self._source_dtype) * scale.unsqueeze(self.vec_axis).to(self._source_dtype)
+
+    def storage_nbytes(self) -> int:
+        return (
+            self._indices.element_size() * self._indices.numel()
+            + self._scale.element_size() * self._scale.numel()
+        )
+
+
+class Int4Cache(Cache):
+    """Stores the cache as per-vector absmax-scaled int4 with 2-nibble bit packing.
+
+    For each vector v along `vec_axis`:
+        scale  = max(|v|) / 7
+        nibble = clamp(round(v / scale), -7, 7) + 7   # stored unsigned in [0, 14]
+    Two nibbles are packed into one uint8 along `vec_axis`, so storage along that
+    axis is half the source extent. Reconstruction: v ≈ (nibble - 7) * scale.
+
+    Compared to `Int8Cache` this is 2× smaller again at the cost of higher quant
+    error. Compared to `QuantizedCache` with bits=4 it skips the rotation +
+    codebook lookup at the cost of slightly worse MSE on Gaussian coordinates.
+    """
+
+    _INT4_MAX = 7.0
+    _NIBBLE_ZP = 7  # unsigned offset so signed [-7, 7] maps to [0, 14]
+    _PACK_FACTOR = 2
+
+    def __init__(self, tensor: Tensor, vec_axis: int = 3):
+        """
+        Args:
+            tensor (Tensor): initial cache tensor.
+            vec_axis (int): axis that holds the per-vector quantization unit. Default 3.
+        """
+        if tensor.shape[vec_axis] % self._PACK_FACTOR != 0:
+            raise ValueError(
+                f"size at vec_axis ({tensor.shape[vec_axis]}) must be even for 4-bit packing"
+            )
+        self._source_dtype = tensor.dtype
+        self.vec_axis = vec_axis
+        self._indices, self._scale = self._quantize(tensor, vec_axis)
+
+    @classmethod
+    def empty(
+        cls,
+        shape: tuple[int, ...],
+        source_dtype: torch.dtype,
+        device: torch.device,
+        vec_axis: int = 3,
+    ) -> "Int4Cache":
+        """Construct a zero-valued int4 cache without materialising the float tensor.
+
+        Dequantizing an all-zero `scale` reconstructs to zero regardless of indices,
+        so this matches `Int4Cache(zeros(shape))` while avoiding the float-cache
+        allocation and the transient buffers inside `_quantize`.
+        """
+        if shape[vec_axis] % cls._PACK_FACTOR != 0:
+            raise ValueError(
+                f"size at vec_axis ({shape[vec_axis]}) must be even for 4-bit packing"
+            )
+        obj = cls.__new__(cls)
+        obj._source_dtype = source_dtype
+        obj.vec_axis = vec_axis
+        packed_shape = list(shape)
+        packed_shape[vec_axis] = shape[vec_axis] // cls._PACK_FACTOR
+        obj._indices = torch.zeros(packed_shape, dtype=torch.uint8, device=device)
+        scale_shape = list(shape)
+        scale_shape.pop(vec_axis)
+        obj._scale = torch.zeros(scale_shape, dtype=source_dtype, device=device)
+        return obj
+
+    @classmethod
+    def _quantize(cls, x: Tensor, vec_axis: int) -> tuple[Tensor, Tensor]:
+        abs_max = x.abs().amax(dim=vec_axis, keepdim=True)
+        # clamp_min guards against all-zero vectors (would produce NaN under x / scale).
+        scale = (abs_max / cls._INT4_MAX).clamp_min(1e-12)
+        # Map to unsigned nibble [0, 14] in a chain of in-place ops on the divided tensor.
+        nibbles = (x / scale).round_().clamp_(-cls._INT4_MAX, cls._INT4_MAX).add_(cls._NIBBLE_ZP).to(torch.uint8)
+        # Pack along vec_axis: two nibbles per byte. movedim so packing is along the last axis.
+        n_last = nibbles.movedim(vec_axis, -1)
+        packed_last = n_last[..., 0::2] | (n_last[..., 1::2] << 4)
+        packed = packed_last.movedim(-1, vec_axis).contiguous()
+        return packed, scale.squeeze(vec_axis)
+
+    @property
+    def device(self) -> torch.device:
+        return self._indices.device
+
+    def reset_slots(self, slot_ids: Tensor) -> None:
+        # Dequantize multiplies by scale; zero scale → zero output regardless of indices.
+        self._scale.index_fill_(1, slot_ids, 0.0)
+
+    def update_slots(self, dst_slot_ids: Tensor, src: Tensor, src_slot_ids: Tensor) -> None:
+        # Slice before quantizing so transient float buffers are sized to len(src_slot_ids).
+        src_slice = src.index_select(1, src_slot_ids)
+        src_q, src_scale = self._quantize(src_slice, self.vec_axis)
+        self._indices.index_copy_(1, dst_slot_ids, src_q)
+        self._scale.index_copy_(1, dst_slot_ids, src_scale)
+
+    def gather_slots(self, slot_ids: list[int]) -> Tensor:
+        packed = self._indices[:, slot_ids]
+        scale = self._scale[:, slot_ids]
+        # Unpack two nibbles per byte along vec_axis.
+        packed_last = packed.movedim(self.vec_axis, -1)
+        *prefix, half = packed_last.shape
+        unpacked = torch.empty(*prefix, half * self._PACK_FACTOR, dtype=torch.uint8, device=packed.device)
+        unpacked[..., 0::2] = packed_last & 0x0F
+        unpacked[..., 1::2] = (packed_last >> 4) & 0x0F
+        unpacked = unpacked.movedim(-1, self.vec_axis)
+        return (unpacked.to(self._source_dtype) - self._NIBBLE_ZP) * scale.unsqueeze(self.vec_axis).to(self._source_dtype)
+
+    def storage_nbytes(self) -> int:
+        return (
+            self._indices.element_size() * self._indices.numel()
+            + self._scale.element_size() * self._scale.numel()
+        )
+
+
 class QuantizedCache(Cache):
     """
     Stores `cache_last_channel` quantized along its hidden dimension using `TurboQuantMSE`.
