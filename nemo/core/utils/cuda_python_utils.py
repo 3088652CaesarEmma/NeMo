@@ -127,13 +127,6 @@ def with_conditional_node(
     and after the rest of the while loop body graph (because we need
     to decide both whether to enter the loop, and also whether to
     execute the next iteration of the loop).
-
-    Args:
-        cond_type: Either "while" (default, original behavior) or "if". For "if" the
-            condition kernel is launched once (before the body) and the body is
-            executed at most once; for "while" the kernel is launched both before
-            entering the body and again at the end of each iteration so the loop
-            can re-evaluate its condition.
     """
     assert cond_type in ("while", "if"), f"cond_type must be 'while' or 'if', got {cond_type!r}"
     # NB: depending on cuda-python version, cudaStreamGetCaptureInfo can return either 5 or 6 elements

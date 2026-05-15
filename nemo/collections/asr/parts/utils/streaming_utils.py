@@ -2246,11 +2246,6 @@ class ContextSizeBatch:
             chunk=torch.ceil(self.chunk / factor).to(dtype=torch.long),
             right=torch.ceil(self.right / factor).to(dtype=torch.long),
         )
-        # return ContextSizeBatch(
-        #     left=torch.div(self.left, factor).round().to(dtype=torch.long),
-        #     chunk=torch.div(self.chunk, factor).round().to(dtype=torch.long),
-        #     right=torch.div(self.right, factor).round().to(dtype=torch.long),
-        # )
 
     def add_frames_(
         self, num_frames_batch: torch.Tensor, is_last_chunk_batch: torch.Tensor, expected_context: "ContextSize"

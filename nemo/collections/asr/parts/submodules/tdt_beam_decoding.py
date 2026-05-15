@@ -962,16 +962,16 @@ class BeamBatchedTDTInfer(Typing, ConfidenceMethodMixin, WithOptionalCudaGraphs)
 
             inseq = encoder_output  # [B, T, D]
             
-            # import pdb; pdb.set_trace()
             encoder_output_projected = self.joint.project_encoder(encoder_output)
             encoder_output_projected_len = encoded_lengths
             batched_beam_hyps, alignments, decoding_state = self._decoding_computer(x=encoder_output_projected, out_len=encoder_output_projected_len)
 
+            # Ensures the correct number of hypotheses (batch_size) for CUDA Graphs compatibility
             batch_size = encoder_output.shape[0]
             if self.return_best_hypothesis:
-                hyps = batched_beam_hyps.to_hyps_list(score_norm=self.score_norm)[:batch_size]  # type: ignore
+                hyps = batched_beam_hyps.to_hyps_list(score_norm=self.score_norm)[:batch_size]
             else:
-                hyps = batched_beam_hyps.to_nbest_hyps_list(score_norm=self.score_norm)[:batch_size]  # type: ignore
+                hyps = batched_beam_hyps.to_nbest_hyps_list(score_norm=self.score_norm)[:batch_size]
 
         self.decoder.train(decoder_training_state)
         self.joint.train(joint_training_state)
