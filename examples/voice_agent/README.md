@@ -34,14 +34,13 @@ As of now, we only support English input and output, but more languages will be 
 
 
 ## 💡 Upcoming Next
-- Better tool calling support for LLMs.
-- Better inference latency for Magpie TTS model.
-- Evaluation tools and benchmarks for voice agents.
+- Evaluation tools and benchmarks for voice agents (almost ready).
 - Accuracy and robustness ASR model improvements.
 - Combine ASR and speaker diarization model to handle overlapping speech.
 
 
 ## 📅 Latest Updates
+- 2026-05-15: Added support for [Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4](https://huggingface.co/nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4).
 - 2026-01-26: Added support for [NVIDIA-Nemotron-3-Nano-30B-A3B-BF16](https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16) LLM model, and support for [magpie_tts_multilingual_357m](https://huggingface.co/nvidia/magpie_tts_multilingual_357m) TTS model.
 - 2025-12-31: Added examples for [tool calling](#tool-calling), such as changing the speaking speed, switching between male/female voices and British/American accents, and getting the current weather of a city. Diarization model is updated to [nvidia/diar_streaming_sortformer_4spk-v2.1](https://huggingface.co/nvidia/diar_streaming_sortformer_4spk-v2.1) with improved performance.
 - 2025-11-14: Added support for joint ASR and EOU detection with [Parakeet-realtime-eou-120m](https://huggingface.co/nvidia/parakeet_realtime_eou_120m-v1) model.
@@ -146,7 +145,7 @@ Most LLMs from HuggingFace are supported. A few examples are:
     - If you have a GPU with FP8 support, the VRAM requirement is reduced to about 30GB. You can switch to [nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-FP8](https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-FP8) by modifying the llm config accordingly.
     - Tool calling is enabled for this model.
 - [nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4](https://huggingface.co/nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16)
-    - Please use `server/server_configs/llm_configs/nemotron_nano_v3_omni.yaml` as the server config. To better monitor the vllm status, `start_vllm_on_init` is set to `false`, so that you can manually start the vllm server in another terminal via: 
+    - Please use `server/server_configs/llm_configs/nemotron_nano_v3_omni.yaml` as the server config. To better monitor the vllm status, `start_vllm_on_init` is set to `false`, so that you can manually start the vllm server separately via: 
     ```bash
         # vllm serve nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16 \
         # vllm serve nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-FP8 \
@@ -158,8 +157,10 @@ Most LLMs from HuggingFace are supported. A few examples are:
             --video-pruning-rate 0.5 \
             --max-num-seqs 384 \
             --allowed-local-media-path / \
+            --limit-mm-per-prompt '{"video": 999, "image": 999, "audio": 999}' \
             --media-io-kwargs '{"video": {"fps": 2, "num_frames": 256}}' \
             --reasoning-parser nemotron_v3 \
+            --reasoning-config '{"reasoning_start_str": "<think>", "reasoning_end_str": "\nI have to finalize the answer now.</think>"}' \
             --enable-auto-tool-choice \
             --tool-call-parser qwen3_coder \
             --kv-cache-dtype fp8 # Omit this for BF16

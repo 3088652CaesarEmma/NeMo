@@ -15,10 +15,11 @@ inject_dummy_user_message: true
 ##############################
 ###### Omni model config #####
 ##############################
-is_omni_model: true
-pre_cache_duration_secs: 0.3
-use_stt_transcript: false
-keep_only_last_audio_turn: false
+is_omni_model: true  # set True to enable audio cacher
+pre_cache_duration_secs: 0.3  # additional audio to cache before user starts speaking
+use_stt_transcript: false  # whether to add ASR transcript to user's turn
+text_prompt_for_audio: "Follow instructions or answer questions in the audio."  # user's text message for each audio turn
+text_prompt_for_transcript: "Here is the pseudo-transcript of the audio for reference:"  # additional text prompt before the ASR transcript, only used if `use_stt_transcript=true`
 
 ##############################
 ## Common generation config ##

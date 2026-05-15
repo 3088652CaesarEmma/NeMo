@@ -14,6 +14,7 @@
 
 # Adapted from https://github.com/pipecat-ai/pipecat/blob/v0.0.98/examples/foundational/07s-interruptible-google-audio-in.py
 
+from typing import Optional
 from loguru import logger
 from pipecat.frames.frames import (
     InputAudioRawFrame,
@@ -27,6 +28,10 @@ from pipecat.processors.aggregators.llm_response import LLMUserContextAggregator
 from pipecat.processors.frame_processor import FrameProcessor
 
 
+DEFAULT_TEXT_PROMPT_FOR_AUDIO = "Follow instructions or answer questions in the audio."
+DEFAULT_TEXT_PROMPT_FOR_TRANSCRIPT = "Here is the pseudo-transcript of the audio for reference:"
+
+
 class UserAudioBuffer(FrameProcessor):
     def __init__(
         self,
@@ -35,10 +40,10 @@ class UserAudioBuffer(FrameProcessor):
         user_context_aggregator: LLMUserContextAggregator,
         pre_cache_duration_secs: float = 0.2,
         use_transcript: bool = False,
-        text_prompt: str = "Follow instructions or answer questions in the audio.",
-        text_prompt_for_transcript: str = "Here is the pseudo-transcript of the audio for reference: ",
+        text_prompt_for_audio: Optional[str] = None,
+        text_prompt_for_transcript: Optional[str] = None,
         raw_audio_frame_len_in_secs: float = 0.016,
-        keep_only_last_audio_turn: bool = True,
+        keep_only_last_audio_turn: bool = False,
     ) -> None:
         """
         Args:
@@ -46,7 +51,7 @@ class UserAudioBuffer(FrameProcessor):
             user_context_aggregator: The user context aggregator to push the LLM run frame to.
             pre_cache_duration_secs: The duration of the audio to cache before the user starts speaking.
             use_transcript: Whether to add the transcript as auxiliary user text input to the LLM context.
-            text_prompt: The prompt to add to the LLM context when the user starts speaking.
+            text_prompt_for_audio: The prompt to add to the LLM context when the user starts speaking.
             text_prompt_for_transcript: The prompt to add to the LLM context when the user stops speaking and the transcript is available.
             raw_audio_frame_len_in_secs: The length of the audio frame in seconds.
             keep_only_last_audio_turn: Whether to keep only the last audio turn.
@@ -59,11 +64,14 @@ class UserAudioBuffer(FrameProcessor):
         self._user_speaking = False
         self._transcript_buffer = []
         self._use_transcript = use_transcript
-        self._text_prompt = text_prompt
-        self._text_prompt_for_transcript = text_prompt_for_transcript
+        self._text_prompt_for_audio = text_prompt_for_audio or DEFAULT_TEXT_PROMPT_FOR_AUDIO
+        self._text_prompt_for_transcript = text_prompt_for_transcript or DEFAULT_TEXT_PROMPT_FOR_TRANSCRIPT
         self._raw_audio_frame_len_in_secs = raw_audio_frame_len_in_secs
         self._previsous_user_text = ""
         self._keep_only_last_audio_turn = keep_only_last_audio_turn
+        logger.debug(
+            f"UserAudioBuffer initialized with: pre_cache_duration_secs: {pre_cache_duration_secs}, use_transcript: {use_transcript}, text_prompt_for_audio: {self._text_prompt_for_audio}, text_prompt_for_transcript: {self._text_prompt_for_transcript}, keep_only_last_audio_turn: {keep_only_last_audio_turn}"
+        )
 
     @property
     def buffer_duration(self) -> float:
@@ -117,12 +125,12 @@ class UserAudioBuffer(FrameProcessor):
             logger.debug(f"User stopped speaking")
             if self._keep_only_last_audio_turn:
                 self._replace_previous_audio_turns()
-            text = self._text_prompt
+            text = self._text_prompt_for_audio
             current_transcript = self._finalize_transcript()
             if self._use_transcript and self._transcript_buffer:
                 text += f"\n{self._text_prompt_for_transcript}\n{current_transcript}"
             self._previsous_user_text = (
-                f"{self._text_prompt}\n{self._text_prompt_for_transcript}\n`{current_transcript}`".strip()
+                f"{self._text_prompt_for_audio}\n{self._text_prompt_for_transcript}\n`{current_transcript}`".strip()
             )
             await self._context.add_audio_frames_message(audio_frames=self._audio_frames, text=text)
             logger.debug(
