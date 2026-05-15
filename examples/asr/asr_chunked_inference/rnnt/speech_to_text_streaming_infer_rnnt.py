@@ -478,28 +478,23 @@ def main(cfg: TranscriptionConfig) -> TranscriptionConfig:
 
                 # Accumulate hypotheses across chunks.
                 if is_beam_search:
-                    # Beam-search reuses chunk-local transcript buffers inside
-                    # ``decoding_computer.state.batched_hyps`` (reset at every continuation
-                    # chunk), so we must snapshot before the next call overwrites them.
                     # ``flatten_`` resolves the chunk-local prefix tree without sorting and
                     # returns ``root_ptrs``: for each chunk-end beam ``i``, the beam index
-                    # at the chunk's start that this hypothesis descends from. The loop
-                    # body can permute beams via top-K, so beam ``i`` at the end of chunk
-                    # ``N`` is generally a different logical hypothesis from beam ``i`` at
-                    # the end of chunk ``N-1`` - it is the descendant of beam
-                    # ``root_ptrs[i]``. Threading ``root_ptrs`` into the accumulator's
-                    # ``transcript_wb_prev_ptr`` via ``boundary_prev_ptr`` encodes this
-                    # redirection so the final ``flatten_sort_`` in ``to_hyps_list`` walks
-                    # back through the right beam history. ``is_chunk_continuation=True``
-                    # makes ``merge_`` replace (not sum) the cumulative per-beam fields
-                    # (``scores``, ``current_lengths_nb``, ...).
-                    chunk_snapshot = chunk_batched_hyps.clone()
-                    chunk_root_ptrs = chunk_snapshot.flatten_()
+                    # at the chunk's start it descends from. The loop body permutes beams
+                    # via top-K, so beam ``i`` at the end of chunk ``N`` is generally a
+                    # different logical hypothesis from beam ``i`` at the end of chunk
+                    # ``N-1`` - it descends from beam ``root_ptrs[i]``. Threading these
+                    # pointers via ``boundary_prev_ptr`` encodes the redirection so the
+                    # final ``flatten_sort_`` in ``to_hyps_list`` walks back through the
+                    # right beam history. ``is_chunk_continuation=True`` makes ``merge_``
+                    # replace (not sum) the cumulative per-beam fields (``scores``,
+                    # ``current_lengths_nb``, ...).
+                    chunk_root_ptrs = state.batched_hyps.flatten_()
                     if current_batched_hyps is None:
-                        current_batched_hyps = chunk_snapshot
+                        current_batched_hyps = state.batched_hyps
                     else:
                         current_batched_hyps.merge_(
-                            chunk_snapshot,
+                            state.batched_hyps,
                             is_chunk_continuation=True,
                             boundary_prev_ptr=chunk_root_ptrs,
                         )

@@ -96,7 +96,7 @@ class MALSDState:
 
     # Streaming state fields
     is_continuation: torch.Tensor  # flag indicating if this is a continuation from previous chunk
-    decoded_lengths: torch.Tensor  # accumulated decoded lengths across chunks
+    is_first_chunk: torch.Tensor  # complement of ``is_continuation``; both feed the captured graph's IF nodes
 
     # fusion models related fields
     fusion_models: Optional[List[NGramGPULanguageModel]] = None
@@ -190,9 +190,12 @@ class MALSDState:
         self.blank_mask = torch.zeros_like(self.active_mask, dtype=torch.bool)
         self.active_mask_any = torch.tensor(True, device=self.device, dtype=torch.bool)
 
-        # Streaming state fields
+        # Streaming state fields. The captured FULL_GRAPH reads ``is_first_chunk`` and
+        # ``is_continuation`` to route to the first-chunk vs. continuation prologue at replay
+        # time. The two flags are kept in lockstep by ``modified_alsd_cuda_graphs`` before
+        # each replay (they are mutually exclusive).
         self.is_continuation = torch.tensor(False, device=self.device, dtype=torch.bool)
-        self.decoded_lengths = torch.zeros([self.batch_size], dtype=torch.long, device=self.device)
+        self.is_first_chunk = torch.tensor(True, device=self.device, dtype=torch.bool)
 
         self.batched_hyps = BatchedBeamHyps(
             batch_size=batch_size,
@@ -241,7 +244,6 @@ class ModifiedALSDBatchedTDTComputer(WithOptionalCudaGraphs, ConfidenceMethodMix
 
     separate_graphs: Optional[SeparateGraphsMALSD]
     full_graph: Optional[torch.cuda.CUDAGraph]
-    full_graph_continuation: Optional[torch.cuda.CUDAGraph]
     cuda_graphs_mode: Optional[CudaGraphsMode]
     state: Optional[MALSDState]
     fusion_models: Optional[List[NGramGPULanguageModel]]
@@ -369,7 +371,6 @@ class ModifiedALSDBatchedTDTComputer(WithOptionalCudaGraphs, ConfidenceMethodMix
         """Reset state to release memory (for CUDA graphs implementations)"""
         self.state = None
         self.full_graph = None
-        self.full_graph_continuation = None
         self.separate_graphs = None
 
     def modified_alsd_torch(
@@ -881,6 +882,10 @@ class ModifiedALSDBatchedTDTComputer(WithOptionalCudaGraphs, ConfidenceMethodMix
         # Set continuation flag and restore state from previous chunk if provided
         is_continuation = prev_batched_state is not None
         self.state.is_continuation.fill_(is_continuation)
+        # Mirror into the inverse flag so the captured graph's IF nodes can route to
+        # the right prologue. Both tensors are read by ``loop_conditional``-style
+        # condition kernels baked into the graph at capture time.
+        self.state.is_first_chunk.fill_(not is_continuation)
 
         if is_continuation:
             # Restore state from previous chunk
@@ -888,16 +893,14 @@ class ModifiedALSDBatchedTDTComputer(WithOptionalCudaGraphs, ConfidenceMethodMix
 
         # set length to zero for elements outside the current batch
         self.state.encoder_output_length.fill_(0)
-        # copy (projected) encoder output and lenghts
+        # copy (projected) encoder output and lengths
         self.state.encoder_output_projected[:current_batch_size, :current_max_time, ...].copy_(encoder_output)
         self.state.encoder_output_length[:current_batch_size].copy_(encoder_output_length.unsqueeze(-1))
-        
+
         if self.cuda_graphs_mode is self.CudaGraphsMode.FULL_GRAPH:
-            # Use continuation graph if continuing from previous chunk, otherwise first chunk graph
-            if is_continuation:
-                self.full_graph_continuation.replay()
-            else:
-                self.full_graph.replay()
+            # Single graph dispatches between first-chunk and continuation prologues internally
+            # via captured IF nodes that read ``is_first_chunk`` / ``is_continuation``.
+            self.full_graph.replay()
         elif self.cuda_graphs_mode is self.CudaGraphsMode.NO_WHILE_LOOPS:
             # Use continuation before_loop graph if continuing from previous chunk
             if is_continuation:
@@ -908,7 +911,6 @@ class ModifiedALSDBatchedTDTComputer(WithOptionalCudaGraphs, ConfidenceMethodMix
                 self.separate_graphs.loop_body.replay()
                 self.separate_graphs.loop_update_decoder.replay()
         elif self.cuda_graphs_mode is self.CudaGraphsMode.NO_GRAPHS:
-            # this mode is only for testing purposes
             # manual loop instead of using graphs
             if is_continuation:
                 self._before_loop_continuation()
@@ -1047,6 +1049,10 @@ class ModifiedALSDBatchedTDTComputer(WithOptionalCudaGraphs, ConfidenceMethodMix
                 self.state.fusion_scores_list.append(self.state.init_fusion_scores_list[fusion_model_idx].clone())
                 self.state.fusion_states_prev_list.append(init_fusion_states.clone())
 
+        # warmup before graph compilation
+        if self.cuda_graphs_mode is not self.CudaGraphsMode.NO_GRAPHS:
+            self._warmup_for_cuda_graphs()
+
         if self.cuda_graphs_mode is self.CudaGraphsMode.FULL_GRAPH:
             try:
                 self._full_graph_compile()
@@ -1066,6 +1072,37 @@ class ModifiedALSDBatchedTDTComputer(WithOptionalCudaGraphs, ConfidenceMethodMix
             pass
         else:
             raise NotImplementedError
+
+    def _warmup_for_cuda_graphs(self):
+        """Warmup before compiling CUDA graphs.
+
+        Runs a few eager iterations of both the first-chunk and continuation paths so that
+        cuBLAS / cuDNN handles and workspaces are allocated and stable before any graph
+        capture begins. Mirrors the warmup pattern used by the greedy label-looping decoder.
+        """
+        is_ddp = torch.distributed.is_available() and torch.distributed.is_initialized()
+        # 11 warmup steps required in DDP mode
+        # see https://pytorch.org/docs/stable/notes/cuda.html#usage-with-distributeddataparallel
+        num_runs = 11 if is_ddp else 3
+        self.state.encoder_output_projected.fill_(0.0)
+        self.state.encoder_output_length.fill_(1)
+        s = torch.cuda.Stream(self.state.device)
+        s.wait_stream(torch.cuda.current_stream(device=self.state.device))
+        with torch.cuda.stream(s), torch.inference_mode():
+            # Warm up the first-chunk path.
+            for _ in range(num_runs):
+                self._before_loop()
+                self._loop_body()
+                self._loop_update_decoder()
+            # Warm up the continuation path so its prologue and any kernels it touches
+            # are primed too. Both captures share a mempool, so any allocator activity
+            # they trigger needs to settle before either is captured.
+            for _ in range(num_runs):
+                self._before_loop_continuation()
+                self._loop_body()
+                self._loop_update_decoder()
+        torch.cuda.current_stream(device=self.state.device).wait_stream(s)
+        self.state.encoder_output_length.fill_(0)
 
     def _partial_graphs_compile(self):
         """Compile decoding by parts"""
@@ -1113,9 +1150,23 @@ class ModifiedALSDBatchedTDTComputer(WithOptionalCudaGraphs, ConfidenceMethodMix
 
     @cuda_python_required
     def _full_graph_compile(self):
-        """Compile full graph for decoding"""
+        """Compile a single CUDA graph that handles both first-chunk and continuation paths.
+
+        The graph contains three conditional sub-graphs in order:
+            1. IF (``is_first_chunk``) → ``_before_loop()``
+            2. IF (``is_continuation``) → ``_before_loop_continuation()``
+            3. WHILE (``active_mask_any``) → ``_loop_body()`` + ``_loop_update_decoder()``
+
+        At replay time the caller toggles ``is_first_chunk`` / ``is_continuation`` so
+        exactly one prologue executes. This avoids needing two coexisting CUDAGraph
+        objects (which observed to cause cudaErrorIllegalAddress on replay due to
+        mempool interaction between the two captures).
+        """
         # Always create a new stream, because the per-thread default stream disallows stream capture to a graph.
         stream_for_graph = torch.cuda.Stream(self.state.device)
+        # Drain any work pending on the default stream (e.g. the warmup that ran just above in
+        # ``_graph_reinitialize``) before we start capturing.
+        stream_for_graph.wait_stream(torch.cuda.default_stream(self.state.device))
         self.full_graph = torch.cuda.CUDAGraph()
 
         with (
@@ -1123,52 +1174,50 @@ class ModifiedALSDBatchedTDTComputer(WithOptionalCudaGraphs, ConfidenceMethodMix
             torch.inference_mode(),
             torch.cuda.graph(self.full_graph, stream=stream_for_graph, capture_error_mode="thread_local"),
         ):
-            self._before_loop()
+            # The condition-setter kernel (created lazily by ``_create_loop_body_kernel``) is
+            # signature-compatible with any 0-d bool*; we reuse it for all three conditional nodes.
+            cond_kernel = self._create_loop_body_kernel()
+
             # NB: depending on cuda-python version, cudaStreamGetCaptureInfo can return either 5 or 6 elements
             capture_status, _, graph, *_ = cu_call(
                 cudart.cudaStreamGetCaptureInfo(torch.cuda.current_stream(device=self.state.device).cuda_stream)
             )
-
             assert capture_status == cudart.cudaStreamCaptureStatus.cudaStreamCaptureStatusActive
 
-            # capture: while self.active_mask_any:
+            # --- IF (is_first_chunk): run first-chunk prologue ---
+            (first_chunk_handle,) = cu_call(cudart.cudaGraphConditionalHandleCreate(graph, 0, 0))
+            is_first_chunk_ptr = np.array([self.state.is_first_chunk.data_ptr()], dtype=np.uint64)
+            first_chunk_args = np.array(
+                [first_chunk_handle.getPtr(), is_first_chunk_ptr.ctypes.data],
+                dtype=np.uint64,
+            )
+            with with_conditional_node(
+                cond_kernel, first_chunk_args, first_chunk_handle, device=self.state.device, cond_type="if"
+            ):
+                self._before_loop()
+
+            # --- IF (is_continuation): run continuation prologue ---
+            (continuation_handle,) = cu_call(cudart.cudaGraphConditionalHandleCreate(graph, 0, 0))
+            is_continuation_ptr = np.array([self.state.is_continuation.data_ptr()], dtype=np.uint64)
+            continuation_args = np.array(
+                [continuation_handle.getPtr(), is_continuation_ptr.ctypes.data],
+                dtype=np.uint64,
+            )
+            with with_conditional_node(
+                cond_kernel, continuation_args, continuation_handle, device=self.state.device, cond_type="if"
+            ):
+                self._before_loop_continuation()
+
+            # --- WHILE (active_mask_any): main decoding loop ---
             (loop_conditional_handle,) = cu_call(cudart.cudaGraphConditionalHandleCreate(graph, 0, 0))
-            loop_kernel = self._create_loop_body_kernel()
             active_mask_any_ptr = np.array([self.state.active_mask_any.data_ptr()], dtype=np.uint64)
             loop_args = np.array(
                 [loop_conditional_handle.getPtr(), active_mask_any_ptr.ctypes.data],
                 dtype=np.uint64,
             )
-            # loop while there are active utterances
-            with with_conditional_node(loop_kernel, loop_args, loop_conditional_handle, device=self.state.device):
-                self._loop_body()
-                self._loop_update_decoder()
-
-        # Compile continuation graph for streaming
-        self.full_graph_continuation = torch.cuda.CUDAGraph()
-
-        with (
-            torch.cuda.stream(stream_for_graph),
-            torch.inference_mode(),
-            torch.cuda.graph(self.full_graph_continuation, stream=stream_for_graph, capture_error_mode="thread_local"),
-        ):
-            self._before_loop_continuation()
-            capture_status, _, graph, _, _, _ = cu_call(
-                cudart.cudaStreamGetCaptureInfo(torch.cuda.current_stream(device=self.state.device).cuda_stream)
-            )
-
-            assert capture_status == cudart.cudaStreamCaptureStatus.cudaStreamCaptureStatusActive
-
-            # capture: while self.active_mask_any:
-            (loop_conditional_handle,) = cu_call(cudart.cudaGraphConditionalHandleCreate(graph, 0, 0))
-            loop_kernel = self._create_loop_body_kernel()
-            active_mask_any_ptr = np.array([self.state.active_mask_any.data_ptr()], dtype=np.uint64)
-            loop_args = np.array(
-                [loop_conditional_handle.getPtr(), active_mask_any_ptr.ctypes.data],
-                dtype=np.uint64,
-            )
-            # loop while there are active utterances
-            with with_conditional_node(loop_kernel, loop_args, loop_conditional_handle, device=self.state.device):
+            with with_conditional_node(
+                cond_kernel, loop_args, loop_conditional_handle, device=self.state.device, cond_type="while"
+            ):
                 self._loop_body()
                 self._loop_update_decoder()
 
@@ -1201,14 +1250,32 @@ class ModifiedALSDBatchedTDTComputer(WithOptionalCudaGraphs, ConfidenceMethodMix
 
     def _before_loop_continuation(self):
         """
-        Prepares state for continuation chunk without clearing batched_hyps.
-        Decoder state and fusion states are already restored from previous chunk
-        via _restore_state_from_prev before this method is called.
+        Prepares state for continuation chunk without clearing the cross-chunk per-beam
+        state of ``batched_hyps``.
+
+        Decoder state and fusion states are already restored from the previous chunk via
+        ``_restore_state_from_prev`` before this method is called. ``batched_hyps`` is
+        likewise restored from the previous chunk so that ``scores``, ``last_label``,
+        ``transcript_hash``, ``current_lengths_nb`` and ``last_timestamp_lasts`` continue
+        the beam search across the chunk boundary.
+
+        However, the per-chunk transcript prefix tree (``transcript_wb`` /
+        ``transcript_wb_prev_ptr`` / ``timestamps``) and the write cursor into it
+        (``current_lengths_wb``) must be reset for the new chunk: their buffers are sized
+        for one chunk's worth of decoding only, and the captured ``add_results_no_checks_``
+        scatters into them at ``current_lengths_wb`` without bounds checking. If we kept
+        the previous chunk's cursor we would index out of bounds within a few chunks,
+        producing a CUDA illegal-memory-access from inside the captured graph. The caller
+        is responsible for snapshotting / merging the per-chunk transcripts before this
+        method runs at the start of the next chunk (see :meth:`BatchedBeamHyps.merge_`
+        with ``is_chunk_continuation=True``).
         """
-        # Don't clear batched_hyps - it's already restored from previous state
-        # Don't reset decoder state - it's already restored from previous state
-        # Don't reset fusion states - they're already restored from previous state
-        
+        # Reset chunk-local storage so the captured loop body writes into freshly zeroed
+        # buffers; cross-chunk per-beam state is preserved.
+        self.state.batched_hyps.clear_chunk_local_()
+
+        # Decoder state and fusion states are already restored from previous state.
+
         self._before_loop_common()
 
     def _before_loop_common(self):
@@ -1530,12 +1597,6 @@ class ModifiedALSDBatchedTDTComputer(WithOptionalCudaGraphs, ConfidenceMethodMix
         # Restore batched_hyps from previous state
         if prev_batched_state.batched_hyps is not None:
             self.state.batched_hyps.copy_from_(prev_batched_state.batched_hyps)
-        
-        # Restore decoded_lengths
-        if prev_batched_state.decoded_lengths is not None:
-            self.state.decoded_lengths[:current_batch_size].copy_(
-                prev_batched_state.decoded_lengths[:current_batch_size]
-            )
 
     def _create_decoding_state(
         self,
@@ -1600,15 +1661,13 @@ class ModifiedALSDBatchedTDTComputer(WithOptionalCudaGraphs, ConfidenceMethodMix
         out_len: torch.Tensor,
         prev_batched_state: Optional[BatchedLabelLoopingState] = None,
     ) -> tuple[BatchedBeamHyps, Optional[rnnt_utils.BatchedAlignments], BatchedLabelLoopingState]:
-        # self.cuda_graphs_mode = None
         if self.cuda_graphs_mode is not None and x.device.type == "cuda":
             with torch.amp.autocast(device_type="cuda", enabled=False):
-                batched_hyps, alignments, decoding_state = self.modified_alsd_cuda_graphs(
-                    encoder_output=x, 
+                return self.modified_alsd_cuda_graphs(
+                    encoder_output=x,
                     encoder_output_length=out_len,
-                    prev_batched_state=prev_batched_state
+                    prev_batched_state=prev_batched_state,
                 )
-                return batched_hyps, alignments, decoding_state
 
         return self.modified_alsd_torch(
             encoder_output=x, encoder_output_length=out_len, prev_batched_state=prev_batched_state
