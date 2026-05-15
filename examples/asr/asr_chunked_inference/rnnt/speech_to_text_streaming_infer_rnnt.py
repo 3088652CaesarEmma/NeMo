@@ -294,19 +294,13 @@ def main(cfg: TranscriptionConfig) -> TranscriptionConfig:
     asr_model.preprocessor.featurizer.pad_to = 0
     asr_model.eval()
 
-    # Get decoding computer based on strategy
+    # Get decoding computer based on strategy. Beam-search strategies expose the
+    # underlying computer via the private ``_decoding_computer`` attribute.
     if cfg.decoding.strategy == "greedy_batch":
         decoding_computer: GreedyBatchedLabelLoopingComputerBase = asr_model.decoding.decoding.decoding_computer
     elif cfg.decoding.strategy == "malsd_batch":
-        # Beam search strategies use _decoding_computer (private attribute)
-        is_tdt = False
-        print(f"is_tdt: {is_tdt}")
-        if is_tdt:
-            decoding_computer: ModifiedALSDBatchedTDTComputer = asr_model.decoding.decoding._decoding_computer
-        else:
-            decoding_computer: ModifiedALSDBatchedRNNTComputer = asr_model.decoding.decoding._decoding_computer
+        decoding_computer = asr_model.decoding.decoding._decoding_computer
     elif cfg.decoding.strategy == "maes_batch":
-        # MAES beam search returns BatchedBeamHyps
         decoding_computer: ModifiedAESBatchedRNNTComputer = asr_model.decoding.decoding._decoding_computer
     else:
         raise ValueError(f"Unsupported decoding strategy: {cfg.decoding.strategy}")
@@ -425,53 +419,14 @@ def main(cfg: TranscriptionConfig) -> TranscriptionConfig:
             )
             rest_audio_lengths = audio_batch_lengths.clone()
 
-            # print(f"decoding_computer: {type(decoding_computer)}")
-            # For MALSD: batched_hyps is stored in state and reused (no merge needed)
-            # For greedy: fresh BatchedHyps created each chunk, needs merging
-            is_beam_search = (
-                isinstance(decoding_computer, ModifiedALSDBatchedRNNTComputer) or \
-                isinstance(decoding_computer, ModifiedAESBatchedRNNTComputer) or \
-                isinstance(decoding_computer, ModifiedALSDBatchedTDTComputer)
+            # Beam-search strategies (MALSD/MAES/TDT-MALSD) keep their batched_hyps inside
+            # the decoder state and reset chunk-local buffers per chunk; greedy returns a
+            # fresh BatchedHyps each call which we must merge externally.
+            is_beam_search = isinstance(
+                decoding_computer,
+                (ModifiedALSDBatchedRNNTComputer, ModifiedAESBatchedRNNTComputer, ModifiedALSDBatchedTDTComputer),
             )
 
-            # ============================================================================
-            # ENCODER PROCESSING MODES:
-            # 
-            # MODE 1: FULL ENCODER PASS (Non-streaming simulation)
-            #   - Runs encoder once on entire audio upfront
-            #   - Extracts chunks from pre-computed output
-            #   - Use this to verify consistency with non-streaming scripts
-            #   - TO ENABLE: Uncomment all "MODE 1" sections below
-            #
-            # MODE 2: STREAMING CHUNKED ENCODER (Default/Original)
-            #   - Runs encoder separately for each chunk with context
-            #   - True streaming behavior with left-chunk-right context windows
-            #   - Currently ACTIVE
-            #   - TO KEEP: Leave "MODE 2" sections uncommented
-            # ============================================================================
-
-            # import pdb; pdb.set_trace()
-            # ============================================================================
-            # MODE 1: FULL ENCODER PASS (for testing consistency with non-streaming)
-            # TO ENABLE: Uncomment this section and comment out MODE 2 sections below
-            # ============================================================================
-            # TESTING: Run encoder once on full audio (not chunked)
-            # full_encoder_output, full_encoder_output_len = asr_model(
-            #     input_signal=audio_batch,
-            #     input_signal_length=audio_batch_lengths,
-            # )
-            # full_encoder_output = full_encoder_output.transpose(1, 2)  # [B, T, C]
-            
-            # # do not recalculate joint projection, project only once
-            # full_encoder_output_projected = asr_model.joint.project_encoder(full_encoder_output)
-            # full_encoder_output_projected_len = full_encoder_output_len
-            
-            # # Track per-sample frame positions in the full encoder output
-            # # Different samples may have different lengths, so we need per-sample tracking
-            # encoder_frame_positions = torch.zeros([batch_size], dtype=torch.long, device=device)
-            # ============================================================================
-            
-            # import pdb; pdb.set_trace()
             # iterate over audio samples (but only for decoding chunks)
             while left_sample < audio_batch.shape[1]:
                 # add samples to buffer
@@ -490,50 +445,6 @@ def main(cfg: TranscriptionConfig) -> TranscriptionConfig:
                     is_last_chunk_batch=is_last_chunk_batch,
                 )
 
-                # ========================================================================
-                # MODE 1: FULL ENCODER PASS - Extract pre-computed chunks
-                # TO ENABLE: Uncomment this section and comment out MODE 2 section below
-                # ========================================================================
-                # Use buffer's context to know the actual chunk sizes (handles variable lengths and last chunks)
-                # encoder_context_batch = buffer.context_size_batch.subsample(factor=encoder_frame2audio_samples)
-                
-                # # Extract chunks for each sample from their current position
-                # # Since samples can be at different positions, we need to handle each separately
-                # max_chunk_size_this_iter = encoder_context_batch.chunk.max().item()
-                # encoder_output_chunk = torch.zeros(
-                #     [batch_size, max_chunk_size_this_iter, full_encoder_output_projected.shape[2]],
-                #     dtype=full_encoder_output_projected.dtype,
-                #     device=device
-                # )
-                
-                # # Extract the appropriate chunk for each sample
-                # for b_idx in range(batch_size):
-                #     start_pos = encoder_frame_positions[b_idx].item()
-                #     chunk_len = encoder_context_batch.chunk[b_idx].item()
-                #     end_pos = min(start_pos + chunk_len, full_encoder_output_projected.shape[1])
-                #     actual_len = end_pos - start_pos
-                #     if actual_len > 0:
-                #         encoder_output_chunk[b_idx, :actual_len] = full_encoder_output_projected[b_idx, start_pos:end_pos]
-                
-                # # Use the buffer's chunk size calculations (which properly handle per-sample lengths)
-                # encoder_out_len_chunk = encoder_context_batch.chunk
-                
-                # # decode only chunk frames (using pre-computed encoder output)
-                # chunk_batched_hyps, _, state = decoding_computer(
-                #     x=encoder_output_chunk,
-                #     out_len=encoder_out_len_chunk,
-                #     prev_batched_state=state,
-                # )
-                
-                # # Update per-sample positions
-                # encoder_frame_positions += encoder_context_batch.chunk
-                # ========================================================================
-
-                # import pdb; pdb.set_trace()
-                # ========================================================================
-                # MODE 2: STREAMING CHUNKED ENCODER (ORIGINAL/DEFAULT)
-                # TO DISABLE: Comment out this section when using MODE 1
-                # ========================================================================
                 # get encoder output using full buffer [left-chunk-right]
                 encoder_output, encoder_output_len = asr_model(
                     input_signal=buffer.samples,
@@ -547,55 +458,41 @@ def main(cfg: TranscriptionConfig) -> TranscriptionConfig:
                 encoder_output = encoder_output[:, encoder_context.left :]
 
                 # decode only chunk frames
-                if isinstance(decoding_computer, ModifiedALSDBatchedTDTComputer) or isinstance(decoding_computer, ModifiedAESBatchedRNNTComputer) or isinstance(decoding_computer, ModifiedALSDBatchedRNNTComputer):
+                out_len = torch.where(
+                    is_last_chunk_batch,
+                    encoder_output_len - encoder_context_batch.left,
+                    encoder_context_batch.chunk,
+                )
+                if is_beam_search:
+                    # Beam-search computers don't accept ``multi_biasing_ids`` yet.
                     chunk_batched_hyps, _, state = decoding_computer(
-                        x=encoder_output,
-                        out_len=torch.where(
-                            is_last_chunk_batch,
-                            encoder_output_len - encoder_context_batch.left,
-                            encoder_context_batch.chunk,
-                        ),
-                        prev_batched_state=state,
+                        x=encoder_output, out_len=out_len, prev_batched_state=state
                     )
                 else:
                     chunk_batched_hyps, _, state = decoding_computer(
                         x=encoder_output,
-                        out_len=torch.where(
-                            is_last_chunk_batch,
-                            encoder_output_len - encoder_context_batch.left,
-                            encoder_context_batch.chunk,
-                        ),
+                        out_len=out_len,
                         prev_batched_state=state,
                         multi_biasing_ids=multi_biasing_ids,
                     )
-                # ========================================================================
 
-                # Handle hypothesis accumulation differently for beam search vs greedy.
+                # Accumulate hypotheses across chunks.
                 if is_beam_search:
-                    # For beam search the chunk-local transcript buffers inside
-                    # ``decoding_computer.state.batched_hyps`` are reused across chunks
-                    # (and reset at the start of every continuation chunk), so we need to
-                    # snapshot the per-chunk transcripts before the next call overwrites
-                    # them and merge them into an external accumulator.
-                    #
-                    # ``flatten_`` resolves the chunk-local prefix tree without sorting
-                    # (preserving the chunk's beam ordering) and returns ``root_ptrs``: for
-                    # each chunk-end beam ``i``, the beam index at the chunk's start that
-                    # this hypothesis ultimately descends from. Because the chunk's loop
-                    # body can permute beams at any step via the top-K gather, beam ``i``
-                    # at the end of chunk ``N`` is generally a different logical
-                    # hypothesis from beam ``i`` at the end of chunk ``N-1``: it is the
-                    # descendant of beam ``root_ptrs[i]`` from chunk ``N-1``. Threading
-                    # ``root_ptrs`` into the accumulator's ``transcript_wb_prev_ptr`` at
-                    # the chunk boundary (via ``merge_(..., boundary_prev_ptr=...)``)
-                    # encodes this redirection in the prefix tree so the final
-                    # ``flatten_sort_`` inside ``to_hyps_list`` walks back through the
-                    # right beam history at every chunk boundary.
-                    #
-                    # The cross-chunk per-beam state (``scores``, ``current_lengths_nb``,
-                    # ...) is already cumulative on each chunk's hyps; pass
-                    # ``is_chunk_continuation=True`` so ``merge_`` replaces (not sums)
-                    # those fields.
+                    # Beam-search reuses chunk-local transcript buffers inside
+                    # ``decoding_computer.state.batched_hyps`` (reset at every continuation
+                    # chunk), so we must snapshot before the next call overwrites them.
+                    # ``flatten_`` resolves the chunk-local prefix tree without sorting and
+                    # returns ``root_ptrs``: for each chunk-end beam ``i``, the beam index
+                    # at the chunk's start that this hypothesis descends from. The loop
+                    # body can permute beams via top-K, so beam ``i`` at the end of chunk
+                    # ``N`` is generally a different logical hypothesis from beam ``i`` at
+                    # the end of chunk ``N-1`` - it is the descendant of beam
+                    # ``root_ptrs[i]``. Threading ``root_ptrs`` into the accumulator's
+                    # ``transcript_wb_prev_ptr`` via ``boundary_prev_ptr`` encodes this
+                    # redirection so the final ``flatten_sort_`` in ``to_hyps_list`` walks
+                    # back through the right beam history. ``is_chunk_continuation=True``
+                    # makes ``merge_`` replace (not sum) the cumulative per-beam fields
+                    # (``scores``, ``current_lengths_nb``, ...).
                     chunk_snapshot = chunk_batched_hyps.clone()
                     chunk_root_ptrs = chunk_snapshot.flatten_()
                     if current_batched_hyps is None:
@@ -606,12 +503,10 @@ def main(cfg: TranscriptionConfig) -> TranscriptionConfig:
                             is_chunk_continuation=True,
                             boundary_prev_ptr=chunk_root_ptrs,
                         )
+                elif current_batched_hyps is None:
+                    current_batched_hyps = chunk_batched_hyps
                 else:
-                    # For greedy: merge chunks using merge_
-                    if current_batched_hyps is None:
-                        current_batched_hyps = chunk_batched_hyps
-                    else:
-                        current_batched_hyps.merge_(chunk_batched_hyps)
+                    current_batched_hyps.merge_(chunk_batched_hyps)
 
                 # move to next sample
                 rest_audio_lengths -= chunk_lengths_batch

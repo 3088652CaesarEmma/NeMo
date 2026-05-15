@@ -105,7 +105,7 @@ class MALSDState:
 
     # Streaming state fields
     is_continuation: torch.Tensor  # flag indicating if this is a continuation from previous chunk
-    decoded_lengths: torch.Tensor  # accumulated decoded lengths across chunks
+    is_first_chunk: torch.Tensor  # complement of ``is_continuation``; both feed the captured graph's IF nodes
 
     def __init__(
         self,
@@ -129,13 +129,11 @@ class MALSDState:
             float_dtype: default float dtype for tensors (should match projected encoder output)
             blank_index: index of the blank symbol
         """
-
-        max_time = 375
         self.device = device
         self.float_dtype = float_dtype
         self.batch_size = batch_size
         self.beam_size = beam_size
-        self.max_time =  max_time
+        self.max_time = max_time
         self.blank_index = blank_index
 
         self.NON_EXISTENT_LABEL = torch.tensor(NON_EXISTENT_LABEL_VALUE, device=self.device, dtype=torch.long)
@@ -191,12 +189,12 @@ class MALSDState:
             float_dtype=float_dtype,
         )
 
-        # Streaming state fields
+        # Streaming state fields. The captured FULL_GRAPH reads ``is_first_chunk`` and
+        # ``is_continuation`` to route to the first-chunk vs. continuation prologue at replay
+        # time. The two flags are kept in lockstep by ``modified_alsd_cuda_graphs`` before
+        # each replay (they are mutually exclusive).
         self.is_continuation = torch.tensor(False, device=self.device, dtype=torch.bool)
-        # Inverse flag used by the captured graph to route the prologue. Maintained in
-        # lockstep with ``is_continuation`` outside the graph (see ``_set_continuation``).
         self.is_first_chunk = torch.tensor(True, device=self.device, dtype=torch.bool)
-        self.decoded_lengths = torch.zeros([self.batch_size], dtype=torch.long, device=self.device)
 
     def need_reinit(self, encoder_output_projected: torch.Tensor) -> bool:
         """Check if need to reinit state: larger batch_size/max_time, or new device"""
@@ -235,7 +233,6 @@ class ModifiedALSDBatchedRNNTComputer(WithOptionalCudaGraphs, ConfidenceMethodMi
 
     separate_graphs: Optional[SeparateGraphsMALSD]
     full_graph: Optional[torch.cuda.CUDAGraph]
-    full_graph_continuation: Optional[torch.cuda.CUDAGraph]
     cuda_graphs_mode: Optional[CudaGraphsMode]
     state: Optional[MALSDState]
     fusion_models: Optional[List[NGramGPULanguageModel]]
@@ -286,7 +283,6 @@ class ModifiedALSDBatchedRNNTComputer(WithOptionalCudaGraphs, ConfidenceMethodMi
 
         self.state = None
         self.full_graph = None
-        self.full_graph_continuation = None
         self.separate_graphs = None
 
         self.cuda_graphs_mode = None
@@ -361,7 +357,6 @@ class ModifiedALSDBatchedRNNTComputer(WithOptionalCudaGraphs, ConfidenceMethodMi
         """Reset state to release memory (for CUDA graphs implementations)"""
         self.state = None
         self.full_graph = None
-        self.full_graph_continuation = None
         self.separate_graphs = None
 
     def modified_alsd_torch(
@@ -386,14 +381,9 @@ class ModifiedALSDBatchedRNNTComputer(WithOptionalCudaGraphs, ConfidenceMethodMi
         if torch.is_autocast_enabled():
             encoder_output = encoder_output.to(torch.get_autocast_gpu_dtype())
 
-        # # do not recalculate joint projection, project only once
+        # do not recalculate joint projection, project only once
         encoder_output_projected = self.joint.project_encoder(encoder_output)
         float_dtype = encoder_output_projected.dtype
-        
-        # encoder_output_projected = encoder_output
-        # float_dtype = encoder_output.dtype
-        
-        # import pdb; pdb.set_trace()
 
         batch_beam_indices = (
             torch.arange(batch_size, dtype=torch.long, device=device)[:, None]
@@ -489,10 +479,7 @@ class ModifiedALSDBatchedRNNTComputer(WithOptionalCudaGraphs, ConfidenceMethodMi
             
         step1=0
         while active_mask.any():
-            # import pdb; pdb.set_trace()
-            # if step1 >= 0:
             # step 1: get joint output + fuse with fusion models (if present)
-            # print(f"Encoder output length: {encoder_output_length}")
             logits = (
                 self.joint.joint_after_projection(
                     encoder_output_projected[batch_beam_indices.view(-1), safe_time_indices.view(-1)].unsqueeze(1),
@@ -566,16 +553,11 @@ class ModifiedALSDBatchedRNNTComputer(WithOptionalCudaGraphs, ConfidenceMethodMi
                 labels_top_k.reshape(batch_size, -1), dim=-1, index=hyps_candidates_indices
             )  # labels for extended hypotheses
 
-            # import pdb; pdb.set_trace()
-            batched_hyps.add_results_(hyps_indices, next_labels, next_hyps_prob)
             # step 3: store results
-            
-            # if step1 == 37:
-            #     print(f"Step {step1}")
-            # if self.max_symbols is None:
-            #     batched_hyps.add_results_(hyps_indices, next_labels, next_hyps_prob)
-            # else:
-            #     batched_hyps.add_results_no_checks_(hyps_indices, next_labels, next_hyps_prob)
+            if self.max_symbols is None:
+                batched_hyps.add_results_(hyps_indices, next_labels, next_hyps_prob)
+            else:
+                batched_hyps.add_results_no_checks_(hyps_indices, next_labels, next_hyps_prob)
 
             # step 4: recombine hypotheses: sum probabilities of identical hypotheses.
             batched_hyps.recombine_hyps_()
@@ -645,26 +627,12 @@ class ModifiedALSDBatchedRNNTComputer(WithOptionalCudaGraphs, ConfidenceMethodMi
                     fusion_states_candidates_list[fusion_model_idx] = fusion_states_candidates
                     fusion_scores_list[fusion_model_idx] = fusion_scores
 
-            # import pdb; pdb.set_trace()
             # step 6: update time indices + active mask
             time_indices = torch.gather(time_indices, dim=-1, index=hyps_indices) + (next_labels == self._blank_index)
             torch.minimum(time_indices, last_timesteps, out=safe_time_indices)
             active_mask = time_indices <= last_timesteps
-            # if step1 == 24:
-            #     import pdb; pdb.set_trace()
-            # print(f"Step {step1}")
-            # print(f"Time indices: {time_indices}")
-            # print(F"Scores: {batched_hyps.scores}")
-            # print(F"Trancripts: {batched_hyps.transcript_wb[..., :batched_hyps.current_lengths_wb.max()]}")
-            # print(F"Trancript ptrs: {batched_hyps.transcript_wb_prev_ptr[..., :batched_hyps.current_lengths_wb.max()]}")
-            # print(F"Trancript_lengths: {batched_hyps.current_lengths_wb}")
             
             step1 += 1
-        
-        # # fix timestamps for iterative decoding
-        # if not is_beam_search:
-        #     if prev_batched_state is not None:
-        #         batched_hyps.timestamps += prev_batched_state.decoded_lengths.unsqueeze(1).unsqueeze(1)
         
         # NB: last labels can not exist (nothing decoded on this step).
         # return the last labels from the previous state in this case
@@ -780,7 +748,6 @@ class ModifiedALSDBatchedRNNTComputer(WithOptionalCudaGraphs, ConfidenceMethodMi
         """
 
         assert self.cuda_graphs_mode is not None
-        self.cuda_graphs_mode = self.CudaGraphsMode.FULL_GRAPH
 
         # do not recalculate joint projection, project only once
         encoder_output = self.joint.project_encoder(encoder_output)
@@ -809,10 +776,9 @@ class ModifiedALSDBatchedRNNTComputer(WithOptionalCudaGraphs, ConfidenceMethodMi
         # set length to zero for elements outside the current batch
         self.state.encoder_output_length.fill_(0)
         # copy (projected) encoder output and lengths
-        # print("encoder_output.shape: ", encoder_output.shape)
-        # print("current_batch_size: ", current_batch_size)
-        # print("current_max_time: ", current_max_time)
-        self.state.encoder_output_projected[:current_batch_size, :current_max_time, ...].copy_(encoder_output[:current_batch_size, :current_max_time, ...])
+        self.state.encoder_output_projected[:current_batch_size, :current_max_time, ...].copy_(
+            encoder_output[:current_batch_size, :current_max_time, ...]
+        )
         self.state.encoder_output_length[:current_batch_size].copy_(encoder_output_length.unsqueeze(-1))
         
         if self.cuda_graphs_mode is self.CudaGraphsMode.FULL_GRAPH:
@@ -972,7 +938,6 @@ class ModifiedALSDBatchedRNNTComputer(WithOptionalCudaGraphs, ConfidenceMethodMi
         if self.cuda_graphs_mode is self.CudaGraphsMode.FULL_GRAPH:
             try:
                 self._full_graph_compile()
-                print("full_graph_compile")
             except NeMoCUDAPythonException as e:
                 if not self.cuda_graphs_allow_fallback:
                     raise RuntimeError("Full CUDA graph decoding failed. Mode is forced, raising exception") from e
@@ -1232,7 +1197,6 @@ class ModifiedALSDBatchedRNNTComputer(WithOptionalCudaGraphs, ConfidenceMethodMi
             ].unsqueeze(1),
             self.state.decoder_output,
         ).squeeze()
-        # logits=torch.zeros(self.state.batch_size*self.beam_size, 1025, dtype=self.state.float_dtype, device=self.state.device)
         log_probs = F.log_softmax(logits, dim=-1, dtype=self.state.float_dtype).view(
             self.state.batch_size, self.beam_size, -1
         )  # [(B x Beam), V]
@@ -1472,12 +1436,6 @@ class ModifiedALSDBatchedRNNTComputer(WithOptionalCudaGraphs, ConfidenceMethodMi
         # Restore batched_hyps from previous state
         if prev_batched_state.batched_hyps is not None:
             self.state.batched_hyps.copy_from_(prev_batched_state.batched_hyps)
-        
-        # Restore decoded_lengths
-        if prev_batched_state.decoded_lengths is not None:
-            self.state.decoded_lengths[:current_batch_size].copy_(
-                prev_batched_state.decoded_lengths[:current_batch_size]
-            )
 
     def _create_decoding_state(
         self,
@@ -1542,10 +1500,8 @@ class ModifiedALSDBatchedRNNTComputer(WithOptionalCudaGraphs, ConfidenceMethodMi
         out_len: torch.Tensor,
         prev_batched_state: Optional[BatchedLabelLoopingState] = None,
     ) -> tuple[BatchedBeamHyps, Optional[rnnt_utils.BatchedAlignments], BatchedLabelLoopingState]:
-        # self.cuda_graphs_mode = self.CudaGraphsMode.NO_WHILE_LOOPS
         if self.cuda_graphs_mode is not None and x.device.type == "cuda":
             with torch.amp.autocast(device_type="cuda", enabled=False):
-                # print("Using CUDA graphs mode: NO_WHILE_LOOPS")
                 return self.modified_alsd_cuda_graphs(
                     encoder_output=x,
                     encoder_output_length=out_len,
