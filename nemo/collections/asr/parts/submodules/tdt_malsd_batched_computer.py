@@ -401,9 +401,6 @@ class ModifiedALSDBatchedTDTComputer(WithOptionalCudaGraphs, ConfidenceMethodMix
         # do not recalculate joint projection, project only once
         encoder_output_projected = self.joint.project_encoder(encoder_output)
         float_dtype = encoder_output_projected.dtype
-        
-        # encoder_output_projected = encoder_output
-        # float_dtype = encoder_output.dtype
 
         batch_beam_indices = (
             torch.arange(batch_size, dtype=torch.long, device=device)[:, None]
@@ -508,19 +505,7 @@ class ModifiedALSDBatchedTDTComputer(WithOptionalCudaGraphs, ConfidenceMethodMix
         # import pdb; pdb.set_trace()
         step1 = 0
 
-        while active_mask.any():
-            # import pdb; pdb.set_trace()
-            # print(f"Step {step1}")
-            # print(f"Time indices: {safe_time_indices}")
-            # print(f"Active mask: {active_mask}")
-            # print(f"Encoder output length: {encoder_output_length}")
-            # print(f"Decoder output: {decoder_output.shape}")
-            # print(f"Safe time indices: {safe_time_indices}")
-            # print(f"encoder_output_projected: {encoder_output_projected.shape}")
-            # print(f"Decoder state: {decoder_state.shape}")
-            
- 
-                
+        while active_mask.any():                
             # step 1: get joint output + fuse with fusion models (if present)
             logits = (
                 self.joint.joint_after_projection(
@@ -618,14 +603,11 @@ class ModifiedALSDBatchedTDTComputer(WithOptionalCudaGraphs, ConfidenceMethodMix
                 durations_top_k.reshape(batch_size, -1), dim=-1, index=hyps_candidates_indices
             )  # durations for extended hypotheses
 
-            # import pdb; pdb.set_trace()
             # step 3: store results
-            # if self.max_symbols is None:
-            #     batched_hyps.add_results_(hyps_indices, next_labels, next_hyps_prob, next_label_durations)
-            # else:
-            #     batched_hyps.add_results_no_checks_(hyps_indices, next_labels, next_hyps_prob, next_label_durations)
-            # print(f"DEBUG: Adding results to batched_hyps")
-            batched_hyps.add_results_(hyps_indices, next_labels, next_hyps_prob, next_label_durations)
+            if self.max_symbols is None:
+                batched_hyps.add_results_(hyps_indices, next_labels, next_hyps_prob, next_label_durations)
+            else:
+                batched_hyps.add_results_no_checks_(hyps_indices, next_labels, next_hyps_prob, next_label_durations)
 
             # step 4: recombine hypotheses: sum probabilities of identical hypotheses.
             batched_hyps.recombine_hyps_()
@@ -707,13 +689,10 @@ class ModifiedALSDBatchedTDTComputer(WithOptionalCudaGraphs, ConfidenceMethodMix
         if prev_batched_state is not None:
             batched_hyps.timestamps += prev_batched_state.decoded_lengths[:, None, None].expand_as(batched_hyps.timestamps)
             # Also update next_timestamp for proper continuation
-            # batched_hyps.next_timestamp += prev_batched_state.decoded_lengths[:, None].expand_as(batched_hyps.next_timestamp)
         
         # NB: last labels can not exist (nothing decoded on this step).
         # return the last labels from the previous state in this case
-        # import pdb; pdb.set_trace()
         last_labels = batched_hyps.get_last_labels(pad_id=self._SOS)
-        # batched_hyps.next_timestamp.copy_(batched_hyps.next_timestamp - encoder_output_length.unsqueeze(-1))
         decoding_state = BatchedLabelLoopingState(
             predictor_states=decoder_state,
             predictor_outputs=decoder_output,
