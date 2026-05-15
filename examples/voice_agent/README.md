@@ -144,6 +144,19 @@ Most LLMs from HuggingFace are supported. A few examples are:
     ```
     - If you have a GPU with FP8 support, the VRAM requirement is reduced to about 30GB. You can switch to [nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-FP8](https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-FP8) by modifying the llm config accordingly.
     - Tool calling is enabled for this model.
+- [Qwen/Qwen2.5-7B-Instruct](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct)
+    - Please use `server/server_configs/llm_configs/qwen2.5-7B.yaml` as the server config.
+- [Qwen/Qwen3-8B](https://huggingface.co/Qwen/Qwen3-8B)
+    - Please use `server/server_configs/llm_configs/qwen3-8B.yaml` as the server config.
+    - Please use `server/server_configs/llm_configs/qwen3-8B_think.yaml` if you want to enable thinking mode.
+- [meta-llama/Llama-3.1-8B-Instruct](https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct)
+    - Please use `server/server_configs/llm_configs/llama3.1-8B-instruct.yaml` as the server config.
+    - Note that you need to get access to the model first, and specify `export HF_TOKEN="hf_..."` when launching the server.
+- [nvidia/Llama-3.1-Nemotron-Nano-8B-v1](https://huggingface.co/nvidia/Llama-3.1-Nemotron-Nano-8B-v1) 
+- [nvidia/Nemotron-Mini-4B-Instruct](https://huggingface.co/nvidia/Nemotron-Mini-4B-Instruct)
+
+
+### 🤖 Multi-modal LLMs
 - [nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4](https://huggingface.co/nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16)
     - Please use `server/server_configs/llm_configs/nemotron_nano_v3_omni.yaml` as the server config. To better monitor the vllm status, `start_vllm_on_init` is set to `false`, so that you can manually start the vllm server separately via: 
     ```bash
@@ -167,16 +180,6 @@ Most LLMs from HuggingFace are supported. A few examples are:
     ```
     - Tool calling is enabled for this model.
     - See [here](https://huggingface.co/nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16#vllm) for more details on the vllm deployment.
-- [Qwen/Qwen2.5-7B-Instruct](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct)
-    - Please use `server/server_configs/llm_configs/qwen2.5-7B.yaml` as the server config.
-- [Qwen/Qwen3-8B](https://huggingface.co/Qwen/Qwen3-8B)
-    - Please use `server/server_configs/llm_configs/qwen3-8B.yaml` as the server config.
-    - Please use `server/server_configs/llm_configs/qwen3-8B_think.yaml` if you want to enable thinking mode.
-- [meta-llama/Llama-3.1-8B-Instruct](https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct)
-    - Please use `server/server_configs/llm_configs/llama3.1-8B-instruct.yaml` as the server config.
-    - Note that you need to get access to the model first, and specify `export HF_TOKEN="hf_..."` when launching the server.
-- [nvidia/Llama-3.1-Nemotron-Nano-8B-v1](https://huggingface.co/nvidia/Llama-3.1-Nemotron-Nano-8B-v1) 
-- [nvidia/Nemotron-Mini-4B-Instruct](https://huggingface.co/nvidia/Nemotron-Mini-4B-Instruct)
 
 
 Please refer to the homepage of each model to configure the model parameters:
